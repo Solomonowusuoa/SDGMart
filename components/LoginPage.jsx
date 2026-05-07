@@ -114,12 +114,24 @@ const LoginPage = ({ onAuth, onGuest }) => {
     background: 'var(--white)', marginBottom: 10,
   };
 
-  // 4K-quality moody pantry/snacks photograph — same theme as the homepage hero
-  const HERO_BG = 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=3840&q=90&auto=format&fit=crop';
+  // Moody pantry/snacks photograph — same theme as the homepage hero.
+  // Reduced 3840→1920 width and quality 90→80 for faster first paint.
+  const HERO_BG = 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=1920&q=80&auto=format&fit=crop';
+
+  React.useEffect(() => {
+    const link = document.createElement('link');
+    link.rel = 'preload';
+    link.as = 'image';
+    link.href = HERO_BG;
+    link.fetchPriority = 'high';
+    document.head.appendChild(link);
+    return () => { try { document.head.removeChild(link); } catch (_) {} };
+  }, []);
 
   return (
     <div style={{
       minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      backgroundColor: '#1a1a1a', // instant fill while photo loads
       backgroundImage: `linear-gradient(rgba(0,0,0,.55),rgba(0,0,0,.7)), url(${HERO_BG})`,
       backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed',
       padding: isMobile ? '20px 16px' : '40px 24px',

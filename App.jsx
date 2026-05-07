@@ -16,6 +16,18 @@ const App = () => {
       return raw ? JSON.parse(raw) : null;
     } catch (_) { return null; }
   });
+  // True once we've either confirmed the token with /api/auth/me OR established
+  // the user is a guest / not signed in. Prevents the "flash of homepage" on
+  // reload when a stored token has actually expired.
+  const [authChecked, setAuthChecked] = React.useState(() => {
+    try {
+      const raw = sessionStorage.getItem(STORAGE_KEY);
+      if (!raw) return true; // no stored user → nothing to verify
+      const u = JSON.parse(raw);
+      // Guests and admins-without-tokens don't need a server round-trip
+      return !u || !u.token || u.role === 'guest';
+    } catch (_) { return true; }
+  });
 
   const [page, setPage] = React.useState('home');
   const [selectedCategory, setSelectedCategory] = React.useState(null);
@@ -97,15 +109,33 @@ const App = () => {
     apiFetch('/api/auth/me')
       .then(r => { if (r.status === 401) { setCurrentUser(null); return null; } return r.json(); })
       .then(fresh => { if (fresh && fresh.id) setCurrentUser(prev => ({ ...prev, ...fresh })); })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setAuthChecked(true));
   }, []); // run once on mount
+
+  // ── Splash while verifying stored token ──────────────────────────────────
+  // Prevents the shopping app from briefly appearing on reload before /me
+  // returns 401 and bounces an expired session back to login.
+  if (!authChecked) {
+    return (
+      <div style={{
+        minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'var(--cream)', color: 'var(--sage-dark)', fontFamily: 'var(--font-head)',
+      }}>
+        <div style={{ textAlign: 'center', opacity: .7 }}>
+          <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: '.02em' }}>SDGMart</div>
+          <div style={{ fontSize: 12, marginTop: 6, color: 'var(--warm-gray)' }}>Signing you in…</div>
+        </div>
+      </div>
+    );
+  }
 
   // ── Login gate ────────────────────────────────────────────────────────────
   if (!currentUser) {
     return (
       <LoginPage
-        onAuth={(user) => setCurrentUser(user)}
-        onGuest={() => setCurrentUser({ role: 'guest', name: 'Guest' })}
+        onAuth={(user) => { setCurrentUser(user); setAuthChecked(true); }}
+        onGuest={() => { setCurrentUser({ role: 'guest', name: 'Guest' }); setAuthChecked(true); }}
       />
     );
   }

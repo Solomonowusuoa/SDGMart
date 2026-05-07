@@ -166,6 +166,7 @@ const EssentialsCard = ({ onAddAll, onView }) => {
 
 // Suggested for You (Predictive Pantry)
 const PredictivePantry = ({ onAdd, onView }) => {
+  const isMobile = useMobile();
   const suggested = window.PRODUCTS.filter(p => [5,13,17,29].includes(p.id));
   return (
     <section style={{ maxWidth: 1280, margin: '40px auto 0', padding: '0 24px' }}>
@@ -173,7 +174,7 @@ const PredictivePantry = ({ onAdd, onView }) => {
         <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 24, fontWeight: 700 }}>Suggested <em>for You</em></h2>
         <span style={{ fontSize: 13, color: 'var(--warm-gray)' }}>Running low on your regulars?</span>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px,1fr))', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(auto-fill, minmax(200px,1fr))', gap: 16 }}>
         {suggested.map(p => (
           <ProductCard key={p.id} product={p} onAdd={onAdd} onView={onView} compact />
         ))}
@@ -211,14 +212,28 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
     items.forEach(p => onAdd(p));
   };
 
-  // Hero background — moody snacks/pantry photograph
-  const HERO_BG = 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=2400&q=85&auto=format&fit=crop';
+  // Hero background — moody snacks/pantry photograph.
+  // Reduced from 2400→1600 width and added preload + neutral fallback color
+  // so the section paints instantly while the photo streams in.
+  const HERO_BG = 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=1600&q=80&auto=format&fit=crop';
+
+  React.useEffect(() => {
+    // Preload the hero image so it starts downloading before this section paints
+    const link = document.createElement('link');
+    link.rel = 'preload';
+    link.as = 'image';
+    link.href = HERO_BG;
+    link.fetchPriority = 'high';
+    document.head.appendChild(link);
+    return () => { try { document.head.removeChild(link); } catch (_) {} };
+  }, []);
 
   return (
     <div>
       {/* Full-width hero */}
       <section style={{
         position: 'relative', height: 380, overflow: 'hidden',
+        backgroundColor: '#1a1a1a', // instant fill while photo loads
         backgroundImage: `linear-gradient(rgba(0,0,0,.45),rgba(0,0,0,.6)), url(${HERO_BG})`,
         backgroundSize: 'cover', backgroundPosition: 'center',
         display: 'flex', alignItems: 'center',
@@ -275,7 +290,7 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
                 See all <span>→</span>
               </button>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))', gap: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(auto-fill,minmax(190px,1fr))', gap: 16 }}>
               {bestsellers.slice(0,8).map(p => (
                 <ProductCard key={p.id} product={p} onAdd={onAdd} onView={onView} compact />
               ))}
@@ -304,7 +319,7 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
           <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 26, fontWeight: 700, marginBottom: 20 }}>
             Shop by <em>Category</em>
           </h2>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(auto-fill,minmax(180px,1fr))', gap: 14 }}>
             {window.CATEGORIES.map((cat, i) => {
               const catImages = [
                 'https://images.unsplash.com/photo-1517686469429-8bdb88b9f907?w=600&q=80', // Cereals - oats/grains
@@ -359,7 +374,7 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
               <div style={{ fontSize: 13, color: 'rgba(255,255,255,.85)' }}>Items expiring within 60 days — discounted automatically</div>
             </div>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(auto-fill,minmax(190px,1fr))', gap: 16 }}>
             {window.PRODUCTS.filter(p => {
               const days = Math.ceil((new Date(p.bestBefore) - new Date()) / (1000*60*60*24));
               return days <= 60 && days > 0;
