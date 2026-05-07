@@ -25,6 +25,10 @@ function getGoogleClient() {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Behind Render/Fly/Railway load balancers — needed for correct
+// req.protocol (https vs http) and req.ip (real client, not proxy).
+app.set('trust proxy', 1);
+
 app.use(cors());
 app.use(express.json());
 
