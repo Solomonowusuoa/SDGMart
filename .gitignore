@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Local DB & uploads (start fresh in production)
+sdgmart.json
+uploads/
+
+# TLS certs
+certs/
+*.pem
+*.key
+
+# Env / secrets
+.env
+.env.local
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*

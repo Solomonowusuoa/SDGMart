@@ -1,0 +1,38 @@
+{
+  "name": "SDGMart — Tamale's Essentials",
+  "short_name": "SDGMart",
+  "description": "Tamale's smart grocery service. Fresh essentials delivered same-day.",
+  "start_url": "/SDGMart.html",
+  "display": "standalone",
+  "background_color": "#FDF6EC",
+  "theme_color": "#4E8B3F",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["shopping", "food"],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Shop Now",
+      "url": "/SDGMart.html",
+      "description": "Browse and order groceries"
+    },
+    {
+      "name": "My Cart",
+      "url": "/SDGMart.html#cart",
+      "description": "View your shopping cart"
+    }
+  ]
+}

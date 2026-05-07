@@ -1,0 +1,12 @@
+/* SDGMart — Mobile-responsive overrides */
+
+@media (max-width: 768px) {
+  .desktop-nav { display: none !important; }
+  body { overflow-x: hidden; }
+
+  /* Tables: allow horizontal scroll inside their containers */
+  table { min-width: 600px; }
+
+  /* Ensure images don't overflow */
+  img { max-width: 100%; }
+}
