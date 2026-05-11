@@ -161,9 +161,27 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
 
   const tabs = [
     ['overview','📊 Overview'],['orders','📦 Orders'],['inventory','🏪 Inventory'],
-    ['expiry','⏰ Expiry'],['routes','🗺 Routes'],['comms','📣 Comms'],['metrics','📈 Metrics'],
+    ['expiry','⏰ Expiry'],['routes','🗺 Routes'],['riders','🛵 Riders'],['comms','📣 Comms'],['metrics','📈 Metrics'],
     ['security','🔐 Security'],
   ];
+
+  // Riders tab state
+  const [riders, setRiders] = React.useState([]);
+  const [newRider, setNewRider] = React.useState({ name: '', email: '', phone: '', password: '' });
+  const [riderErr, setRiderErr] = React.useState('');
+  const loadRiders = React.useCallback(() => {
+    apiFetch('/api/admin/riders').then(r => r.ok ? r.json() : []).then(setRiders).catch(() => {});
+  }, []);
+  React.useEffect(() => { if (adminTab === 'riders') { loadRiders(); const t = setInterval(loadRiders, 10000); return () => clearInterval(t); } }, [adminTab, loadRiders]);
+  const createRider = async () => {
+    setRiderErr('');
+    if (!newRider.name || !newRider.email || !newRider.password) { setRiderErr('Name, email and password required'); return; }
+    const r = await apiFetch('/api/admin/riders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newRider) });
+    const d = await r.json();
+    if (!r.ok) { setRiderErr(d.error || 'Failed to create rider'); return; }
+    setNewRider({ name: '', email: '', phone: '', password: '' });
+    loadRiders();
+  };
 
   const inputS = { width:'100%', padding:'9px 12px', borderRadius:8, border:'1.5px solid var(--cream-dark)', fontSize:13, outline:'none', background:'var(--white)' };
 
@@ -573,6 +591,70 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                   );
                 })}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* RIDERS */}
+        {adminTab === 'riders' && (
+          <div>
+            <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginBottom: 8 }}>Riders</h1>
+            <p style={{ fontSize: 13, color: 'var(--warm-gray)', marginBottom: 20 }}>Only admins can create rider accounts. Riders sign in with the credentials you set here and use the rider PWA to take deliveries.</p>
+
+            {/* Create rider */}
+            <div style={{ background: 'var(--white)', borderRadius: 12, padding: 18, boxShadow: 'var(--shadow)', marginBottom: 20 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>+ Create New Rider</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10 }}>
+                <input placeholder="Full name" value={newRider.name} onChange={e => setNewRider(r => ({ ...r, name: e.target.value }))}
+                  style={{ padding: '10px 12px', borderRadius: 8, border: '1.5px solid var(--cream-dark)', fontSize: 13 }} />
+                <input placeholder="Email" type="email" value={newRider.email} onChange={e => setNewRider(r => ({ ...r, email: e.target.value }))}
+                  style={{ padding: '10px 12px', borderRadius: 8, border: '1.5px solid var(--cream-dark)', fontSize: 13 }} />
+                <input placeholder="Phone (optional)" value={newRider.phone} onChange={e => setNewRider(r => ({ ...r, phone: e.target.value }))}
+                  style={{ padding: '10px 12px', borderRadius: 8, border: '1.5px solid var(--cream-dark)', fontSize: 13 }} />
+                <input placeholder="Initial password (≥6 chars)" type="text" value={newRider.password} onChange={e => setNewRider(r => ({ ...r, password: e.target.value }))}
+                  style={{ padding: '10px 12px', borderRadius: 8, border: '1.5px solid var(--cream-dark)', fontSize: 13 }} />
+              </div>
+              {riderErr && <div style={{ marginTop: 8, color: 'var(--accent-red)', fontSize: 12 }}>{riderErr}</div>}
+              <button onClick={createRider}
+                style={{ marginTop: 12, background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '10px 18px', fontWeight: 700, fontSize: 13, border: 'none' }}>
+                Create Rider
+              </button>
+            </div>
+
+            {/* List riders */}
+            <div style={{ background: 'var(--white)', borderRadius: 12, padding: 18, boxShadow: 'var(--shadow)' }}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>All Riders ({riders.length})</div>
+              {riders.length === 0 ? (
+                <div style={{ fontSize: 13, color: 'var(--warm-gray)', padding: 14 }}>No riders yet. Create one above.</div>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--cream-dark)', textAlign: 'left' }}>
+                      <th style={{ padding: 10 }}>Name</th><th style={{ padding: 10 }}>Email</th>
+                      <th style={{ padding: 10 }}>Phone</th><th style={{ padding: 10 }}>Status</th>
+                      <th style={{ padding: 10 }}>Last seen</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {riders.map(r => (
+                      <tr key={r.id} style={{ borderBottom: '1px solid var(--cream-dark)' }}>
+                        <td style={{ padding: 10, fontWeight: 600 }}>{r.name}</td>
+                        <td style={{ padding: 10 }}>{r.email}</td>
+                        <td style={{ padding: 10 }}>{r.phone || '—'}</td>
+                        <td style={{ padding: 10 }}>
+                          <span style={{ color: r.online ? '#27AE60' : 'var(--warm-gray)', fontWeight: 700 }}>
+                            {r.online ? '🟢 Online' : '⚫ Offline'}
+                          </span>
+                        </td>
+                        <td style={{ padding: 10, color: 'var(--warm-gray)', fontSize: 12 }}>
+                          {r.lastSeen ? new Date(r.lastSeen).toLocaleTimeString() : '—'}
+                          {r.lat != null && <div style={{ fontSize: 11 }}>{r.lat.toFixed(4)}, {r.lng.toFixed(4)}</div>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </div>
         )}

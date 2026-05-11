@@ -1,0 +1,179 @@
+// RiderPage — what a user with role='rider' sees after login.
+// - Toggle Online/Offline
+// - When online, browser geolocation is sampled every 15s and POSTed to /api/rider/location
+// - Shows assigned orders sorted by nearest-neighbor route, with status buttons
+const RiderPage = ({ currentUser, onLogout }) => {
+  const isMobile = useMobile();
+  const [online, setOnline] = React.useState(false);
+  const [orders, setOrders] = React.useState([]);
+  const [loc, setLoc] = React.useState(null);
+  const [err, setErr] = React.useState('');
+  const watchIdRef = React.useRef(null);
+  const pingTimerRef = React.useRef(null);
+
+  const refreshOrders = React.useCallback(async () => {
+    try {
+      const r = await apiFetch('/api/rider/orders');
+      if (r.ok) setOrders(await r.json());
+    } catch (_) {}
+  }, []);
+
+  // Push current location to server
+  const pushLocation = React.useCallback(async (lat, lng) => {
+    try {
+      await apiFetch('/api/rider/location', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lat, lng }),
+      });
+    } catch (_) {}
+  }, []);
+
+  // Toggle online state on the server
+  const setOnlineServer = async (next) => {
+    try {
+      await apiFetch('/api/rider/online', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ online: next }),
+      });
+      setOnline(next);
+      if (next) refreshOrders();
+    } catch (_) {}
+  };
+
+  // While online, watch GPS and ping every 15s
+  React.useEffect(() => {
+    if (!online) {
+      if (watchIdRef.current != null) { navigator.geolocation.clearWatch(watchIdRef.current); watchIdRef.current = null; }
+      if (pingTimerRef.current) { clearInterval(pingTimerRef.current); pingTimerRef.current = null; }
+      return;
+    }
+    if (!navigator.geolocation) { setErr('Geolocation not supported.'); return; }
+    let lastSent = 0;
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      pos => {
+        const next = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
+        setLoc(next);
+        const now = Date.now();
+        if (now - lastSent > 14000) { pushLocation(next.lat, next.lng); lastSent = now; }
+      },
+      e => setErr(e.code === 1 ? 'Permission denied. Allow location to go online.' : 'Could not get your location.'),
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+    );
+    // Periodic forced ping + order refresh every 15s
+    pingTimerRef.current = setInterval(() => {
+      if (loc) pushLocation(loc.lat, loc.lng);
+      refreshOrders();
+    }, 15000);
+    return () => {
+      if (watchIdRef.current != null) { navigator.geolocation.clearWatch(watchIdRef.current); watchIdRef.current = null; }
+      if (pingTimerRef.current) { clearInterval(pingTimerRef.current); pingTimerRef.current = null; }
+    };
+  }, [online]);
+
+  React.useEffect(() => { refreshOrders(); }, [refreshOrders]);
+
+  const updateStatus = async (orderId, status) => {
+    const r = await apiFetch(`/api/rider/orders/${orderId}/status`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    });
+    if (r.ok) refreshOrders();
+  };
+
+  return (
+    <div style={{ minHeight: '100vh', background: 'var(--cream)' }}>
+      {/* Top bar */}
+      <header style={{ background: 'var(--white)', borderBottom: '1px solid var(--cream-dark)', padding: '14px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700 }}>🛵 Rider Hub</div>
+          <div style={{ fontSize: 12, color: 'var(--warm-gray)' }}>Hi {currentUser.name}</div>
+        </div>
+        <button onClick={onLogout}
+          style={{ background: 'transparent', color: 'var(--warm-gray)', border: '1px solid var(--cream-dark)', borderRadius: 8, padding: '6px 12px', fontSize: 12, fontWeight: 600 }}>
+          Sign out
+        </button>
+      </header>
+
+      <div style={{ maxWidth: 720, margin: '0 auto', padding: isMobile ? '16px' : '24px' }}>
+        {/* Online toggle */}
+        <div style={{ background: 'var(--white)', borderRadius: 12, padding: 18, boxShadow: 'var(--shadow)', marginBottom: 18 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 16 }}>{online ? '🟢 You are Online' : '⚫ You are Offline'}</div>
+              <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 2 }}>
+                {online ? 'Sharing your location with HQ. Orders nearby will be assigned to you.' : 'Go online to start receiving deliveries.'}
+              </div>
+            </div>
+            <button onClick={() => setOnlineServer(!online)}
+              style={{
+                background: online ? '#C0392B' : 'var(--sage)', color: '#fff',
+                borderRadius: 999, padding: '12px 22px', fontWeight: 700, fontSize: 14, border: 'none', cursor: 'pointer',
+              }}>
+              {online ? 'Go Offline' : 'Go Online'}
+            </button>
+          </div>
+          {loc && (
+            <div style={{ marginTop: 10, fontSize: 11, color: 'var(--warm-gray)' }}>
+              📍 {loc.lat.toFixed(5)}, {loc.lng.toFixed(5)} (±{Math.round(loc.accuracy)}m)
+            </div>
+          )}
+          {err && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--accent-red)' }}>{err}</div>}
+        </div>
+
+        {/* Assigned orders queue */}
+        <div style={{ background: 'var(--white)', borderRadius: 12, padding: 18, boxShadow: 'var(--shadow)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 14 }}>
+            <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 18, fontWeight: 700 }}>Your Route ({orders.length})</h2>
+            <button onClick={refreshOrders} style={{ fontSize: 12, color: 'var(--sage)', fontWeight: 600, background: 'transparent', border: 'none' }}>↻ Refresh</button>
+          </div>
+          {orders.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '30px 10px', color: 'var(--warm-gray)', fontSize: 13 }}>
+              No orders assigned yet. Go online to start receiving them.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {orders.map((o, i) => (
+                <div key={o.id} style={{ border: '1px solid var(--cream-dark)', borderRadius: 10, padding: 14, background: i === 0 ? '#FFFAF0' : 'var(--white)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>
+                      {i === 0 && <span style={{ background: 'var(--sage)', color: '#fff', borderRadius: 4, padding: '2px 6px', fontSize: 10, marginRight: 6 }}>NEXT</span>}
+                      Order #{String(o.id).slice(-6)}
+                    </div>
+                    <span style={{ fontSize: 11, color: 'var(--warm-gray)', textTransform: 'uppercase', fontWeight: 600 }}>{o.status}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginBottom: 4 }}>{o.customer} · {o.phone}</div>
+                  {o.location && (
+                    <div style={{ fontSize: 12, marginBottom: 8 }}>
+                      📍 {o.location.address || `${o.location.lat?.toFixed(5)}, ${o.location.lng?.toFixed(5)}`}
+                      <a target="_blank" rel="noopener" href={`https://www.google.com/maps/dir/?api=1&destination=${o.location.lat},${o.location.lng}`}
+                        style={{ marginLeft: 8, color: 'var(--sage)', fontWeight: 600 }}>
+                        Open in Maps →
+                      </a>
+                    </div>
+                  )}
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>GHS {Number(o.total || 0).toFixed(2)}</div>
+                  <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+                    {o.status === 'assigned' && (
+                      <button onClick={() => updateStatus(o.id, 'in_transit')}
+                        style={{ flex: 1, background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '9px', fontWeight: 700, fontSize: 12 }}>
+                        Start Delivery
+                      </button>
+                    )}
+                    {o.status === 'in_transit' && (
+                      <button onClick={() => updateStatus(o.id, 'delivered')}
+                        style={{ flex: 1, background: '#27AE60', color: '#fff', borderRadius: 8, padding: '9px', fontWeight: 700, fontSize: 12 }}>
+                        Mark Delivered
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+Object.assign(window, { RiderPage });

@@ -449,6 +449,102 @@ const users = {
   },
 };
 
+// ── Riders & order assignment ─────────────────────────────────────────────
+// Riders are users with role='rider'. Their live location is held in-memory
+// (lost on restart, which is fine — they reconnect every 15s anyway).
+const _riderState = new Map(); // userId -> { lat, lng, ts, online }
+
+const riders = {
+  list() {
+    return load().users
+      .filter(u => u.role === 'rider')
+      .map(u => {
+        const live = _riderState.get(u.id) || {};
+        return { id: u.id, name: u.name, email: u.email, phone: u.phone,
+                 online: !!live.online, lat: live.lat, lng: live.lng, lastSeen: live.ts };
+      });
+  },
+  setLocation(userId, lat, lng) {
+    const cur = _riderState.get(userId) || {};
+    _riderState.set(userId, { ...cur, lat: Number(lat), lng: Number(lng), ts: Date.now() });
+  },
+  setOnline(userId, online) {
+    const cur = _riderState.get(userId) || {};
+    _riderState.set(userId, { ...cur, online: !!online, ts: Date.now() });
+  },
+  get(userId) {
+    const u = users.get(userId);
+    if (!u || u.role !== 'rider') return null;
+    const live = _riderState.get(userId) || {};
+    return { id: u.id, name: u.name, online: !!live.online, lat: live.lat, lng: live.lng, lastSeen: live.ts };
+  },
+};
+
+// Haversine distance in km
+function _distKm(a, b) {
+  if (!a || !b || a.lat == null || b.lat == null) return Infinity;
+  const R = 6371, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+  const x = Math.sin(dLat/2)**2 + Math.cos(toRad(a.lat))*Math.cos(toRad(b.lat))*Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+
+const orders = {
+  // Returns orders assigned to a rider, sorted by nearest-neighbor route from
+  // the rider's current location (greedy heuristic).
+  forRider(riderId) {
+    const all = load().orders.filter(o => String(o.riderId) === String(riderId)
+                                       && ['assigned','in_transit'].includes(o.status));
+    const rider = riders.get(riderId);
+    if (!rider || rider.lat == null) return all;
+    const ordered = [];
+    let cursor = { lat: rider.lat, lng: rider.lng };
+    const remaining = [...all];
+    while (remaining.length) {
+      remaining.sort((a, b) => _distKm(cursor, a.location) - _distKm(cursor, b.location));
+      const next = remaining.shift();
+      ordered.push(next);
+      if (next.location) cursor = next.location;
+    }
+    return ordered;
+  },
+  assignToNearestOnlineRider(orderId) {
+    const s = load();
+    const order = s.orders.find(o => String(o.id) === String(orderId));
+    if (!order || !order.location) return null;
+    const onlineRiders = riders.list().filter(r => r.online && r.lat != null);
+    if (!onlineRiders.length) return null;
+    onlineRiders.sort((a, b) => _distKm(order.location, a) - _distKm(order.location, b));
+    order.riderId = onlineRiders[0].id;
+    order.status = 'assigned';
+    save();
+    return onlineRiders[0];
+  },
+  setStatus(orderId, status, riderId) {
+    const s = load();
+    const o = s.orders.find(x => String(x.id) === String(orderId));
+    if (!o) return null;
+    if (riderId && String(o.riderId) !== String(riderId)) return null; // not yours
+    o.status = status;
+    if (status === 'delivered') o.deliveredAt = new Date().toISOString();
+    save();
+    return o;
+  },
+  getWithTracking(orderId) {
+    const o = load().orders.find(x => String(x.id) === String(orderId));
+    if (!o) return null;
+    const rider = o.riderId ? riders.get(o.riderId) : null;
+    // Queue position: count assigned/in_transit orders for same rider that come before this one
+    let queuePosition = null, queueAhead = 0;
+    if (rider) {
+      const route = orders.forRider(o.riderId);
+      const idx = route.findIndex(x => String(x.id) === String(o.id));
+      if (idx !== -1) { queuePosition = idx + 1; queueAhead = idx; }
+    }
+    return { order: o, rider, queuePosition, queueAhead };
+  },
+};
+
 const squads = {
   // All members in a given squad (by squadCode)
   members(squadCode) {
@@ -557,10 +653,48 @@ function bootstrap() {
 load();
 bootstrap();
 
+// Admin-only rider creation (no public signup path).
+function createRider({ name, email, phone, password }) {
+  _ensureUserFields();
+  if (users.findByEmail(email)) throw new Error('Email already registered');
+  if (!password || String(password).length < 6) throw new Error('Password must be at least 6 characters');
+  const s = load();
+  const referralCode = 'RIDER' + Math.random().toString(36).slice(2, 6).toUpperCase();
+  const u = {
+    id: s._nextUserId++,
+    name: name || 'Rider',
+    email: (email || '').trim().toLowerCase(),
+    phone: phone || '',
+    passwordHash: hashPassword(password),
+    referralCode, squadCode: referralCode,
+    totalSpent: 0, discountPending: false,
+    role: 'rider',
+    emailVerified: true, // admin-vouched
+    mustChangePassword: false,
+    createdAt: new Date().toISOString(),
+  };
+  s.users.push(u);
+  save();
+  return u;
+}
+
+// Patch order on creation: accept location {lat,lng,address} and userId.
+function attachOrderLocation(orderId, location, userId) {
+  const s = load();
+  const o = s.orders.find(x => String(x.id) === String(orderId));
+  if (!o) return null;
+  o.location = location || null;
+  if (userId != null) o.userId = userId;
+  o.status = o.status === 'queued' || o.status === 'assigned' || o.status === 'in_transit' || o.status === 'delivered' ? o.status : 'queued';
+  save();
+  return o;
+}
+
 module.exports = {
-  prepare, users, squads, sessions,
+  prepare, users, squads, sessions, riders, orders,
   hashPassword, verifyPassword, validatePasswordStrength,
   rateCheck, rateClear,
   makeEmailToken, consumeEmailToken,
+  createRider, attachOrderLocation,
   ADMIN_EMAIL, ADMIN_DEFAULT_PW,
 };

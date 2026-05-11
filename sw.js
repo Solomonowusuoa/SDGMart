@@ -1,5 +1,5 @@
 // SDGMart Service Worker — cache-first for static assets, network-first for API
-const CACHE_NAME = 'sdgmart-v11-auth-flash-fix';
+const CACHE_NAME = 'sdgmart-v12-riders-and-maps';
 const STATIC_ASSETS = [
   '/SDGMart.html',
   '/tweaks-panel.jsx',

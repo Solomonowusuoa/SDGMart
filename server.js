@@ -243,6 +243,7 @@ app.post('/api/orders', (req, res) => {
     recipientName, recipientPhone, recipientAddress,
     giftMessage, payMethod, mapsPin,
     subtotal, discountApplied,
+    location, // { lat, lng, address }
   } = req.body;
   // Trust the session for userId; ignore any client-supplied userId.
   const userId = req.user ? req.user.id : null;
@@ -257,6 +258,23 @@ app.post('/api/orders', (req, res) => {
     recipientName || '', recipientPhone || '', recipientAddress || '',
     giftMessage || '', payMethod || 'momo', mapsPin || ''
   );
+
+  // Attach location + userId + queued status, then try to assign to nearest online rider.
+  // 2pm gate: orders placed before 14:00 stay 'queued'; after 14:00 we attempt assignment.
+  const orderRow = db.prepare('SELECT * FROM orders').get(id);
+  if (orderRow) {
+    orderRow.location = location && typeof location.lat === 'number' ? location : null;
+    orderRow.userId = userId;
+    orderRow.status = 'queued';
+    db.prepare('UPDATE orders SET status = ? WHERE id = ?').run('queued', id);
+    // Persist via attachOrderLocation (saves location + 'queued' status)
+    db.attachOrderLocation(id, orderRow.location, userId);
+    const now = new Date();
+    const afterCutoff = now.getHours() >= 14;
+    if (afterCutoff && orderRow.location) {
+      db.orders.assignToNearestOnlineRider(id);
+    }
+  }
 
   // If signed-in user, accumulate spend and possibly unlock squad discount.
   let squadInfo = null;
@@ -458,6 +476,79 @@ app.get('/api/squads/:userId', requireAuth, (req, res) => {
     members,
     goal: 500,
   });
+});
+
+// ── Riders & order tracking ───────────────────────────────────────────────
+
+// Admin-only middleware
+function adminOnly(req, res, next) {
+  if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  next();
+}
+function riderOnly(req, res, next) {
+  if (!req.user || req.user.role !== 'rider') return res.status(403).json({ error: 'Rider only' });
+  next();
+}
+
+// Admin: list all riders + create a new one (no public signup path)
+app.get('/api/admin/riders', authMiddleware, adminOnly, (req, res) => {
+  res.json(db.riders.list());
+});
+app.post('/api/admin/riders', authMiddleware, adminOnly, (req, res) => {
+  const { name, email, phone, password } = req.body || {};
+  if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password required' });
+  try {
+    const r = db.createRider({ name, email, phone, password });
+    res.json({ id: r.id, name: r.name, email: r.email, phone: r.phone, role: r.role });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Rider: post current location (called every ~15s by the rider PWA)
+app.post('/api/rider/location', authMiddleware, riderOnly, (req, res) => {
+  const { lat, lng } = req.body || {};
+  if (typeof lat !== 'number' || typeof lng !== 'number') return res.status(400).json({ error: 'lat/lng required' });
+  db.riders.setLocation(req.user.id, lat, lng);
+  res.json({ ok: true });
+});
+
+// Rider: toggle online status
+app.post('/api/rider/online', authMiddleware, riderOnly, (req, res) => {
+  const { online } = req.body || {};
+  db.riders.setOnline(req.user.id, !!online);
+  // When going online, try to assign any unassigned orders that have locations
+  if (online) {
+    const unassigned = db.prepare('SELECT * FROM orders').all()
+      .filter(o => o.location && !o.riderId && (o.status === 'queued' || o.status === 'Pending'));
+    unassigned.forEach(o => db.orders.assignToNearestOnlineRider(o.id));
+  }
+  res.json({ ok: true, online: !!online });
+});
+
+// Rider: get assigned orders, sorted by nearest-neighbor route
+app.get('/api/rider/orders', authMiddleware, riderOnly, (req, res) => {
+  res.json(db.orders.forRider(req.user.id));
+});
+
+// Rider: update an order's status
+app.post('/api/rider/orders/:id/status', authMiddleware, riderOnly, (req, res) => {
+  const { status } = req.body || {};
+  if (!['in_transit','delivered'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+  const o = db.orders.setStatus(req.params.id, status, req.user.id);
+  if (!o) return res.status(404).json({ error: 'Order not found or not yours' });
+  res.json(o);
+});
+
+// Customer: poll order tracking (rider live location + queue position)
+app.get('/api/orders/:id/tracking', authMiddleware, (req, res) => {
+  const t = db.orders.getWithTracking(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Order not found' });
+  // Only the order owner, the assigned rider, or admin can see tracking
+  const isOwner = String(t.order.userId) === String(req.user.id);
+  const isRider = String(t.order.riderId) === String(req.user.id);
+  if (!isOwner && !isRider && req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+  res.json(t);
 });
 
 // ── Static files (icons, etc.) ─────────────────────────────────────────────

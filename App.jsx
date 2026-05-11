@@ -150,6 +150,11 @@ const App = () => {
     );
   }
 
+  // ── Rider: dedicated rider PWA (no shopping UI) ───────────────────────────
+  if (currentUser.role === 'rider') {
+    return <RiderPage currentUser={currentUser} onLogout={logout} />;
+  }
+
   // ── Normal shopping app ──────────────────────────────────────────────────
   const showVerifyBanner = currentUser && currentUser.id && currentUser.emailVerified === false;
   const resendVerification = async () => {

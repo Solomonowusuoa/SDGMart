@@ -166,6 +166,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser }) =
           giftMessage: snap.form.giftMessage,
           payMethod: snap.form.payMethod,
           mapsPin: snap.form.mapsPin,
+          location: snap.form.location || null,
           discountApplied: canUseDiscount,
         }),
       });
@@ -304,6 +305,18 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser }) =
                   {errors.neighborhood && <div style={{ fontSize: 11, color: 'var(--accent-red)', marginTop: 3 }}>{errors.neighborhood}</div>}
                 </div>
                 <CheckoutField {...fieldProps('address')} label="Street Address (Optional)" placeholder="House number and street" />
+              </div>
+
+              {/* Pin exact delivery spot on the map */}
+              <div style={{ marginTop: 18 }}>
+                <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                  Pin your exact location <span style={{ color: 'var(--accent-red)', fontWeight: 700 }}>*</span>
+                </label>
+                <MapPicker
+                  value={form.location || null}
+                  onChange={(loc) => set('location', loc)}
+                  height={260}
+                />
               </div>
 
               {familyMode && (
