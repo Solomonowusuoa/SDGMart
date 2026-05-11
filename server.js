@@ -259,21 +259,20 @@ app.post('/api/orders', (req, res) => {
     giftMessage || '', payMethod || 'momo', mapsPin || ''
   );
 
-  // Attach location + userId + queued status, then try to assign to nearest online rider.
-  // 2pm gate: orders placed before 14:00 stay 'queued'; after 14:00 we attempt assignment.
+  // Persist location, userId, deliveryDate, and priority.
+  // Rules (all times local server time):
+  //   Order placed BEFORE 14:00 → deliveryDate = today (joins today's 2pm batch)
+  //   Order placed AT/AFTER 14:00 → deliveryDate = tomorrow, priority=true
+  //                                  (gets assigned first when the next 2pm batch starts)
   const orderRow = db.prepare('SELECT * FROM orders').get(id);
   if (orderRow) {
-    orderRow.location = location && typeof location.lat === 'number' ? location : null;
-    orderRow.userId = userId;
-    orderRow.status = 'queued';
-    db.prepare('UPDATE orders SET status = ? WHERE id = ?').run('queued', id);
-    // Persist via attachOrderLocation (saves location + 'queued' status)
-    db.attachOrderLocation(id, orderRow.location, userId);
+    const loc = location && typeof location.lat === 'number' ? location : null;
     const now = new Date();
     const afterCutoff = now.getHours() >= 14;
-    if (afterCutoff && orderRow.location) {
-      db.orders.assignToNearestOnlineRider(id);
-    }
+    const deliveryDate = new Date(now);
+    if (afterCutoff) deliveryDate.setDate(deliveryDate.getDate() + 1);
+    const deliveryDateStr = deliveryDate.toISOString().slice(0, 10); // YYYY-MM-DD
+    db.attachOrderLocation(id, loc, userId, { deliveryDate: deliveryDateStr, priority: afterCutoff });
   }
 
   // If signed-in user, accumulate spend and possibly unlock squad discount.
@@ -517,17 +516,17 @@ app.post('/api/rider/location', authMiddleware, riderOnly, (req, res) => {
 app.post('/api/rider/online', authMiddleware, riderOnly, (req, res) => {
   const { online } = req.body || {};
   db.riders.setOnline(req.user.id, !!online);
-  // When going online, try to assign any unassigned orders that have locations
-  if (online) {
-    const unassigned = db.prepare('SELECT * FROM orders').all()
-      .filter(o => o.location && !o.riderId && (o.status === 'queued' || o.status === 'Pending'));
-    unassigned.forEach(o => db.orders.assignToNearestOnlineRider(o.id));
-  }
+  // When going online, sweep eligible queued orders (only after 14:00 cutoff,
+  // and only those whose deliveryDate is today or past).
+  if (online) db.orders.assignQueuedForToday();
   res.json({ ok: true, online: !!online });
 });
 
-// Rider: get assigned orders, sorted by nearest-neighbor route
+// Rider: get assigned orders, sorted by nearest-neighbor route.
+// Also sweeps for newly-eligible orders so the queue stays fresh as time passes
+// (e.g. clock crosses 14:00 while the rider is already online).
 app.get('/api/rider/orders', authMiddleware, riderOnly, (req, res) => {
+  db.orders.assignQueuedForToday();
   res.json(db.orders.forRider(req.user.id));
 });
 

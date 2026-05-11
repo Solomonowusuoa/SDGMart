@@ -520,6 +520,32 @@ const orders = {
     save();
     return onlineRiders[0];
   },
+  // Sweep all queued orders eligible for delivery NOW (i.e. their deliveryDate
+  // is today or in the past AND it's 14:00 or later) and assign each to the
+  // nearest online rider. Priority orders come first.
+  assignQueuedForToday() {
+    const now = new Date();
+    if (now.getHours() < 14) return [];
+    const today = now.toISOString().slice(0, 10);
+    const s = load();
+    const eligible = s.orders.filter(o =>
+      (o.status === 'queued' || o.status === 'Pending')
+      && o.location
+      && !o.riderId
+      && (!o.deliveryDate || o.deliveryDate <= today)
+    );
+    // Priority orders first, then FIFO by createdAt
+    eligible.sort((a, b) => {
+      if (!!b.priority - !!a.priority !== 0) return !!b.priority - !!a.priority;
+      return new Date(a.createdAt) - new Date(b.createdAt);
+    });
+    const assigned = [];
+    for (const o of eligible) {
+      const r = orders.assignToNearestOnlineRider(o.id);
+      if (r) assigned.push({ orderId: o.id, riderId: r.id });
+    }
+    return assigned;
+  },
   setStatus(orderId, status, riderId) {
     const s = load();
     const o = s.orders.find(x => String(x.id) === String(orderId));
@@ -678,13 +704,16 @@ function createRider({ name, email, phone, password }) {
   return u;
 }
 
-// Patch order on creation: accept location {lat,lng,address} and userId.
-function attachOrderLocation(orderId, location, userId) {
+// Patch order on creation: accept location {lat,lng,address}, userId, and
+// scheduling metadata { deliveryDate: 'YYYY-MM-DD', priority: boolean }.
+function attachOrderLocation(orderId, location, userId, opts = {}) {
   const s = load();
   const o = s.orders.find(x => String(x.id) === String(orderId));
   if (!o) return null;
   o.location = location || null;
   if (userId != null) o.userId = userId;
+  if (opts.deliveryDate) o.deliveryDate = opts.deliveryDate;
+  if (opts.priority != null) o.priority = !!opts.priority;
   o.status = o.status === 'queued' || o.status === 'assigned' || o.status === 'in_transit' || o.status === 'delivered' ? o.status : 'queued';
   save();
   return o;

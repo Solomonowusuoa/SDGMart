@@ -215,6 +215,18 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser }) =
         <div style={{ fontSize: 56 }}>🎉</div>
         <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginTop: 16 }}>Order Placed!</h1>
         <div style={{ color: 'var(--warm-gray)', marginTop: 8, fontSize: 14 }}>Your order <strong>{orderId}</strong> is confirmed.</div>
+        {(() => {
+          const now = new Date();
+          const afterCutoff = now.getHours() >= 14;
+          const txt = afterCutoff
+            ? '📅 Delivery: tomorrow from 2 PM (priority queue)'
+            : '🛵 Delivery: today, starting from 2 PM';
+          return (
+            <div style={{ marginTop: 14, display: 'inline-block', background: 'var(--cream)', border: '1px solid var(--cream-dark)', borderRadius: 999, padding: '8px 16px', fontSize: 13, fontWeight: 600, color: 'var(--warm-black)' }}>
+              {txt}
+            </div>
+          );
+        })()}
 
         <div style={{ background: 'var(--cream)', borderRadius: 10, padding: '16px', marginTop: 22, textAlign: 'left' }}>
           <div style={{ fontSize: 12, color: 'var(--warm-gray)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>
@@ -265,7 +277,33 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser }) =
 
           {step === 1 && (
             <>
-              <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, marginBottom: 24 }}>Delivery Details</h2>
+              <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, marginBottom: 14 }}>Delivery Details</h2>
+
+              {/* Delivery window notice — depends on time of day */}
+              {(() => {
+                const now = new Date();
+                const afterCutoff = now.getHours() >= 14;
+                if (afterCutoff) {
+                  return (
+                    <div style={{ background: '#FFF4E0', border: '1px solid #F0C674', borderRadius: 10, padding: '12px 14px', marginBottom: 20, display: 'flex', gap: 10 }}>
+                      <span style={{ fontSize: 18 }}>⏰</span>
+                      <div style={{ fontSize: 13, lineHeight: 1.5, color: '#7A5A00' }}>
+                        <div style={{ fontWeight: 700 }}>Order after the 2 PM cut-off</div>
+                        Today's deliveries are already on the road. Your order will be delivered <strong>tomorrow from 2 PM</strong>, and we'll prioritise it ahead of new same-day orders.
+                      </div>
+                    </div>
+                  );
+                }
+                return (
+                  <div style={{ background: '#E8F4EC', border: '1px solid #B6D9C4', borderRadius: 10, padding: '12px 14px', marginBottom: 20, display: 'flex', gap: 10 }}>
+                    <span style={{ fontSize: 18 }}>🛵</span>
+                    <div style={{ fontSize: 13, lineHeight: 1.5, color: '#1F5D3A' }}>
+                      <div style={{ fontWeight: 700 }}>Same-day delivery</div>
+                      Order before 2 PM and your delivery will be made today. Riders begin their routes at 2 PM.
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Family mode toggle */}
               <div style={{ marginBottom: 24, padding: '14px 18px', background: familyMode ? 'rgba(212,160,23,.12)' : 'var(--cream)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
