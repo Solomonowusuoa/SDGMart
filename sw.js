@@ -1,74 +1,84 @@
-// SDGMart Service Worker — cache-first for static assets, network-first for API
-const CACHE_NAME = 'sdgmart-v14-tracking-ui';
+// SDGMart Service Worker
+// - Caches static assets (cache-first); JS/JSX/CSS/HTML use network-first so
+//   updates during development are picked up on reload.
+// - Listens for `push` events and shows native OS notifications.
+// - On notification click, focuses an existing tab or opens the target URL.
+const CACHE_NAME = 'sdgmart-v15-web-push';
 const STATIC_ASSETS = [
   '/SDGMart.html',
-  '/tweaks-panel.jsx',
-  '/App.jsx',
-  '/hooks.js',
-  '/responsive.css',
-  '/components/Header.jsx',
-  '/components/HomePage.jsx',
-  '/components/CategoryPage.jsx',
-  '/components/ProductPage.jsx',
-  '/components/CartDrawer.jsx',
-  '/components/CheckoutPage.jsx',
-  '/components/SquadPage.jsx',
-  '/components/AdminPage.jsx',
-  '/components/LoginPage.jsx',
   '/manifest.json',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
 ];
 
-// Install: pre-cache static assets
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS))
-  );
+  event.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll(STATIC_ASSETS)));
   self.skipWaiting();
 });
 
-// Activate: remove old caches
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+    caches.keys().then(keys =>
+      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
     )
   );
   self.clients.claim();
 });
 
-// Fetch strategy
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
-
-  // Network-first for API, dynamic data, and any source code (JSX/JS/CSS/HTML)
-  // so that updates during development are picked up on reload.
   const isCode = /\.(jsx|js|css|html)$/.test(url.pathname) || url.pathname === '/' || url.pathname === '/SDGMart.html';
   if (url.pathname.startsWith('/api/') || url.pathname === '/data/products.js' || isCode) {
     event.respondWith(
       fetch(request)
-        .then((res) => {
-          const clone = res.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
-          return res;
-        })
+        .then(res => { try { const clone = res.clone(); caches.open(CACHE_NAME).then(c => c.put(request, clone)); } catch (_) {} return res; })
         .catch(() => caches.match(request))
     );
     return;
   }
-
-  // Cache-first for everything else (static files, fonts, CDN scripts)
   event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) return cached;
-      return fetch(request).then((res) => {
-        if (!res || res.status !== 200 || res.type === 'opaque') return res;
-        const clone = res.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
-        return res;
-      });
-    })
+    caches.match(request).then(cached => cached || fetch(request).then(res => {
+      if (!res || res.status !== 200 || res.type === 'opaque') return res;
+      try { const clone = res.clone(); caches.open(CACHE_NAME).then(c => c.put(request, clone)); } catch (_) {}
+      return res;
+    }))
   );
+});
+
+// ── Web Push ──────────────────────────────────────────────────────────────
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (_) { data = { title: 'SDGMart', body: event.data ? event.data.text() : '' }; }
+  const title = data.title || 'SDGMart';
+  const options = {
+    body: data.body || '',
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    tag: data.tag || 'sdgmart',
+    renotify: true,
+    data: { url: data.url || '/' },
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const targetUrl = (event.notification.data && event.notification.data.url) || '/';
+  event.waitUntil((async () => {
+    const allClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    // If a SDGMart tab is already open, focus it and send a message to navigate
+    for (const c of allClients) {
+      try {
+        const u = new URL(c.url);
+        if (u.origin === self.location.origin) {
+          c.focus();
+          c.postMessage({ type: 'sdgmart-navigate', url: targetUrl });
+          return;
+        }
+      } catch (_) {}
+    }
+    // Otherwise open a new window
+    if (self.clients.openWindow) await self.clients.openWindow(targetUrl);
+  })());
 });

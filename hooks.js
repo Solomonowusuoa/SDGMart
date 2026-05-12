@@ -31,4 +31,62 @@ function apiFetch(url, opts) {
   return fetch(url, Object.assign({}, opts, { headers }));
 }
 
-Object.assign(window, { useMobile, apiFetch });
+// ── Web Push subscription helpers ──────────────────────────────────────────
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+
+// Subscribe this device to Web Push. Idempotent — safe to call multiple
+// times. Returns true on success. Requires SW registration and a user
+// gesture (the first call will trigger the Notification permission prompt).
+async function subscribeToPush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return false;
+  if (typeof Notification === 'undefined') return false;
+  if (Notification.permission !== 'granted') {
+    const p = await Notification.requestPermission();
+    if (p !== 'granted') return false;
+  }
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const keyRes = await fetch('/api/push/vapid-public-key');
+    if (!keyRes.ok) return false;
+    const { publicKey } = await keyRes.json();
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
+      });
+    }
+    const r = await apiFetch('/api/push/subscribe', {
+      method: 'POST',
+      body: JSON.stringify({ subscription: sub.toJSON() }),
+    });
+    return r.ok;
+  } catch (e) {
+    console.warn('Push subscribe failed:', e);
+    return false;
+  }
+}
+
+async function unsubscribeFromPush() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) {
+      await apiFetch('/api/push/unsubscribe', {
+        method: 'POST',
+        body: JSON.stringify({ endpoint: sub.endpoint }),
+      });
+      await sub.unsubscribe();
+    }
+  } catch (_) {}
+}
+
+Object.assign(window, { useMobile, apiFetch, subscribeToPush, unsubscribeFromPush });

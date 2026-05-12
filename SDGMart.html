@@ -144,17 +144,23 @@ img{display:block;max-width:100%}
 
 <script>
 (function () {
-  // Unregister any old service worker and wipe its caches (recover from stale dev cache).
-  // Re-enable registration once the responsive build is stable.
+  // Register the service worker. Required for background Web Push.
+  // file:// can't register SWs and HTTP non-localhost can't either —
+  // both fall back to in-page notifications via the Notification API.
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    navigator.serviceWorker.getRegistrations().then(function (regs) {
-      regs.forEach(function (r) { r.unregister(); });
-    }).catch(function () {});
-    if (window.caches && caches.keys) {
-      caches.keys().then(function (keys) {
-        keys.forEach(function (k) { caches.delete(k); });
-      }).catch(function () {});
-    }
+    navigator.serviceWorker.register('/sw.js').then(function (reg) {
+      // Listen for SW → page messages (e.g. "user clicked a notification")
+      navigator.serviceWorker.addEventListener('message', function (e) {
+        if (e.data && e.data.type === 'sdgmart-navigate') {
+          // Soft navigation: if the URL is something like /?track=XYZ, signal the app.
+          try {
+            var u = new URL(e.data.url, location.origin);
+            var trackId = u.searchParams.get('track');
+            if (trackId) window.dispatchEvent(new CustomEvent('sdgmart:open-tracking', { detail: { orderId: trackId } }));
+          } catch (_) {}
+        }
+      });
+    }).catch(function (err) { console.warn('SW registration failed:', err); });
   }
 
   // PWA install prompt

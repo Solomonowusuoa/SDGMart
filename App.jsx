@@ -102,6 +102,27 @@ const App = () => {
     setPage('home');
   };
 
+  // Honor ?track=ORDER_ID in the URL (used by push notifications) by
+  // jumping straight to the tracking page on load.
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const trackId = params.get('track');
+    if (trackId) {
+      setTrackingOrderId(trackId);
+      setPage('tracking');
+    }
+    // Listen for messages from the service worker (notification clicked while
+    // a tab is already open).
+    const onSwMsg = (e) => {
+      if (e.detail && e.detail.orderId) {
+        setTrackingOrderId(e.detail.orderId);
+        setPage('tracking');
+      }
+    };
+    window.addEventListener('sdgmart:open-tracking', onSwMsg);
+    return () => window.removeEventListener('sdgmart:open-tracking', onSwMsg);
+  }, []);
+
   // On boot, if we have a stored token, fetch the latest user record so
   // discount/spend updates from another tab are picked up. If the token has
   // expired, log the user out automatically.

@@ -55,9 +55,14 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage }) => {
   };
 
   const requestNotifPermission = async () => {
-    if (typeof Notification === 'undefined') return;
-    const p = await Notification.requestPermission();
-    setNotifPermission(p);
+    // Try real Web Push first (background notifications even when tab closed).
+    // Falls back to in-page Notification permission if push isn't supported.
+    const ok = await window.subscribeToPush();
+    setNotifPermission(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
+    if (!ok && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      const p = await Notification.requestPermission();
+      setNotifPermission(p);
+    }
   };
 
   // Poll every 8 seconds

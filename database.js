@@ -679,6 +679,52 @@ function bootstrap() {
 load();
 bootstrap();
 
+// ── Web Push: VAPID keypair + per-user subscriptions ─────────────────────
+// VAPID keys identify our server to push services. Generated once and
+// persisted to sdgmart.json. Override in production via VAPID_PUBLIC_KEY /
+// VAPID_PRIVATE_KEY env vars (recommended so the keys don't change on
+// hosts with ephemeral disk).
+function getVapidKeys() {
+  const env = { pub: process.env.VAPID_PUBLIC_KEY, priv: process.env.VAPID_PRIVATE_KEY };
+  if (env.pub && env.priv) return { publicKey: env.pub, privateKey: env.priv };
+  const s = load();
+  if (s.vapid && s.vapid.publicKey && s.vapid.privateKey) return s.vapid;
+  // First-time generation — only when web-push is available
+  try {
+    const webpush = require('web-push');
+    s.vapid = webpush.generateVAPIDKeys();
+    save();
+    return s.vapid;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Push subscriptions: { userId, endpoint, keys: {p256dh, auth}, createdAt }
+const pushSubs = {
+  list() { const s = load(); return Array.isArray(s.pushSubs) ? s.pushSubs : []; },
+  forUser(userId) {
+    return pushSubs.list().filter(x => String(x.userId) === String(userId));
+  },
+  add(userId, subscription) {
+    const s = load();
+    if (!Array.isArray(s.pushSubs)) s.pushSubs = [];
+    // De-dupe on endpoint
+    s.pushSubs = s.pushSubs.filter(x => x.endpoint !== subscription.endpoint);
+    s.pushSubs.push({
+      userId, endpoint: subscription.endpoint, keys: subscription.keys,
+      createdAt: new Date().toISOString(),
+    });
+    save();
+  },
+  remove(endpoint) {
+    const s = load();
+    if (!Array.isArray(s.pushSubs)) return;
+    s.pushSubs = s.pushSubs.filter(x => x.endpoint !== endpoint);
+    save();
+  },
+};
+
 // Admin-only rider creation (no public signup path).
 function createRider({ name, email, phone, password }) {
   _ensureUserFields();
@@ -725,5 +771,6 @@ module.exports = {
   rateCheck, rateClear,
   makeEmailToken, consumeEmailToken,
   createRider, attachOrderLocation,
+  getVapidKeys, pushSubs,
   ADMIN_EMAIL, ADMIN_DEFAULT_PW,
 };

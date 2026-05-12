@@ -477,6 +477,55 @@ app.get('/api/squads/:userId', requireAuth, (req, res) => {
   });
 });
 
+// ── Web Push ──────────────────────────────────────────────────────────────
+let webpush = null;
+try { webpush = require('web-push'); } catch (_) { console.warn('⚠️  web-push not installed — push notifications disabled'); }
+const VAPID = webpush ? db.getVapidKeys() : null;
+if (webpush && VAPID) {
+  webpush.setVapidDetails(
+    process.env.VAPID_SUBJECT || 'mailto:admin@sdgmart.local',
+    VAPID.publicKey, VAPID.privateKey,
+  );
+  console.log('🔔 Web Push enabled');
+}
+
+// Send a push notification to every device a user has subscribed.
+// Body shape: { title, body, url, tag }
+async function pushToUser(userId, payload) {
+  if (!webpush || !VAPID) return;
+  const subs = db.pushSubs.forUser(userId);
+  await Promise.all(subs.map(async (sub) => {
+    try {
+      await webpush.sendNotification(
+        { endpoint: sub.endpoint, keys: sub.keys },
+        JSON.stringify(payload),
+      );
+    } catch (e) {
+      // 404/410 → subscription is dead, prune it
+      if (e.statusCode === 404 || e.statusCode === 410) db.pushSubs.remove(sub.endpoint);
+      else console.warn('push send failed:', e.statusCode, e.body);
+    }
+  }));
+}
+
+// Expose VAPID public key + subscribe/unsubscribe endpoints
+app.get('/api/push/vapid-public-key', (req, res) => {
+  if (!VAPID) return res.status(503).json({ error: 'Push not configured' });
+  res.json({ publicKey: VAPID.publicKey });
+});
+app.post('/api/push/subscribe', authMiddleware, (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Sign in required' });
+  const sub = req.body && req.body.subscription;
+  if (!sub || !sub.endpoint || !sub.keys) return res.status(400).json({ error: 'Invalid subscription' });
+  db.pushSubs.add(req.user.id, sub);
+  res.json({ ok: true });
+});
+app.post('/api/push/unsubscribe', authMiddleware, (req, res) => {
+  const endpoint = req.body && req.body.endpoint;
+  if (endpoint) db.pushSubs.remove(endpoint);
+  res.json({ ok: true });
+});
+
 // ── Riders & order tracking ───────────────────────────────────────────────
 
 // Admin-only middleware
@@ -516,9 +565,28 @@ app.post('/api/rider/location', authMiddleware, riderOnly, (req, res) => {
 app.post('/api/rider/online', authMiddleware, riderOnly, (req, res) => {
   const { online } = req.body || {};
   db.riders.setOnline(req.user.id, !!online);
-  // When going online, sweep eligible queued orders (only after 14:00 cutoff,
-  // and only those whose deliveryDate is today or past).
-  if (online) db.orders.assignQueuedForToday();
+  if (online) {
+    // Sweep + notify customers whose orders just got assigned
+    const assigned = db.orders.assignQueuedForToday();
+    assigned.forEach(({ orderId }, idx) => {
+      const o = db.prepare('SELECT * FROM orders').get(orderId);
+      if (!o || !o.userId) return;
+      // First in route → "you're next", others → "queued and on the way"
+      if (idx === 0) {
+        pushToUser(o.userId, {
+          title: '🛵 You are next!',
+          body: 'A rider is on the way to you.',
+          url: `/?track=${o.id}`, tag: `order-${o.id}`,
+        });
+      } else {
+        pushToUser(o.userId, {
+          title: '📦 Rider assigned',
+          body: `${idx + 1}${['st','nd','rd'][idx] || 'th'} in their route — completing nearby deliveries first.`,
+          url: `/?track=${o.id}`, tag: `order-${o.id}`,
+        });
+      }
+    });
+  }
   res.json({ ok: true, online: !!online });
 });
 
@@ -536,6 +604,35 @@ app.post('/api/rider/orders/:id/status', authMiddleware, riderOnly, (req, res) =
   if (!['in_transit','delivered'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
   const o = db.orders.setStatus(req.params.id, status, req.user.id);
   if (!o) return res.status(404).json({ error: 'Order not found or not yours' });
+  // Notify the customer of status transitions
+  if (o.userId) {
+    if (status === 'in_transit') {
+      pushToUser(o.userId, {
+        title: '🛵 Out for delivery',
+        body: 'Your SDGMart order is on the way.',
+        url: `/?track=${o.id}`, tag: `order-${o.id}`,
+      });
+    } else if (status === 'delivered') {
+      pushToUser(o.userId, {
+        title: '✅ Delivered',
+        body: 'Your SDGMart order has been delivered. Thank you!',
+        url: `/?track=${o.id}`, tag: `order-${o.id}`,
+      });
+    }
+    // When a delivery is completed, the NEXT customer in this rider's
+    // remaining route is now "you're next" → push them too.
+    if (status === 'delivered') {
+      const remaining = db.orders.forRider(req.user.id);
+      const next = remaining[0];
+      if (next && next.userId) {
+        pushToUser(next.userId, {
+          title: '🛵 You are next!',
+          body: 'Your rider is heading to you now.',
+          url: `/?track=${next.id}`, tag: `order-${next.id}`,
+        });
+      }
+    }
+  }
   res.json(o);
 });
 
