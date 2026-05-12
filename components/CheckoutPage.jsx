@@ -24,7 +24,7 @@ const CheckoutField = ({ label, k, type='text', placeholder='', half, value, err
   </div>
 );
 
-const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser }) => {
+const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, openTracking }) => {
   const [step, setStep] = React.useState(1); // 1=details, 2=review, 3=confirm
   const isMobile = useMobile();
   const [familyMode, setFamilyMode] = React.useState(false);
@@ -249,6 +249,12 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser }) =
           style={{ display: 'block', marginTop: 16, background: waValid ? '#25D366' : '#9DCFA9', color: '#fff', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 15, textDecoration: 'none', cursor: waValid ? 'pointer' : 'not-allowed' }}>
           📱 Send Order to My WhatsApp
         </a>
+        {currentUser && currentUser.id && openTracking && (
+          <button onClick={() => openTracking(orderId)}
+            style={{ marginTop: 10, width: '100%', background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '12px', fontWeight: 700, fontSize: 14 }}>
+            🛵 Track this order
+          </button>
+        )}
         <button onClick={() => setPage('home')}
           style={{ marginTop: 10, width: '100%', background: 'var(--cream)', color: 'var(--warm-black)', borderRadius: 10, padding: '12px', fontWeight: 600, fontSize: 14 }}>
           Continue Shopping

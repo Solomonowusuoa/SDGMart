@@ -85,6 +85,12 @@ const Header = ({ cart, page, setPage, setSelectedCategory, searchQuery, setSear
         {/* Right icons */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto', flexShrink: 0 }}>
           {/* User pill — desktop only */}
+          {!isMobile && currentUser && currentUser.id && (
+            <button onClick={() => setPage('orders')} title="My orders"
+              style={{ fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 18, background: isV2 ? 'rgba(255,255,255,.12)' : 'var(--cream)', color: isV2 ? '#F5F0E8' : 'var(--sage-dark)' }}>
+              📦 My Orders
+            </button>
+          )}
           {!isMobile && currentUser && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: isV2 ? 'rgba(255,255,255,.12)' : 'var(--cream)', borderRadius: 20, padding: '5px 6px 5px 12px' }}>
               <span style={{ fontSize: 12, fontWeight: 700, color: isV2 ? '#F5F0E8' : 'var(--sage-dark)' }}>
@@ -129,7 +135,7 @@ const Header = ({ cart, page, setPage, setSelectedCategory, searchQuery, setSear
       {/* Mobile menu */}
       {isMobile && menuOpen && (
         <div style={{ background: isV2 ? '#2E3B1E' : 'var(--white)', borderTop: `1px solid ${isV2 ? 'rgba(255,255,255,.1)' : 'var(--cream-dark)'}`, padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {[['🏠 Home','home'],['📦 Categories','category'],['🤝 Squad','squad']].map(([label, pg]) => (
+          {[['🏠 Home','home'],['📦 Categories','category'],['🤝 Squad','squad'],...(currentUser && currentUser.id ? [['📦 My Orders','orders']] : [])].map(([label, pg]) => (
             <button key={pg} onClick={() => { setPage(pg); if (pg==='category') setSelectedCategory(null); setMenuOpen(false); }}
               style={{ textAlign: 'left', padding: '12px 16px', borderRadius: 10, fontSize: 15, fontWeight: 600,
                 background: page === pg ? 'var(--sage)' : 'transparent',

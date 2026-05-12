@@ -32,6 +32,7 @@ const App = () => {
   const [page, setPage] = React.useState('home');
   const [selectedCategory, setSelectedCategory] = React.useState(null);
   const [selectedProduct, setSelectedProduct] = React.useState(null);
+  const [trackingOrderId, setTrackingOrderId] = React.useState(null);
   const [cart, setCart] = React.useState([]);
   const [cartOpen, setCartOpen] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState('');
@@ -119,12 +120,20 @@ const App = () => {
   if (!authChecked) {
     return (
       <div style={{
-        minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: 'var(--cream)', color: 'var(--sage-dark)', fontFamily: 'var(--font-head)',
+        position: 'fixed', inset: 0,
+        background: '#0F0F0F', color: '#fff',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 999999,
       }}>
-        <div style={{ textAlign: 'center', opacity: .7 }}>
-          <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: '.02em' }}>SDGMart</div>
-          <div style={{ fontSize: 12, marginTop: 6, color: 'var(--warm-gray)' }}>Signing you in…</div>
+        <style>{`@keyframes sdg-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{
+            width: 36, height: 36, border: '3px solid rgba(255,255,255,.15)',
+            borderTopColor: '#fff', borderRadius: '50%', margin: '0 auto 14px',
+            animation: 'sdg-spin .9s linear infinite',
+          }} />
+          <div style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, letterSpacing: '.02em' }}>SDGMart</div>
+          <div style={{ fontSize: 11, marginTop: 4, opacity: .6 }}>Verifying your session…</div>
         </div>
       </div>
     );
@@ -234,10 +243,24 @@ const App = () => {
           setPage={navigateTo}
           currentUser={currentUser}
           setCurrentUser={setCurrentUser}
+          openTracking={(id) => { setTrackingOrderId(id); navigateTo('tracking'); }}
         />
       )}
       {page === 'squad' && (
         <SquadPage setPage={navigateTo} currentUser={currentUser} />
+      )}
+      {page === 'orders' && (
+        <MyOrdersPage
+          setPage={navigateTo}
+          openTracking={(id) => { setTrackingOrderId(id); navigateTo('tracking'); }}
+        />
+      )}
+      {page === 'tracking' && trackingOrderId && (
+        <OrderTrackingPage
+          orderId={trackingOrderId}
+          currentUser={currentUser}
+          setPage={navigateTo}
+        />
       )}
 
       {cartOpen && page !== 'cart' && (

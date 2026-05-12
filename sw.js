@@ -1,5 +1,5 @@
 // SDGMart Service Worker — cache-first for static assets, network-first for API
-const CACHE_NAME = 'sdgmart-v13-2pm-cutoff-logic';
+const CACHE_NAME = 'sdgmart-v14-tracking-ui';
 const STATIC_ASSETS = [
   '/SDGMart.html',
   '/tweaks-panel.jsx',

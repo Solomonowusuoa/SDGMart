@@ -539,6 +539,16 @@ app.post('/api/rider/orders/:id/status', authMiddleware, riderOnly, (req, res) =
   res.json(o);
 });
 
+// Customer: list my own orders, newest first
+app.get('/api/me/orders', authMiddleware, (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Sign in required' });
+  const all = db.prepare('SELECT * FROM orders').all();
+  const mine = all
+    .filter(o => String(o.userId) === String(req.user.id))
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  res.json(mine);
+});
+
 // Customer: poll order tracking (rider live location + queue position)
 app.get('/api/orders/:id/tracking', authMiddleware, (req, res) => {
   const t = db.orders.getWithTracking(req.params.id);
