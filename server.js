@@ -1,3 +1,6 @@
+// Load .env file in dev. In production (Render) env vars come from the
+// platform dashboard, so this is a no-op there.
+try { require('dotenv').config(); } catch (_) {}
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -5,8 +8,7 @@ const zlib = require('zlib');
 const fs = require('fs');
 const db = require('./database');
 
-// Google OAuth client ID — set GOOGLE_CLIENT_ID in your environment to enable
-// "Sign in with Google". Get one at https://console.cloud.google.com/apis/credentials.
+// Google OAuth client ID — set GOOGLE_CLIENT_ID to enable "Sign in with Google".
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 let _googleClient = null;
 function getGoogleClient() {
@@ -16,7 +18,7 @@ function getGoogleClient() {
     const { OAuth2Client } = require('google-auth-library');
     _googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
     return _googleClient;
-  } catch (e) {
+  } catch (_) {
     console.warn('⚠️  google-auth-library not installed — Google sign-in disabled');
     return null;
   }
@@ -24,24 +26,36 @@ function getGoogleClient() {
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
-// Behind Render/Fly/Railway load balancers — needed for correct
-// req.protocol (https vs http) and req.ip (real client, not proxy).
 app.set('trust proxy', 1);
-
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
-// ── Session-based auth middleware ─────────────────────────────────────────
-// Reads a Bearer token (or X-Session-Token header) and attaches `req.user`.
-function authMiddleware(req, res, next) {
+// ── Session-based auth middleware ────────────────────────────────────────
+async function authMiddleware(req, res, next) {
   let token = '';
   const auth = req.headers.authorization || '';
   if (/^Bearer\s+/i.test(auth)) token = auth.replace(/^Bearer\s+/i, '').trim();
   if (!token) token = req.headers['x-session-token'] || '';
-  const sess = db.sessions.get(token);
-  req.user = sess ? db.users.get(sess.userId) : null;
   req.token = token;
+  req.user = null;
+  req.rider = null;
+  if (token) {
+    try {
+      const sess = await db.sessions.get(token);
+      if (sess) {
+        if (sess.userType === 'rider') {
+          const r = await db.riders.get(sess.userId);
+          if (r) req.rider = { ...r, role: 'rider' };
+          req.user = req.rider; // riders use the same `req.user.role` check pattern
+        } else {
+          const u = await db.users.get(sess.userId);
+          if (u) req.user = u;
+        }
+      }
+    } catch (e) {
+      console.warn('auth lookup failed:', e.message);
+    }
+  }
   next();
 }
 function requireAuth(req, res, next) {
@@ -53,24 +67,20 @@ function requireAdmin(req, res, next) {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
   next();
 }
+function riderOnly(req, res, next) {
+  if (!req.user || req.user.role !== 'rider') return res.status(403).json({ error: 'Rider only' });
+  next();
+}
 app.use(authMiddleware);
 
-// ── Generate PNG icon (solid color, no external deps) ─────────────────────
+// ── PNG icon generator (no external deps) ────────────────────────────────
 function makeCRCTable() {
   const t = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
-    t[n] = c;
-  }
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c; }
   return t;
 }
 const CRC_TABLE = makeCRCTable();
-function crc32(buf) {
-  let crc = 0xFFFFFFFF;
-  for (let i = 0; i < buf.length; i++) crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ buf[i]) & 0xFF];
-  return ((crc ^ 0xFFFFFFFF) >>> 0);
-}
+function crc32(buf) { let c = 0xFFFFFFFF; for (let i = 0; i < buf.length; i++) c = (c >>> 8) ^ CRC_TABLE[(c ^ buf[i]) & 0xFF]; return ((c ^ 0xFFFFFFFF) >>> 0); }
 function pngChunk(type, data) {
   const t = Buffer.from(type, 'ascii');
   const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
@@ -80,56 +90,38 @@ function pngChunk(type, data) {
 function createSolidPNG(size, r, g, b) {
   const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
   const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(size, 0); ihdr.writeUInt32BE(size, 4);
-  ihdr[8] = 8; ihdr[9] = 2;
+  ihdr.writeUInt32BE(size, 0); ihdr.writeUInt32BE(size, 4); ihdr[8] = 8; ihdr[9] = 2;
   const rowSize = 1 + size * 3;
   const raw = Buffer.alloc(size * rowSize);
-  for (let y = 0; y < size; y++)
-    for (let x = 0; x < size; x++) {
-      raw[y * rowSize + 1 + x * 3] = r;
-      raw[y * rowSize + 2 + x * 3] = g;
-      raw[y * rowSize + 3 + x * 3] = b;
-    }
-  return Buffer.concat([
-    sig,
-    pngChunk('IHDR', ihdr),
-    pngChunk('IDAT', zlib.deflateSync(raw)),
-    pngChunk('IEND', Buffer.alloc(0)),
-  ]);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) { raw[y * rowSize + 1 + x * 3] = r; raw[y * rowSize + 2 + x * 3] = g; raw[y * rowSize + 3 + x * 3] = b; }
+  return Buffer.concat([sig, pngChunk('IHDR', ihdr), pngChunk('IDAT', zlib.deflateSync(raw)), pngChunk('IEND', Buffer.alloc(0))]);
 }
 function ensureIcons() {
   const iconsDir = path.join(__dirname, 'icons');
   if (!fs.existsSync(iconsDir)) fs.mkdirSync(iconsDir);
-  const r = 78, g = 139, b = 63; // #4E8B3F sage green
-  if (!fs.existsSync(path.join(iconsDir, 'icon-192.png')))
-    fs.writeFileSync(path.join(iconsDir, 'icon-192.png'), createSolidPNG(192, r, g, b));
-  if (!fs.existsSync(path.join(iconsDir, 'icon-512.png')))
-    fs.writeFileSync(path.join(iconsDir, 'icon-512.png'), createSolidPNG(512, r, g, b));
+  const r = 26, g = 26, b = 26;
+  if (!fs.existsSync(path.join(iconsDir, 'icon-192.png'))) fs.writeFileSync(path.join(iconsDir, 'icon-192.png'), createSolidPNG(192, r, g, b));
+  if (!fs.existsSync(path.join(iconsDir, 'icon-512.png'))) fs.writeFileSync(path.join(iconsDir, 'icon-512.png'), createSolidPNG(512, r, g, b));
 }
 ensureIcons();
 
-// ── Dynamic products.js (served from DB, replaces static file) ────────────
-app.get('/data/products.js', (req, res) => {
-  const products = db.prepare('SELECT * FROM products').all().map(p => ({
-    ...p,
-    bestseller: p.bestseller === 1 || p.bestseller === true,
-    img: p.img || null,
-  }));
-  // Pre-compute top sellers by order frequency so the homepage has something
-  // sensible even before /api/products/top is fetched.
-  const orders = db.prepare('SELECT * FROM orders').all();
-  const counts = {};
-  orders.forEach(o => {
-    let items = o.items;
-    if (typeof items === 'string') { try { items = JSON.parse(items); } catch (_) { items = []; } }
-    (items || []).forEach(i => { counts[i.id] = (counts[i.id] || 0) + (i.qty || 1); });
-  });
-  const TOP_IDS_BY_ORDERS = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => Number(id));
-  const categories = ["Cereals","Dairy","Detergents","Rice & Grains","Cooking Oil","Snacks","Canned Foods","Drinks","Desserts"];
-  const essentials = [1, 5, 13, 17, 9, 29, 25, 22, 3];
-  const neighborhoods = ["Tamale Central","Kalpohin","Lamashegu","Sagnarigu","Nyohini","Choggu","Kalpohini","Vittin","Tishigu","Gumbihini","Jisonayili"];
-  const js = `
-const PRODUCTS = ${JSON.stringify(products)};
+// ── Dynamic products.js (served from DB) ─────────────────────────────────
+app.get('/data/products.js', async (req, res) => {
+  try {
+    const productsList = (await db.products.list()).map(p => ({ ...p, bestseller: !!p.bestseller, img: p.img || null }));
+    const ordersList = await db.orders.list();
+    const counts = {};
+    ordersList.forEach(o => {
+      let items = o.items;
+      if (typeof items === 'string') { try { items = JSON.parse(items); } catch (_) { items = []; } }
+      (items || []).forEach(i => { counts[i.id] = (counts[i.id] || 0) + (i.qty || 1); });
+    });
+    const TOP_IDS_BY_ORDERS = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => Number(id));
+    const categories = ["Cereals","Dairy","Detergents","Rice & Grains","Cooking Oil","Snacks","Canned Foods","Drinks","Desserts"];
+    const essentials = [1, 5, 13, 17, 9, 29, 25, 22, 3];
+    const neighborhoods = ["Tamale Central","Kalpohin","Lamashegu","Sagnarigu","Nyohini","Choggu","Kalpohini","Vittin","Tishigu","Gumbihini","Jisonayili"];
+    const js = `
+const PRODUCTS = ${JSON.stringify(productsList)};
 const CATEGORIES = ${JSON.stringify(categories)};
 const ESSENTIALS = ${JSON.stringify(essentials)};
 const NEIGHBORHOODS = ${JSON.stringify(neighborhoods)};
@@ -141,244 +133,214 @@ if (typeof window !== 'undefined') {
   window.NEIGHBORHOODS = NEIGHBORHOODS;
   window.TOP_IDS_BY_ORDERS = TOP_IDS_BY_ORDERS;
 }`;
-  res.setHeader('Content-Type', 'application/javascript');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.send(js);
-});
-
-// ── Products API ───────────────────────────────────────────────────────────
-app.get('/api/products', (req, res) => {
-  const products = db.prepare('SELECT * FROM products').all().map(p => ({
-    ...p, bestseller: p.bestseller === 1 || p.bestseller === true, img: p.img || null,
-  }));
-  res.json(products);
-});
-
-// Top sellers — based on order frequency. Falls back to a randomised pick
-// when there aren't enough real orders yet.
-app.get('/api/products/top', (req, res) => {
-  const limit = Math.max(1, Math.min(20, parseInt(req.query.limit) || 8));
-  const products = db.prepare('SELECT * FROM products').all().map(p => ({
-    ...p, bestseller: p.bestseller === 1 || p.bestseller === true, img: p.img || null,
-  }));
-  const orders = db.prepare('SELECT * FROM orders').all();
-
-  // Tally quantities per product id from order history
-  const counts = {};
-  orders.forEach(o => {
-    let items = o.items;
-    if (typeof items === 'string') { try { items = JSON.parse(items); } catch (_) { items = []; } }
-    (items || []).forEach(i => { counts[i.id] = (counts[i.id] || 0) + (i.qty || 1); });
-  });
-
-  const ranked = products
-    .map(p => ({ ...p, _orderCount: counts[p.id] || 0 }))
-    .sort((a, b) => b._orderCount - a._orderCount);
-
-  const realTop = ranked.filter(p => p._orderCount > 0).slice(0, limit);
-
-  // If we don't have enough real top sellers yet, top up with a random sample
-  if (realTop.length < limit) {
-    const need = limit - realTop.length;
-    const remaining = ranked.filter(p => p._orderCount === 0);
-    // Fisher–Yates shuffle of `remaining`
-    for (let i = remaining.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [remaining[i], remaining[j]] = [remaining[j], remaining[i]];
-    }
-    realTop.push(...remaining.slice(0, need));
+    res.setHeader('Content-Type', 'application/javascript');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.send(js);
+  } catch (e) {
+    console.error('products.js failed:', e);
+    res.status(500).send('// error loading products');
   }
-  res.json(realTop);
 });
 
-app.get('/api/products/:id', (req, res) => {
-  const p = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
-  if (!p) return res.status(404).json({ error: 'Not found' });
-  res.json({ ...p, bestseller: p.bestseller === 1 || p.bestseller === true });
+// ── Products API ─────────────────────────────────────────────────────────
+app.get('/api/products', async (req, res) => {
+  try { res.json((await db.products.list()).map(p => ({ ...p, bestseller: !!p.bestseller, img: p.img || null }))); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/products', requireAdmin, (req, res) => {
-  const { name, category, price, unit, bestBefore, stock, description, bestseller } = req.body;
-  const result = db.prepare(
-    'INSERT INTO products (name, category, price, unit, bestBefore, stock, description, bestseller) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(name, category, parseFloat(price), unit, bestBefore, parseInt(stock) || 0, description || '', bestseller ? 1 : 0);
-  const created = db.prepare('SELECT * FROM products WHERE id = ?').get(result.lastInsertRowid);
-  res.status(201).json({ ...created, bestseller: created.bestseller === 1 || created.bestseller === true });
+app.get('/api/products/top', async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(20, parseInt(req.query.limit) || 8));
+    const productsList = (await db.products.list()).map(p => ({ ...p, bestseller: !!p.bestseller }));
+    const ordersList = await db.orders.list();
+    const counts = {};
+    ordersList.forEach(o => {
+      let items = o.items;
+      if (typeof items === 'string') { try { items = JSON.parse(items); } catch (_) { items = []; } }
+      (items || []).forEach(i => { counts[i.id] = (counts[i.id] || 0) + (i.qty || 1); });
+    });
+    const ranked = productsList.map(p => ({ ...p, _orderCount: counts[p.id] || 0 })).sort((a, b) => b._orderCount - a._orderCount);
+    const realTop = ranked.filter(p => p._orderCount > 0).slice(0, limit);
+    if (realTop.length < limit) {
+      const remaining = ranked.filter(p => p._orderCount === 0);
+      for (let i = remaining.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [remaining[i], remaining[j]] = [remaining[j], remaining[i]]; }
+      realTop.push(...remaining.slice(0, limit - realTop.length));
+    }
+    res.json(realTop);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.put('/api/products/:id', requireAdmin, (req, res) => {
-  const { name, category, price, unit, bestBefore, stock, description, bestseller } = req.body;
-  db.prepare(
-    'UPDATE products SET name=?, category=?, price=?, unit=?, bestBefore=?, stock=?, description=?, bestseller=? WHERE id=?'
-  ).run(name, category, parseFloat(price), unit, bestBefore, parseInt(stock) || 0, description || '', bestseller ? 1 : 0, req.params.id);
-  const updated = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
-  if (!updated) return res.status(404).json({ error: 'Not found' });
-  res.json({ ...updated, bestseller: updated.bestseller === 1 || updated.bestseller === true });
+app.get('/api/products/:id', async (req, res) => {
+  try {
+    const p = await db.products.get(req.params.id);
+    if (!p) return res.status(404).json({ error: 'Not found' });
+    res.json({ ...p, bestseller: !!p.bestseller });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.delete('/api/products/:id', requireAdmin, (req, res) => {
-  db.prepare('DELETE FROM products WHERE id = ?').run(req.params.id);
-  res.json({ ok: true });
+app.post('/api/products', requireAdmin, async (req, res) => {
+  try {
+    const { name, category, price, unit, bestBefore, stock, description, bestseller, lowStockThreshold } = req.body;
+    const created = await db.products.create({ name, category, price: parseFloat(price), unit, bestBefore, stock: parseInt(stock) || 0, description: description || '', bestseller: !!bestseller, lowStockThreshold: lowStockThreshold != null ? parseInt(lowStockThreshold) : undefined });
+    res.status(201).json({ ...created, bestseller: !!created.bestseller });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-// ── Orders API ─────────────────────────────────────────────────────────────
-app.get('/api/orders', requireAdmin, (req, res) => {
-  const orders = db.prepare('SELECT * FROM orders ORDER BY createdAt DESC').all().map(o => ({
-    ...o,
-    items: JSON.parse(o.items || '[]'),
-    familyMode: o.familyMode === 1,
-  }));
-  res.json(orders);
+app.put('/api/products/:id', requireAdmin, async (req, res) => {
+  try {
+    const { name, category, price, unit, bestBefore, stock, description, bestseller, lowStockThreshold } = req.body;
+    const updated = await db.products.update(req.params.id, { name, category, price: parseFloat(price), unit, bestBefore, stock: parseInt(stock) || 0, description: description || '', bestseller: !!bestseller, ...(lowStockThreshold != null ? { lowStockThreshold: parseInt(lowStockThreshold) } : {}) });
+    res.json({ ...updated, bestseller: !!updated.bestseller });
+  } catch (e) { res.status(404).json({ error: e.message }); }
 });
 
-app.post('/api/orders', (req, res) => {
-  // Signed-in users must have a verified email to place orders.
-  // Guest checkouts (no req.user) remain allowed.
-  if (req.user && req.user.emailVerified === false) {
+app.delete('/api/products/:id', requireAdmin, async (req, res) => {
+  try { await db.products.delete(req.params.id); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Admin: low-stock products (uses per-product threshold, default 5)
+app.get('/api/admin/inventory/low', requireAdmin, async (req, res) => {
+  try { res.json(await db.products.lowStock()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Orders API ───────────────────────────────────────────────────────────
+app.get('/api/orders', requireAdmin, async (req, res) => {
+  try { res.json(await db.orders.list()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/orders', async (req, res) => {
+  if (req.user && req.user.role !== 'rider' && req.user.emailVerified === false) {
     return res.status(403).json({ error: 'Please verify your email before placing an order.' });
   }
-  const {
-    id, customer, phone, neighborhood, address,
-    items, total, delivery, familyMode,
-    recipientName, recipientPhone, recipientAddress,
-    giftMessage, payMethod, mapsPin,
-    subtotal, discountApplied,
-    location, // { lat, lng, address }
-  } = req.body;
-  // Trust the session for userId; ignore any client-supplied userId.
-  const userId = req.user ? req.user.id : null;
-  db.prepare(`
-    INSERT INTO orders (id, customer, phone, neighborhood, address, items, total, delivery,
-      familyMode, recipientName, recipientPhone, recipientAddress, giftMessage, payMethod, mapsPin)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id, customer, phone, neighborhood, address || '',
-    JSON.stringify(items || []), total, delivery || 0,
-    familyMode ? 1 : 0,
-    recipientName || '', recipientPhone || '', recipientAddress || '',
-    giftMessage || '', payMethod || 'momo', mapsPin || ''
-  );
-
-  // Persist location, userId, deliveryDate, and priority.
-  // Rules (all times local server time):
-  //   Order placed BEFORE 14:00 → deliveryDate = today (joins today's 2pm batch)
-  //   Order placed AT/AFTER 14:00 → deliveryDate = tomorrow, priority=true
-  //                                  (gets assigned first when the next 2pm batch starts)
-  const orderRow = db.prepare('SELECT * FROM orders').get(id);
-  if (orderRow) {
-    const loc = location && typeof location.lat === 'number' ? location : null;
+  try {
+    const {
+      customer, phone, neighborhood, address,
+      items, total, delivery,
+      recipientName, recipientPhone, recipientAddress, payMethod, momoNumber,
+      subtotal, discountApplied, loyaltyUsed, location,
+    } = req.body;
+    const userId = req.user ? req.user.id : null;
     const now = new Date();
     const afterCutoff = now.getHours() >= 14;
     const deliveryDate = new Date(now);
     if (afterCutoff) deliveryDate.setDate(deliveryDate.getDate() + 1);
-    const deliveryDateStr = deliveryDate.toISOString().slice(0, 10); // YYYY-MM-DD
-    db.attachOrderLocation(id, loc, userId, { deliveryDate: deliveryDateStr, priority: afterCutoff });
-  }
+    const deliveryDateStr = deliveryDate.toISOString().slice(0, 10);
+    const loc = location && typeof location.lat === 'number' ? location : null;
 
-  // If signed-in user, accumulate spend and possibly unlock squad discount.
-  let squadInfo = null;
-  if (userId) {
-    if (discountApplied) db.squads.consumeDiscount(userId);
-    const spendAmount = Number(subtotal || total || 0);
-    squadInfo = db.squads.recordSpend(userId, spendAmount);
-  }
-  res.status(201).json({
-    ok: true,
-    id,
-    squadDiscountUnlocked: squadInfo ? squadInfo.discountUnlocked : false,
-  });
+    const created = await db.orders.create({
+      userId,
+      customerName: customer || '', customerPhone: phone || '',
+      recipientName: recipientName || '', recipientPhone: recipientPhone || '',
+      address: address || recipientAddress || '', neighborhood: neighborhood || '',
+      items: items || [], subtotal: Number(subtotal || 0), deliveryFee: Number(delivery || 0),
+      discount: Number(discountApplied ? (subtotal * 0.05) : 0),
+      loyaltyUsed: Number(loyaltyUsed || 0),
+      total: Number(total || 0),
+      paymentMethod: payMethod || 'momo', momoNumber: momoNumber || '',
+      status: 'queued', location: loc, deliveryDate: deliveryDateStr, priority: afterCutoff,
+    });
+
+    let squadInfo = null;
+    if (userId) {
+      if (discountApplied) await db.squads.consumeDiscount(userId);
+      if (loyaltyUsed) await db.squads.consumeLoyalty(userId, loyaltyUsed);
+      squadInfo = await db.squads.recordSpend(userId, Number(subtotal || total || 0));
+    }
+    res.status(201).json({ ok: true, id: created.id, deliveryDate: deliveryDateStr, priority: afterCutoff, loyaltyEarned: squadInfo ? squadInfo.loyaltyEarned : 0 });
+  } catch (e) { console.error('order create failed:', e); res.status(500).json({ error: e.message }); }
 });
 
-app.put('/api/orders/:id', requireAdmin, (req, res) => {
-  const { status } = req.body;
-  db.prepare('UPDATE orders SET status = ? WHERE id = ?').run(status, req.params.id);
-  res.json({ ok: true });
+app.put('/api/orders/:id', requireAdmin, async (req, res) => {
+  try { await db.orders.update(req.params.id, req.body || {}); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/api/orders/:id', requireAdmin, (req, res) => {
-  const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id);
-  if (!order) return res.status(404).json({ error: 'Not found' });
-  res.json({ ...order, items: JSON.parse(order.items || '[]'), familyMode: order.familyMode === 1 });
+app.get('/api/orders/:id', requireAdmin, async (req, res) => {
+  try {
+    const o = await db.orders.get(req.params.id);
+    if (!o) return res.status(404).json({ error: 'Not found' });
+    res.json(o);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── Auth: signup / login / logout / me ────────────────────────────────────
-// `publicUser` strips the password hash before returning the user to the client.
+// Admin: delete an order
+app.delete('/api/orders/:id', requireAdmin, async (req, res) => {
+  try { await db.sb.from('orders').delete().eq('id', req.params.id); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Auth: signup / login / logout / me ───────────────────────────────────
 function publicUser(u) {
   if (!u) return null;
-  const { passwordHash, password, ...rest } = u;
+  const { passwordHash, password_hash, password, ...rest } = u;
   return rest;
 }
-
-// Helper for rate-limit keys — prefer X-Forwarded-For when behind a proxy.
 function clientIp(req) {
   const xff = req.headers['x-forwarded-for'];
   if (xff) return String(xff).split(',')[0].trim();
   return req.ip || req.socket.remoteAddress || 'unknown';
 }
 
-app.post('/api/auth/signup', (req, res) => {
+app.post('/api/auth/signup', async (req, res) => {
   const { name, email, phone, password, refCode } = req.body || {};
-  if (!name || !email || !password) {
-    return res.status(400).json({ error: 'Name, email and password are required' });
-  }
+  if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password are required' });
   const pwErr = db.validatePasswordStrength(password);
   if (pwErr) return res.status(400).json({ error: pwErr });
   try {
-    const u = db.users.create({ name, email, phone, password, refCode, role: 'customer' });
-    // Issue an email-verification token. In production swap the console.log
-    // for an actual email send (Nodemailer/SendGrid/SES).
-    const verifyToken = db.makeEmailToken(u.id);
+    // Reject duplicate email up front for a clean error
+    const existing = await db.users.findByEmail(email);
+    if (existing) return res.status(409).json({ error: 'An account with that email already exists' });
+    const u = await db.users.create({ name, email, phone, password, refCode, role: 'customer' });
+    const verifyToken = await db.makeEmailToken(u.id, 'verify');
     const verifyLink = `${req.protocol}://${req.get('host')}/api/auth/verify?token=${verifyToken}`;
     console.log(`✉️  Verification link for ${u.email}: ${verifyLink}`);
-    const token = db.sessions.create(u.id);
-    res.status(201).json({
-      user: publicUser(u),
-      token,
-      verificationLink: verifyLink, // surfaced to the UI for dev convenience
-      message: 'Account created. Please verify your email — link printed to server console.',
-    });
+    const token = await db.sessions.create(u.id);
+    res.status(201).json({ user: publicUser(u), token, verificationLink: verifyLink, message: 'Account created. Please verify your email.' });
   } catch (e) {
-    res.status(409).json({ error: e.message || 'Signup failed' });
+    console.error('signup failed:', e);
+    res.status(500).json({ error: e.message || 'Signup failed' });
   }
 });
 
-// Rate limiter: 5 attempts per 5 minutes per IP+email; 15-minute lockout when exceeded.
 const LOGIN_LIMIT = { windowMs: 5 * 60 * 1000, max: 5, blockMs: 15 * 60 * 1000 };
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body || {};
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required' });
-  }
+  if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
   const ip = clientIp(req);
   const key = `login:${ip}:${String(email).toLowerCase()}`;
   const rl = db.rateCheck(key, LOGIN_LIMIT);
   if (!rl.allowed) {
-    res.set('Retry-After', String(rl.retryAfter));
-    return res.status(429).json({
-      error: `Too many attempts. Try again in ${Math.ceil(rl.retryAfter / 60)} minute(s).`,
-    });
+    res.set('Retry-After', String(Math.ceil(rl.retryAfterMs / 1000)));
+    return res.status(429).json({ error: `Too many attempts. Try again in ${Math.ceil(rl.retryAfterMs / 60000)} minute(s).` });
   }
-  const u = db.users.verifyCredentials(email, password);
-  if (!u) return res.status(401).json({ error: 'Wrong email or password' });
-  // Successful login → reset the rate counter for this key
-  db.rateClear(key);
-  const token = db.sessions.create(u.id);
-  res.json({ user: publicUser(u), token });
+  try {
+    // Try customer/admin first, then rider
+    let u = await db.users.verifyCredentials(email, password);
+    let userType = 'user';
+    if (!u) {
+      const r = await db.riders.verifyCredentials(email, password);
+      if (r) { u = { ...r, role: 'rider' }; userType = 'rider'; }
+    }
+    if (!u) return res.status(401).json({ error: 'Wrong email or password' });
+    db.rateClear(key);
+    const token = await db.sessions.create(u.id, userType);
+    res.json({ user: publicUser(u), token });
+  } catch (e) { console.error('login failed:', e); res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/auth/logout', (req, res) => {
-  if (req.token) db.sessions.destroy(req.token);
+app.post('/api/auth/logout', async (req, res) => {
+  if (req.token) await db.sessions.destroy(req.token);
   res.json({ ok: true });
 });
 
-// Tells the frontend whether Google sign-in is configured (and what client ID
-// to use). Safe to expose — Google client IDs are public by design.
 app.get('/api/auth/config', (req, res) => {
   res.json({ googleClientId: GOOGLE_CLIENT_ID || null });
 });
 
-// Verify a Google ID token and sign the user in (creating the account if new).
 app.post('/api/auth/google', async (req, res) => {
   const client = getGoogleClient();
   if (!client) return res.status(503).json({ error: 'Google sign-in is not configured on this server.' });
@@ -387,333 +349,279 @@ app.post('/api/auth/google', async (req, res) => {
   try {
     const ticket = await client.verifyIdToken({ idToken: credential, audience: GOOGLE_CLIENT_ID });
     const payload = ticket.getPayload();
-    if (!payload || !payload.email || !payload.email_verified) {
-      return res.status(400).json({ error: 'Google did not return a verified email' });
-    }
-    const u = db.users.findOrCreateGoogle({
-      email: payload.email,
-      name: payload.name || payload.given_name || 'Google User',
-      googleId: payload.sub,
-      picture: payload.picture,
-      refCode,
-    });
-    const token = db.sessions.create(u.id);
+    if (!payload || !payload.email || !payload.email_verified) return res.status(400).json({ error: 'Google did not return a verified email' });
+    const u = await db.users.findOrCreateGoogle({ email: payload.email, name: payload.name || payload.given_name || 'Google User', googleId: payload.sub, picture: payload.picture, refCode });
+    const token = await db.sessions.create(u.id);
     res.json({ user: publicUser(u), token });
-  } catch (e) {
-    console.error('Google verify failed:', e.message);
-    res.status(401).json({ error: 'Invalid or expired Google token' });
-  }
+  } catch (e) { console.error('Google verify failed:', e.message); res.status(401).json({ error: 'Invalid or expired Google token' }); }
 });
 
-app.get('/api/auth/me', requireAuth, (req, res) => {
-  res.json(publicUser(req.user));
+app.get('/api/auth/me', requireAuth, (req, res) => { res.json(publicUser(req.user)); });
+
+app.get('/api/auth/verify', async (req, res) => {
+  const result = await db.consumeEmailToken(req.query.token, 'verify');
+  if (!result) return res.status(400).send('Verification link is invalid or expired.');
+  await db.users.markEmailVerified(result.userId);
+  res.send('<h2 style="font-family:sans-serif;max-width:480px;margin:60px auto;color:#000">✅ Email verified.</h2><p style="font-family:sans-serif;max-width:480px;margin:0 auto;color:#666">You can return to SDGMart and continue shopping.</p>');
 });
 
-// Email verification — opening the link in any browser confirms the address.
-app.get('/api/auth/verify', (req, res) => {
-  const userId = db.consumeEmailToken(req.query.token);
-  if (!userId) return res.status(400).send('Verification link is invalid or expired.');
-  db.users.markEmailVerified(userId);
-  res.send('<h2 style="font-family:sans-serif;max-width:480px;margin:60px auto;color:#2F6124">✅ Email verified.</h2><p style="font-family:sans-serif;max-width:480px;margin:0 auto;color:#666">You can return to SDGMart and continue shopping.</p>');
-});
-
-// Re-issue a verification email (e.g. user lost the link).
-app.post('/api/auth/resend-verification', requireAuth, (req, res) => {
+app.post('/api/auth/resend-verification', requireAuth, async (req, res) => {
   if (req.user.emailVerified) return res.json({ ok: true, alreadyVerified: true });
-  const verifyToken = db.makeEmailToken(req.user.id);
+  const verifyToken = await db.makeEmailToken(req.user.id, 'verify');
   const verifyLink = `${req.protocol}://${req.get('host')}/api/auth/verify?token=${verifyToken}`;
   console.log(`✉️  Re-sent verification for ${req.user.email}: ${verifyLink}`);
   res.json({ ok: true, verificationLink: verifyLink });
 });
 
-// Change password (requires current password). Rotates all sessions for the user.
-app.post('/api/auth/change-password', requireAuth, (req, res) => {
+// ── Password reset ───────────────────────────────────────────────────────
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const { email } = req.body || {};
+  if (!email) return res.status(400).json({ error: 'Email required' });
+  // Rate-limit per email
+  const rl = db.rateCheck(`reset:${String(email).toLowerCase()}`, { windowMs: 60 * 60 * 1000, max: 5, blockMs: 60 * 60 * 1000 });
+  if (!rl.allowed) return res.json({ ok: true }); // Silent rate-limit (don't leak)
+  try {
+    const u = await db.users.findByEmail(email);
+    // Respond OK even when the email doesn't exist (don't leak which addresses are registered)
+    if (!u) return res.json({ ok: true });
+    const token = await db.makeEmailToken(u.id, 'reset');
+    const link = `${req.protocol}://${req.get('host')}/?reset=${token}`;
+    console.log(`🔑 Password reset link for ${u.email}: ${link}`);
+    res.json({ ok: true, resetLink: link });
+  } catch (e) { console.error('forgot-password failed:', e); res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { token, newPassword } = req.body || {};
+  if (!token || !newPassword) return res.status(400).json({ error: 'Token and new password required' });
+  const pwErr = db.validatePasswordStrength(newPassword);
+  if (pwErr) return res.status(400).json({ error: pwErr });
+  try {
+    const result = await db.consumeEmailToken(token, 'reset');
+    if (!result) return res.status(400).json({ error: 'Reset link is invalid or has expired' });
+    await db.users.changePassword(result.userId, newPassword);
+    await db.sessions.destroyAllForUser(result.userId);
+    res.json({ ok: true });
+  } catch (e) { console.error('reset-password failed:', e); res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/auth/change-password', requireAuth, async (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
   if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Both passwords required' });
-  if (!db.verifyPassword(currentPassword, req.user.passwordHash)) {
-    return res.status(401).json({ error: 'Current password is incorrect' });
-  }
+  if (!db.verifyPassword(currentPassword, req.user.passwordHash)) return res.status(401).json({ error: 'Current password is incorrect' });
   const pwErr = db.validatePasswordStrength(newPassword, { isAdminChange: req.user.role === 'admin' });
   if (pwErr) return res.status(400).json({ error: pwErr });
-  db.users.changePassword(req.user.id, newPassword);
-  // Invalidate all existing sessions, then issue a fresh one for the current client.
-  db.sessions.destroyAllForUser(req.user.id);
-  const token = db.sessions.create(req.user.id);
-  res.json({ ok: true, token });
+  try {
+    await db.users.changePassword(req.user.id, newPassword);
+    await db.sessions.destroyAllForUser(req.user.id);
+    const token = await db.sessions.create(req.user.id);
+    res.json({ ok: true, token });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// User profile — only the user themselves or admin can read it.
-app.get('/api/users/:id', requireAuth, (req, res) => {
-  const wantId = String(req.params.id);
-  if (String(req.user.id) !== wantId && req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
-  const u = db.users.get(req.params.id);
-  if (!u) return res.status(404).json({ error: 'Not found' });
-  res.json(publicUser(u));
+app.get('/api/users/:id', requireAuth, async (req, res) => {
+  if (String(req.user.id) !== String(req.params.id) && req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+  try {
+    const u = await db.users.get(req.params.id);
+    if (!u) return res.status(404).json({ error: 'Not found' });
+    res.json(publicUser(u));
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Squad: returns the user + all squad members. Self or admin only.
-app.get('/api/squads/:userId', requireAuth, (req, res) => {
-  const wantId = String(req.params.userId);
-  if (String(req.user.id) !== wantId && req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
-  const u = db.users.get(req.params.userId);
-  if (!u) return res.status(404).json({ error: 'Not found' });
-  const members = db.squads.members(u.squadCode).map(m => ({
-    id: m.id,
-    name: m.name,
-    totalSpent: m.totalSpent || 0,
-    discountPending: !!m.discountPending,
-    isYou: m.id === u.id,
-  }));
-  res.json({
-    me: publicUser(u),
-    referralCode: u.referralCode,
-    squadCode: u.squadCode,
-    members,
-    goal: 500,
-  });
+app.get('/api/squads/:userId', requireAuth, async (req, res) => {
+  if (String(req.user.id) !== String(req.params.userId) && req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+  try {
+    const u = await db.users.get(req.params.userId);
+    if (!u) return res.status(404).json({ error: 'Not found' });
+    const members = (await db.squads.members(u.squadCode)).map(m => ({
+      id: m.id, name: m.name, totalSpent: m.totalSpent || 0, discountPending: !!m.discountPending, isYou: m.id === u.id,
+    }));
+    res.json({ me: publicUser(u), referralCode: u.refCode, squadCode: u.squadCode, members, goal: 500 });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── Web Push ──────────────────────────────────────────────────────────────
+// ── Web Push ─────────────────────────────────────────────────────────────
 let webpush = null;
 try { webpush = require('web-push'); } catch (_) { console.warn('⚠️  web-push not installed — push notifications disabled'); }
-const VAPID = webpush ? db.getVapidKeys() : null;
-if (webpush && VAPID) {
-  webpush.setVapidDetails(
-    process.env.VAPID_SUBJECT || 'mailto:admin@sdgmart.local',
-    VAPID.publicKey, VAPID.privateKey,
-  );
-  console.log('🔔 Web Push enabled');
-}
+let VAPID = null;
 
-// Send a push notification to every device a user has subscribed.
-// Body shape: { title, body, url, tag }
 async function pushToUser(userId, payload) {
   if (!webpush || !VAPID) return;
-  const subs = db.pushSubs.forUser(userId);
-  await Promise.all(subs.map(async (sub) => {
-    try {
-      await webpush.sendNotification(
-        { endpoint: sub.endpoint, keys: sub.keys },
-        JSON.stringify(payload),
-      );
-    } catch (e) {
-      // 404/410 → subscription is dead, prune it
-      if (e.statusCode === 404 || e.statusCode === 410) db.pushSubs.remove(sub.endpoint);
-      else console.warn('push send failed:', e.statusCode, e.body);
-    }
-  }));
+  try {
+    const subs = await db.pushSubs.forUser(userId);
+    await Promise.all(subs.map(async (sub) => {
+      try {
+        await webpush.sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, JSON.stringify(payload));
+      } catch (e) {
+        if (e.statusCode === 404 || e.statusCode === 410) await db.pushSubs.remove(sub.endpoint);
+        else console.warn('push send failed:', e.statusCode, e.body);
+      }
+    }));
+  } catch (e) { console.warn('pushToUser failed:', e.message); }
 }
 
-// Expose VAPID public key + subscribe/unsubscribe endpoints
 app.get('/api/push/vapid-public-key', (req, res) => {
   if (!VAPID) return res.status(503).json({ error: 'Push not configured' });
   res.json({ publicKey: VAPID.publicKey });
 });
-app.post('/api/push/subscribe', authMiddleware, (req, res) => {
-  if (!req.user) return res.status(401).json({ error: 'Sign in required' });
+app.post('/api/push/subscribe', requireAuth, async (req, res) => {
   const sub = req.body && req.body.subscription;
   if (!sub || !sub.endpoint || !sub.keys) return res.status(400).json({ error: 'Invalid subscription' });
-  db.pushSubs.add(req.user.id, sub);
-  res.json({ ok: true });
+  try { await db.pushSubs.add(req.user.id, sub); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/push/unsubscribe', authMiddleware, (req, res) => {
+app.post('/api/push/unsubscribe', async (req, res) => {
   const endpoint = req.body && req.body.endpoint;
-  if (endpoint) db.pushSubs.remove(endpoint);
+  if (endpoint) await db.pushSubs.remove(endpoint);
   res.json({ ok: true });
 });
 
-// ── Riders & order tracking ───────────────────────────────────────────────
-
-// Admin-only middleware
-function adminOnly(req, res, next) {
-  if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
-  next();
-}
-function riderOnly(req, res, next) {
-  if (!req.user || req.user.role !== 'rider') return res.status(403).json({ error: 'Rider only' });
-  next();
-}
-
-// Admin: list all riders + create a new one (no public signup path)
-app.get('/api/admin/riders', authMiddleware, adminOnly, (req, res) => {
-  res.json(db.riders.list());
+// ── Riders ───────────────────────────────────────────────────────────────
+app.get('/api/admin/riders', requireAdmin, async (req, res) => {
+  try { res.json(await db.riders.list()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/admin/riders', authMiddleware, adminOnly, (req, res) => {
+app.post('/api/admin/riders', requireAdmin, async (req, res) => {
   const { name, email, phone, password } = req.body || {};
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password required' });
   try {
-    const r = db.createRider({ name, email, phone, password });
-    res.json({ id: r.id, name: r.name, email: r.email, phone: r.phone, role: r.role });
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
+    const r = await db.createRider({ name, email, phone, password });
+    res.json({ id: r.id, name: r.name, email: r.email, phone: r.phone, role: 'rider' });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-// Rider: post current location (called every ~15s by the rider PWA)
-app.post('/api/rider/location', authMiddleware, riderOnly, (req, res) => {
+app.post('/api/rider/location', riderOnly, async (req, res) => {
   const { lat, lng } = req.body || {};
   if (typeof lat !== 'number' || typeof lng !== 'number') return res.status(400).json({ error: 'lat/lng required' });
-  db.riders.setLocation(req.user.id, lat, lng);
-  res.json({ ok: true });
+  try { await db.riders.setLocation(req.user.id, lat, lng); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Rider: toggle online status
-app.post('/api/rider/online', authMiddleware, riderOnly, (req, res) => {
+app.post('/api/rider/online', riderOnly, async (req, res) => {
   const { online } = req.body || {};
-  db.riders.setOnline(req.user.id, !!online);
-  if (online) {
-    // Sweep + notify customers whose orders just got assigned
-    const assigned = db.orders.assignQueuedForToday();
-    assigned.forEach(({ orderId }, idx) => {
-      const o = db.prepare('SELECT * FROM orders').get(orderId);
-      if (!o || !o.userId) return;
-      // First in route → "you're next", others → "queued and on the way"
-      if (idx === 0) {
-        pushToUser(o.userId, {
-          title: '🛵 You are next!',
-          body: 'A rider is on the way to you.',
-          url: `/?track=${o.id}`, tag: `order-${o.id}`,
-        });
-      } else {
-        pushToUser(o.userId, {
-          title: '📦 Rider assigned',
-          body: `${idx + 1}${['st','nd','rd'][idx] || 'th'} in their route — completing nearby deliveries first.`,
-          url: `/?track=${o.id}`, tag: `order-${o.id}`,
-        });
+  try {
+    await db.riders.setOnline(req.user.id, !!online);
+    if (online) {
+      const assigned = await db.orders.assignQueuedForToday();
+      for (let i = 0; i < assigned.length; i++) {
+        const { orderId } = assigned[i];
+        const o = await db.orders.get(orderId);
+        if (!o || !o.userId) continue;
+        if (i === 0) await pushToUser(o.userId, { title: '🛵 You are next!', body: 'A rider is on the way to you.', url: `/?track=${o.id}`, tag: `order-${o.id}` });
+        else await pushToUser(o.userId, { title: '📦 Rider assigned', body: `${i + 1}${['st','nd','rd'][i] || 'th'} in their route — completing nearby deliveries first.`, url: `/?track=${o.id}`, tag: `order-${o.id}` });
       }
-    });
-  }
-  res.json({ ok: true, online: !!online });
+    }
+    res.json({ ok: true, online: !!online });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Rider: get assigned orders, sorted by nearest-neighbor route.
-// Also sweeps for newly-eligible orders so the queue stays fresh as time passes
-// (e.g. clock crosses 14:00 while the rider is already online).
-app.get('/api/rider/orders', authMiddleware, riderOnly, (req, res) => {
-  db.orders.assignQueuedForToday();
-  res.json(db.orders.forRider(req.user.id));
+app.get('/api/rider/orders', riderOnly, async (req, res) => {
+  try { await db.orders.assignQueuedForToday(); res.json(await db.orders.forRider(req.user.id)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Rider: update an order's status
-app.post('/api/rider/orders/:id/status', authMiddleware, riderOnly, (req, res) => {
+app.post('/api/rider/orders/:id/status', riderOnly, async (req, res) => {
   const { status } = req.body || {};
   if (!['in_transit','delivered'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
-  const o = db.orders.setStatus(req.params.id, status, req.user.id);
-  if (!o) return res.status(404).json({ error: 'Order not found or not yours' });
-  // Notify the customer of status transitions
-  if (o.userId) {
-    if (status === 'in_transit') {
-      pushToUser(o.userId, {
-        title: '🛵 Out for delivery',
-        body: 'Your SDGMart order is on the way.',
-        url: `/?track=${o.id}`, tag: `order-${o.id}`,
-      });
-    } else if (status === 'delivered') {
-      pushToUser(o.userId, {
-        title: '✅ Delivered',
-        body: 'Your SDGMart order has been delivered. Thank you!',
-        url: `/?track=${o.id}`, tag: `order-${o.id}`,
-      });
-    }
-    // When a delivery is completed, the NEXT customer in this rider's
-    // remaining route is now "you're next" → push them too.
-    if (status === 'delivered') {
-      const remaining = db.orders.forRider(req.user.id);
-      const next = remaining[0];
-      if (next && next.userId) {
-        pushToUser(next.userId, {
-          title: '🛵 You are next!',
-          body: 'Your rider is heading to you now.',
-          url: `/?track=${next.id}`, tag: `order-${next.id}`,
-        });
+  try {
+    const o = await db.orders.setStatus(req.params.id, status, req.user.id);
+    if (!o) return res.status(404).json({ error: 'Order not found or not yours' });
+    if (o.userId) {
+      if (status === 'in_transit') await pushToUser(o.userId, { title: '🛵 Out for delivery', body: 'Your SDGMart order is on the way.', url: `/?track=${o.id}`, tag: `order-${o.id}` });
+      else if (status === 'delivered') await pushToUser(o.userId, { title: '✅ Delivered', body: 'Your SDGMart order has been delivered. Thank you!', url: `/?track=${o.id}`, tag: `order-${o.id}` });
+      if (status === 'delivered') {
+        const remaining = await db.orders.forRider(req.user.id);
+        const next = remaining[0];
+        if (next && next.userId) await pushToUser(next.userId, { title: '🛵 You are next!', body: 'Your rider is heading to you now.', url: `/?track=${next.id}`, tag: `order-${next.id}` });
       }
     }
-  }
-  res.json(o);
+    res.json(o);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Customer: list my own orders, newest first
-app.get('/api/me/orders', authMiddleware, (req, res) => {
-  if (!req.user) return res.status(401).json({ error: 'Sign in required' });
-  const all = db.prepare('SELECT * FROM orders').all();
-  const mine = all
-    .filter(o => String(o.userId) === String(req.user.id))
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  res.json(mine);
+// Customer: list my own orders
+app.get('/api/me/orders', requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await db.sb.from('orders').select('*').eq('user_id', req.user.id).order('created_at', { ascending: false });
+    if (error) throw error;
+    // Convert snake_case to camelCase for the client
+    const out = data.map(o => { const x = {}; for (const k of Object.keys(o)) x[k.replace(/_([a-z])/g, (_, c) => c.toUpperCase())] = o[k]; return x; });
+    res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Customer: poll order tracking (rider live location + queue position)
-app.get('/api/orders/:id/tracking', authMiddleware, (req, res) => {
-  const t = db.orders.getWithTracking(req.params.id);
-  if (!t) return res.status(404).json({ error: 'Order not found' });
-  // Only the order owner, the assigned rider, or admin can see tracking
-  const isOwner = String(t.order.userId) === String(req.user.id);
-  const isRider = String(t.order.riderId) === String(req.user.id);
-  if (!isOwner && !isRider && req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
-  res.json(t);
+app.get('/api/orders/:id/tracking', requireAuth, async (req, res) => {
+  try {
+    const t = await db.orders.getWithTracking(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Order not found' });
+    const isOwner = String(t.order.userId) === String(req.user.id);
+    const isRider = String(t.order.riderId) === String(req.user.id);
+    if (!isOwner && !isRider && req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+    res.json(t);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── Static files (icons, etc.) ─────────────────────────────────────────────
+// ── Search analytics ─────────────────────────────────────────────────────
+app.post('/api/search/log', async (req, res) => {
+  const { query, resultCount } = req.body || {};
+  try { await db.searchLog.record(query, req.user ? req.user.id : null, resultCount); res.json({ ok: true }); }
+  catch (_) { res.json({ ok: true }); }
+});
+app.get('/api/admin/search/top', requireAdmin, async (req, res) => {
+  try { res.json(await db.searchLog.topQueries({ days: parseInt(req.query.days) || 30, limit: parseInt(req.query.limit) || 20 })); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/admin/search/unmatched', requireAdmin, async (req, res) => {
+  try { res.json(await db.searchLog.unmatchedQueries({ days: parseInt(req.query.days) || 30, limit: parseInt(req.query.limit) || 20 })); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Recurring orders ─────────────────────────────────────────────────────
+app.get('/api/me/recurring', requireAuth, async (req, res) => {
+  try { res.json(await db.recurring.listForUser(req.user.id)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/me/recurring', requireAuth, async (req, res) => {
+  const { items, cadenceDays, nextRunAt, deliveryInfo } = req.body || {};
+  if (!Array.isArray(items) || !items.length || !cadenceDays || !nextRunAt) return res.status(400).json({ error: 'items, cadenceDays, nextRunAt required' });
+  try { res.json(await db.recurring.create({ userId: req.user.id, items, cadenceDays: parseInt(cadenceDays), nextRunAt, deliveryInfo })); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/me/recurring/:id', requireAuth, async (req, res) => {
+  try { res.json(await db.recurring.setActive(req.params.id, req.user.id, !!req.body.active)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/me/recurring/:id', requireAuth, async (req, res) => {
+  try { await db.recurring.delete(req.params.id, req.user.id); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Static files ─────────────────────────────────────────────────────────
 app.use('/icons', express.static(path.join(__dirname, 'icons')));
 app.use(express.static(__dirname, { index: 'SDGMart.html' }));
 
-// ── Start (HTTP + optional HTTPS) ─────────────────────────────────────────
-// HTTPS is opt-in via SDGMART_HTTPS=1. On first start with that flag we
-// auto-generate a self-signed cert into ./certs/. Browsers will show a
-// warning for self-signed certs — accept it once, or import the cert into
-// your trust store. For production, terminate TLS at a real reverse proxy.
-function startHttp() {
+// ── Startup ──────────────────────────────────────────────────────────────
+async function start() {
+  try {
+    await db.bootstrap();
+  } catch (e) {
+    console.error('❌ DB bootstrap failed:', e.message);
+    console.error('   Did you run supabase-schema.sql in the Supabase SQL editor?');
+    process.exit(1);
+  }
+  if (webpush) {
+    try {
+      VAPID = await db.getVapidKeys();
+      if (VAPID) {
+        webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:admin@sdgmart.local', VAPID.publicKey, VAPID.privateKey);
+        console.log('🔔 Web Push enabled');
+      }
+    } catch (e) { console.warn('Web Push init failed:', e.message); }
+  }
   app.listen(PORT, () => {
     console.log(`\n🏪 SDGMart running at http://localhost:${PORT}`);
-    console.log(`   Admin login: ${db.ADMIN_EMAIL} (default password: sdgadmin2026)`);
-    if (process.env.SDGMART_HTTPS !== '1') {
-      console.log(`   (HTTPS disabled — set SDGMART_HTTPS=1 to enable)\n`);
-    }
+    console.log(`   Admin login: ${db.ADMIN_EMAIL} (default password: ${db.ADMIN_DEFAULT_PW})`);
   });
 }
 
-function startHttps() {
-  const https = require('https');
-  const certDir = path.join(__dirname, 'certs');
-  const keyPath = path.join(certDir, 'key.pem');
-  const certPath = path.join(certDir, 'cert.pem');
-
-  if (!fs.existsSync(keyPath) || !fs.existsSync(certPath)) {
-    if (!fs.existsSync(certDir)) fs.mkdirSync(certDir);
-    try {
-      // Try Node 20+ built-in X.509 self-signed generation via crypto.
-      const { generateKeyPairSync, createPrivateKey, X509Certificate } = require('crypto');
-      // Fallback: use the small `selfsigned` package if available.
-      let selfsigned;
-      try { selfsigned = require('selfsigned'); } catch (_) {}
-      if (selfsigned) {
-        const attrs = [{ name: 'commonName', value: 'localhost' }];
-        const pems = selfsigned.generate(attrs, { days: 365, keySize: 2048, algorithm: 'sha256' });
-        fs.writeFileSync(keyPath, pems.private);
-        fs.writeFileSync(certPath, pems.cert);
-        console.log('🔐 Generated self-signed cert in ./certs/ (using selfsigned package)');
-      } else {
-        console.warn('⚠️  HTTPS requested but the `selfsigned` package is not installed.');
-        console.warn('    Install it with:  npm install selfsigned');
-        console.warn('    Or drop your own key.pem + cert.pem into ./certs/ and restart.');
-        return;
-      }
-    } catch (e) {
-      console.warn('⚠️  Could not generate self-signed cert:', e.message);
-      return;
-    }
-  }
-
-  const HTTPS_PORT = process.env.HTTPS_PORT ? Number(process.env.HTTPS_PORT) : 3443;
-  https.createServer({ key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) }, app)
-    .listen(HTTPS_PORT, () => {
-      console.log(`🔒 HTTPS at https://localhost:${HTTPS_PORT} (self-signed — accept the browser warning)\n`);
-    });
-}
-
-startHttp();
-if (process.env.SDGMART_HTTPS === '1') startHttps();
+start();

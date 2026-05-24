@@ -1,776 +1,597 @@
-// Lightweight synchronous JSON database — same API surface as better-sqlite3.
-// Data is stored in sdgmart.json next to this file.
-const fs = require('fs');
-const path = require('path');
+// SDGMart database layer — Supabase (Postgres) backed.
+//
+// All public methods are ASYNC. Server handlers must `await` every call.
+//
+// Required env vars (set in .env locally and Render in production):
+//   SUPABASE_URL              = https://<project>.supabase.co
+//   SUPABASE_SERVICE_KEY      = your service_role key (server-only)
+//   VAPID_PUBLIC_KEY          = (optional) overrides DB-stored VAPID
+//   VAPID_PRIVATE_KEY         = (optional)
+//
 const crypto = require('crypto');
+const { createClient } = require('@supabase/supabase-js');
 
-const DB_FILE = path.join(__dirname, 'sdgmart.json');
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
+if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+  console.error('❌  SUPABASE_URL and SUPABASE_SERVICE_KEY env vars are required.');
+  console.error('    Put them in .env locally and in Render → Environment in production.');
+  process.exit(1);
+}
+const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false },
+});
 
-// Admin bootstrap — created on first start if it doesn't already exist.
+// ── Admin bootstrap ──────────────────────────────────────────────────────
 const ADMIN_EMAIL = 'solomonowusuoa@gmail.com';
 const ADMIN_DEFAULT_PW = 'sdgadmin2026';
 
-// ── Password strength rules ───────────────────────────────────────────────
-// Minimum 8 characters, at least one letter and one number. Rejects the
-// default admin password explicitly so admins MUST rotate it.
+// ── Password rules ───────────────────────────────────────────────────────
 function validatePasswordStrength(password, { isAdminChange = false } = {}) {
   const pw = String(password || '');
   if (pw.length < 8) return 'Password must be at least 8 characters.';
   if (!/[A-Za-z]/.test(pw)) return 'Password must contain a letter.';
   if (!/\d/.test(pw)) return 'Password must contain a number.';
   if (isAdminChange && pw === ADMIN_DEFAULT_PW) return 'Pick a password different from the default.';
-  return null; // valid
+  return null;
 }
 
-// ── Seed data ──────────────────────────────────────────────────────────────
-const SEED_PRODUCTS = [
-  // Cereals
-  { name:'Quaker Oats',          category:'Cereals',       price:32.50, unit:'1kg',   bestBefore:'2026-12-01', stock:48,  description:'Wholesome rolled oats, great for breakfast porridge.', bestseller:true  },
-  { name:'Milo Cereal',          category:'Cereals',       price:28.00, unit:'500g',  bestBefore:'2026-10-15', stock:30,  description:'Malted chocolate cereal loved by kids and adults.',    bestseller:false },
-  { name:'Tom Brown',            category:'Cereals',       price:18.50, unit:'1kg',   bestBefore:'2026-11-20', stock:60,  description:'Traditional Ghanaian roasted grain porridge mix.',     bestseller:true  },
-  { name:'Weatabix',             category:'Cereals',       price:22.00, unit:'430g',  bestBefore:'2026-09-30', stock:25,  description:'Whole wheat biscuits — filling and nutritious.',        bestseller:false },
-  // Dairy
-  { name:'Peak Milk (Tin)',      category:'Dairy',         price:38.00, unit:'400g',  bestBefore:'2027-03-01', stock:55,  description:'Full cream evaporated milk, rich and creamy.',         bestseller:true  },
-  { name:'Cowbell Milk',         category:'Dairy',         price:15.00, unit:'400g',  bestBefore:'2026-12-10', stock:40,  description:'Fortified powdered milk for the whole family.',        bestseller:false },
-  { name:'Yoghurt (Strawberry)', category:'Dairy',         price:12.00, unit:'200ml', bestBefore:'2026-05-20', stock:20,  description:'Fresh cultured yoghurt, chilled and creamy.',          bestseller:false },
-  { name:'Fan Ice Vanilla',      category:'Dairy',         price:5.00,  unit:'100ml', bestBefore:'2026-06-01', stock:80,  description:'Classic Ghanaian fan ice cup, vanilla flavour.',       bestseller:false },
-  // Detergents
-  { name:'Omo Washing Powder',   category:'Detergents',    price:45.00, unit:'2kg',   bestBefore:'2027-06-01', stock:35,  description:'Powerful stain-removing washing powder.',              bestseller:true  },
-  { name:'Key Soap',             category:'Detergents',    price:8.50,  unit:'200g',  bestBefore:'2027-01-01', stock:100, description:'Traditional all-purpose bar soap for laundry.',        bestseller:false },
-  { name:'Dettol Hand Wash',     category:'Detergents',    price:22.00, unit:'250ml', bestBefore:'2027-08-01', stock:42,  description:'Antibacterial liquid hand wash, original scent.',      bestseller:false },
-  { name:'Ariel Liquid',         category:'Detergents',    price:55.00, unit:'1L',    bestBefore:'2027-04-15', stock:18,  description:'Premium concentrated liquid laundry detergent.',       bestseller:false },
-  // Rice & Grains
-  { name:"Uncle Ben's Rice",     category:'Rice & Grains', price:65.00, unit:'5kg',   bestBefore:'2027-05-01', stock:40,  description:'Long grain parboiled white rice.',                     bestseller:true  },
-  { name:'Ofada Rice',           category:'Rice & Grains', price:48.00, unit:'5kg',   bestBefore:'2027-04-01', stock:30,  description:'Local unpolished rice with a nutty flavour.',          bestseller:false },
-  { name:'Millet (Ground)',      category:'Rice & Grains', price:20.00, unit:'1kg',   bestBefore:'2026-12-20', stock:50,  description:'Finely ground millet for TZ and porridge.',            bestseller:false },
-  { name:'Semolina',             category:'Rice & Grains', price:18.00, unit:'1kg',   bestBefore:'2026-11-15', stock:35,  description:'Fine wheat semolina for light meals.',                 bestseller:false },
-  // Cooking Oil
-  { name:'Frytol Vegetable Oil', category:'Cooking Oil',   price:72.00, unit:'3L',    bestBefore:'2026-12-31', stock:25,  description:'Refined vegetable oil for frying and cooking.',        bestseller:true  },
-  { name:'Gino Olive Oil',       category:'Cooking Oil',   price:85.00, unit:'750ml', bestBefore:'2027-02-01', stock:15,  description:'Pure olive oil blend for healthy cooking.',            bestseller:false },
-  { name:'Groundnut Oil',        category:'Cooking Oil',   price:40.00, unit:'1L',    bestBefore:'2026-10-01', stock:30,  description:'Locally pressed groundnut (peanut) oil.',              bestseller:false },
-  { name:'Palm Oil (Red)',       category:'Cooking Oil',   price:35.00, unit:'1L',    bestBefore:'2026-09-15', stock:45,  description:'Traditional West African red palm oil.',               bestseller:false },
-  // Snacks
-  { name:'Pringles Original',    category:'Snacks',        price:32.00, unit:'165g',  bestBefore:'2026-08-01', stock:22,  description:'Crispy stacked potato crisps, original flavour.',      bestseller:false },
-  { name:'Crackers (Cabin)',     category:'Snacks',        price:12.00, unit:'200g',  bestBefore:'2026-09-01', stock:55,  description:'Classic cabin biscuits, lightly salted.',              bestseller:true  },
-  { name:'Chin Chin',            category:'Snacks',        price:15.00, unit:'250g',  bestBefore:'2026-07-15', stock:40,  description:'Crunchy fried Ghanaian snack, lightly sweetened.',     bestseller:false },
-  { name:'Plantain Chips',       category:'Snacks',        price:10.00, unit:'150g',  bestBefore:'2026-07-01', stock:60,  description:'Crispy ripe plantain chips, locally made.',            bestseller:false },
-  // Canned Foods
-  { name:'Sardines in Tomato',   category:'Canned Foods',  price:18.50, unit:'125g',  bestBefore:'2028-01-01', stock:70,  description:'Atlantic sardines in rich tomato sauce.',              bestseller:true  },
-  { name:'Corned Beef (Exeter)', category:'Canned Foods',  price:42.00, unit:'340g',  bestBefore:'2028-06-01', stock:30,  description:'Premium corned beef, great for stews.',                bestseller:false },
-  { name:'Baked Beans',          category:'Canned Foods',  price:25.00, unit:'400g',  bestBefore:'2027-10-01', stock:25,  description:'Haricot beans in sweet tomato sauce.',                 bestseller:false },
-  { name:'Tomato Paste (Gino)',  category:'Canned Foods',  price:8.00,  unit:'70g',   bestBefore:'2027-05-01', stock:90,  description:'Concentrated tomato paste for soups and stews.',       bestseller:false },
-  // Drinks
-  { name:'Coca-Cola',            category:'Drinks',        price:8.00,  unit:'500ml', bestBefore:'2026-12-01', stock:100, description:'Refreshing original Coca-Cola.',                       bestseller:true  },
-  { name:'Malta Guinness',       category:'Drinks',        price:10.00, unit:'330ml', bestBefore:'2026-11-01', stock:80,  description:'Non-alcoholic malt drink, rich and nutritious.',       bestseller:false },
-  { name:'Voltic Water',         category:'Drinks',        price:4.50,  unit:'500ml', bestBefore:'2027-01-01', stock:150, description:'Pure natural spring water, Ghanaian origin.',          bestseller:false },
-  { name:'Alvaro (Pineapple)',   category:'Drinks',        price:9.50,  unit:'330ml', bestBefore:'2026-10-20', stock:65,  description:'Sparkling pineapple-flavoured fruit drink.',           bestseller:false },
-  // Desserts
-  { name:'Digestive Biscuits',   category:'Desserts',      price:22.00, unit:'400g',  bestBefore:'2026-10-01', stock:30,  description:'Semi-sweet wholemeal biscuits, great with tea.',       bestseller:true  },
-  { name:'Milo Powder',          category:'Desserts',      price:45.00, unit:'400g',  bestBefore:'2026-12-15', stock:40,  description:'Malted chocolate powder for hot or cold drinks.',      bestseller:false },
-  { name:'Scotch Fingers',       category:'Desserts',      price:18.00, unit:'300g',  bestBefore:'2026-09-01', stock:28,  description:'Buttery shortbread finger biscuits.',                  bestseller:false },
-  { name:'Cadbury Chocolate',    category:'Desserts',      price:28.00, unit:'100g',  bestBefore:'2026-08-15', stock:20,  description:'Smooth milk chocolate bar by Cadbury.',                bestseller:false },
-];
-
-// ── Storage ────────────────────────────────────────────────────────────────
-let _store;
-
-function load() {
-  if (_store) return _store;
-  if (fs.existsSync(DB_FILE)) {
-    try {
-      _store = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-      return _store;
-    } catch (_) {}
-  }
-  // First run — seed
-  let id = 1;
-  _store = {
-    products: SEED_PRODUCTS.map(p => ({ ...p, id: id++, img: null })),
-    orders: [],
-    users: [],
-    _nextProductId: id,
-    _nextUserId: 1,
-  };
-  save();
-  console.log('✅ Database seeded with 36 products');
-  return _store;
-}
-
-function save() {
-  fs.writeFileSync(DB_FILE, JSON.stringify(_store, null, 2));
-}
-
-// ── Query builder — mirrors better-sqlite3's prepare().run/get/all ─────────
-function prepare(sql) {
-  const store = load();
-  const s = sql.trim().toUpperCase();
-
-  return {
-    // Products — all rows
-    all() {
-      if (s.includes('FROM PRODUCTS')) return [...store.products];
-      if (s.includes('FROM ORDERS'))  return [...store.orders];
-      return [];
-    },
-    // Single row by id
-    get(id) {
-      if (s.includes('FROM PRODUCTS'))
-        return store.products.find(p => String(p.id) === String(id)) || null;
-      if (s.includes('FROM ORDERS'))
-        return store.orders.find(o => String(o.id) === String(id)) || null;
-      return null;
-    },
-    // Mutations
-    run(...args) {
-      if (s.startsWith('INSERT INTO PRODUCTS')) {
-        const [name, category, price, unit, bestBefore, stock, description, bestseller] = args;
-        const p = {
-          id: store._nextProductId++,
-          name, category,
-          price: parseFloat(price) || 0,
-          unit: unit || '',
-          bestBefore: bestBefore || '',
-          stock: parseInt(stock) || 0,
-          description: description || '',
-          bestseller: bestseller === 1 || bestseller === true,
-          img: null,
-        };
-        store.products.push(p);
-        save();
-        return { lastInsertRowid: p.id };
-      }
-      if (s.startsWith('UPDATE PRODUCTS')) {
-        // UPDATE products SET name=?, ... WHERE id=?
-        const id = args[args.length - 1];
-        const idx = store.products.findIndex(p => String(p.id) === String(id));
-        if (idx !== -1) {
-          if (args.length === 9) {
-            const [name, category, price, unit, bestBefore, stock, description, bestseller] = args;
-            store.products[idx] = {
-              ...store.products[idx],
-              name, category,
-              price: parseFloat(price) || 0,
-              unit: unit || '',
-              bestBefore: bestBefore || '',
-              stock: parseInt(stock) || 0,
-              description: description || '',
-              bestseller: bestseller === 1 || bestseller === true,
-            };
-          }
-          save();
-        }
-        return { changes: idx !== -1 ? 1 : 0 };
-      }
-      if (s.startsWith('DELETE FROM PRODUCTS')) {
-        const id = args[0];
-        const before = store.products.length;
-        store.products = store.products.filter(p => String(p.id) !== String(id));
-        save();
-        return { changes: before - store.products.length };
-      }
-      if (s.startsWith('INSERT INTO ORDERS')) {
-        const [id, customer, phone, neighborhood, address, items, total, delivery,
-               familyMode, recipientName, recipientPhone, recipientAddress,
-               giftMessage, payMethod, mapsPin] = args;
-        const order = {
-          id, customer, phone: phone || '', neighborhood: neighborhood || '',
-          address: address || '', items, total: parseFloat(total) || 0,
-          delivery: parseFloat(delivery) || 0, status: 'Pending',
-          familyMode: familyMode === 1 || familyMode === true,
-          recipientName: recipientName || '', recipientPhone: recipientPhone || '',
-          recipientAddress: recipientAddress || '', giftMessage: giftMessage || '',
-          payMethod: payMethod || 'momo', mapsPin: mapsPin || '',
-          createdAt: new Date().toISOString(),
-        };
-        store.orders.unshift(order);
-        save();
-        return { lastInsertRowid: id };
-      }
-      if (s.startsWith('UPDATE ORDERS')) {
-        // UPDATE orders SET status = ? WHERE id = ?
-        const [status, id] = args;
-        const idx = store.orders.findIndex(o => String(o.id) === String(id));
-        if (idx !== -1) { store.orders[idx].status = status; save(); }
-        return { changes: idx !== -1 ? 1 : 0 };
-      }
-      return { changes: 0, lastInsertRowid: null };
-    },
-  };
-}
-
-// ── Crypto: scrypt password hashing + random session tokens ───────────────
-// Format of stored hash: "<salt-hex>:<hash-hex>".  Cost is the default scrypt
-// parameter which is fine for an interactive login (~100ms on commodity HW).
-function hashPassword(password) {
+// ── Password hashing (scrypt — same as before) ───────────────────────────
+function hashPassword(plain) {
   const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(String(password || ''), salt, 64).toString('hex');
+  const hash = crypto.scryptSync(plain, salt, 64).toString('hex');
   return `${salt}:${hash}`;
 }
-function verifyPassword(password, stored) {
+function verifyPassword(plain, stored) {
   if (!stored || typeof stored !== 'string' || !stored.includes(':')) return false;
   const [salt, hash] = stored.split(':');
-  let test;
-  try { test = crypto.scryptSync(String(password || ''), salt, 64).toString('hex'); }
-  catch (_) { return false; }
-  const a = Buffer.from(hash, 'hex');
-  const b = Buffer.from(test, 'hex');
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
-}
-function genToken() {
-  return crypto.randomBytes(32).toString('hex');
+  try {
+    const test = crypto.scryptSync(plain, salt, 64).toString('hex');
+    return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(test, 'hex'));
+  } catch (_) { return false; }
 }
 
-// ── Sessions (persisted to sdgmart.json; survive server restarts) ────────
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-
-function _ensureSessionStore() {
-  const s = load();
-  if (!s.sessions || typeof s.sessions !== 'object') s.sessions = {};
+// ── camelCase ↔ snake_case helpers ───────────────────────────────────────
+const camelToSnake = (s) => s.replace(/[A-Z]/g, (m) => '_' + m.toLowerCase());
+const snakeToCamel = (s) => s.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+function rowOut(row) {
+  if (!row || typeof row !== 'object') return row;
+  const out = {};
+  for (const k of Object.keys(row)) out[snakeToCamel(k)] = row[k];
+  return out;
 }
+function rowIn(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  const out = {};
+  for (const k of Object.keys(obj)) out[camelToSnake(k)] = obj[k];
+  return out;
+}
+function rowsOut(rows) { return Array.isArray(rows) ? rows.map(rowOut) : rows; }
 
-function _pruneExpiredSessions() {
-  const s = load();
-  let dirty = false;
+// ── In-memory rate limiter (transient, intentionally not persisted) ──────
+const rateBuckets = new Map();
+function rateCheck(key, { windowMs = 5 * 60 * 1000, max = 5, blockMs = 15 * 60 * 1000 } = {}) {
   const now = Date.now();
-  for (const [tok, sess] of Object.entries(s.sessions || {})) {
-    if (!sess || now - sess.createdAt > SESSION_TTL_MS) {
-      delete s.sessions[tok];
-      dirty = true;
-    }
-  }
-  if (dirty) save();
+  let b = rateBuckets.get(key);
+  if (!b) { b = { hits: [], blockedUntil: 0 }; rateBuckets.set(key, b); }
+  if (b.blockedUntil > now) return { allowed: false, retryAfterMs: b.blockedUntil - now };
+  b.hits = b.hits.filter((t) => now - t < windowMs);
+  if (b.hits.length >= max) { b.blockedUntil = now + blockMs; return { allowed: false, retryAfterMs: blockMs }; }
+  b.hits.push(now);
+  return { allowed: true };
 }
+function rateClear(key) { rateBuckets.delete(key); }
 
-const sessions = {
-  create(userId) {
-    _ensureSessionStore();
-    const s = load();
-    const token = genToken();
-    s.sessions[token] = { userId, createdAt: Date.now() };
-    save();
-    return token;
+// ── Products ─────────────────────────────────────────────────────────────
+const products = {
+  async list() {
+    const { data, error } = await sb.from('products').select('*').order('id');
+    if (error) throw error;
+    return rowsOut(data);
   },
-  get(token) {
-    if (!token) return null;
-    _ensureSessionStore();
-    const s = load();
-    const sess = s.sessions[token];
-    if (!sess) return null;
-    if (Date.now() - sess.createdAt > SESSION_TTL_MS) {
-      delete s.sessions[token];
-      save();
-      return null;
-    }
-    return sess;
+  async get(id) {
+    const { data, error } = await sb.from('products').select('*').eq('id', id).maybeSingle();
+    if (error) throw error;
+    return rowOut(data);
   },
-  destroy(token) {
-    if (!token) return;
-    _ensureSessionStore();
-    const s = load();
-    if (s.sessions[token]) { delete s.sessions[token]; save(); }
+  async create(p) {
+    const { data, error } = await sb.from('products').insert(rowIn(p)).select().single();
+    if (error) throw error;
+    return rowOut(data);
   },
-  destroyAllForUser(userId) {
-    _ensureSessionStore();
-    const s = load();
-    let dirty = false;
-    for (const [tok, sess] of Object.entries(s.sessions)) {
-      if (sess && String(sess.userId) === String(userId)) { delete s.sessions[tok]; dirty = true; }
-    }
-    if (dirty) save();
+  async update(id, patch) {
+    const { data, error } = await sb.from('products').update(rowIn(patch)).eq('id', id).select().single();
+    if (error) throw error;
+    return rowOut(data);
+  },
+  async delete(id) {
+    const { error } = await sb.from('products').delete().eq('id', id);
+    if (error) throw error;
+    return true;
+  },
+  async lowStock() {
+    // Default threshold = 5 unless per-product override exists
+    const { data, error } = await sb.from('products').select('*');
+    if (error) throw error;
+    return rowsOut(data).filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
   },
 };
 
-// ── Rate limiting (per-key sliding window, in-memory) ─────────────────────
-// Used by /api/auth/login. State is in-memory (lost on restart, which is OK
-// — restart drops blocks too, but the window is short anyway).
-const _rateState = new Map(); // key -> { hits: [timestamps], blockedUntil: number }
-
-function rateCheck(key, { windowMs, max, blockMs }) {
-  const now = Date.now();
-  let st = _rateState.get(key);
-  if (!st) { st = { hits: [], blockedUntil: 0 }; _rateState.set(key, st); }
-  if (st.blockedUntil > now) {
-    return { allowed: false, retryAfter: Math.ceil((st.blockedUntil - now) / 1000) };
-  }
-  st.hits = st.hits.filter(t => now - t < windowMs);
-  st.hits.push(now);
-  if (st.hits.length > max) {
-    st.blockedUntil = now + blockMs;
-    st.hits = [];
-    return { allowed: false, retryAfter: Math.ceil(blockMs / 1000) };
-  }
-  return { allowed: true, remaining: max - st.hits.length };
-}
-function rateClear(key) { _rateState.delete(key); }
-
-// ── Email verification tokens ─────────────────────────────────────────────
-const _emailTokens = new Map(); // token -> { userId, expiresAt }
-const EMAIL_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24h
-
-function makeEmailToken(userId) {
-  // Prune expired tokens lazily
-  const now = Date.now();
-  for (const [t, v] of _emailTokens.entries()) if (v.expiresAt < now) _emailTokens.delete(t);
-  const token = genToken();
-  _emailTokens.set(token, { userId, expiresAt: now + EMAIL_TOKEN_TTL_MS });
-  return token;
-}
-function consumeEmailToken(token) {
-  const v = _emailTokens.get(token);
-  if (!v) return null;
-  _emailTokens.delete(token);
-  if (v.expiresAt < Date.now()) return null;
-  return v.userId;
-}
-
-// ── Users + Squads helpers ────────────────────────────────────────────────
-function _ensureUserFields() {
-  const s = load();
-  if (!Array.isArray(s.users)) s.users = [];
-  if (!s._nextUserId) s._nextUserId = 1;
-}
-function _genCode(name) {
-  const base = (name || 'USER').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 6) || 'USER';
-  return base + Math.random().toString(36).slice(2, 6).toUpperCase();
-}
-
+// ── Users ────────────────────────────────────────────────────────────────
 const users = {
-  all() { _ensureUserFields(); return [...load().users]; },
-  findByEmail(email) {
-    _ensureUserFields();
-    if (!email) return null;
-    const e = email.trim().toLowerCase();
-    return load().users.find(u => (u.email || '').toLowerCase() === e) || null;
+  async get(id) {
+    const { data, error } = await sb.from('users').select('*').eq('id', id).maybeSingle();
+    if (error) throw error;
+    return rowOut(data);
   },
-  findByCode(code) {
-    _ensureUserFields();
+  async findByEmail(email) {
+    const { data, error } = await sb.from('users').select('*').ilike('email', email).maybeSingle();
+    if (error) throw error;
+    return rowOut(data);
+  },
+  async findByRefCode(code) {
     if (!code) return null;
-    return load().users.find(u => u.referralCode === code.toUpperCase()) || null;
+    const { data, error } = await sb.from('users').select('*').eq('ref_code', code.toUpperCase()).maybeSingle();
+    if (error) throw error;
+    return rowOut(data);
   },
-  get(id) {
-    _ensureUserFields();
-    return load().users.find(u => String(u.id) === String(id)) || null;
-  },
-  create({ name, email, phone, password, refCode, role }) {
-    _ensureUserFields();
-    const s = load();
-    if (users.findByEmail(email)) throw new Error('Email already registered');
-    if (!password || String(password).length < 4) throw new Error('Password must be at least 4 characters');
-    const referralCode = _genCode(name);
-    let squadCode = referralCode; // default: own squad
+  async create({ name, email, phone, password, refCode, role = 'customer' }) {
+    const passwordHash = password ? hashPassword(password) : null;
+    // Look up the referrer (if any) to inherit their squadCode
+    let squadCode = null;
+    let ownsSquad = false;
     if (refCode) {
-      const referrer = users.findByCode(refCode);
-      if (referrer) squadCode = referrer.squadCode || referrer.referralCode;
+      const refUser = await users.findByRefCode(refCode);
+      if (refUser) squadCode = refUser.squadCode || refUser.refCode;
     }
-    const u = {
-      id: s._nextUserId++,
-      name: name || 'Customer',
-      email: (email || '').trim().toLowerCase(),
-      phone: phone || '',
-      passwordHash: hashPassword(password),
-      referralCode,
-      squadCode,
-      totalSpent: 0,
-      discountPending: false,
-      role: role || 'customer',
-      emailVerified: false,
-      mustChangePassword: false,
-      createdAt: new Date().toISOString(),
+    if (!squadCode) {
+      // New user owns their own squad
+      squadCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+      ownsSquad = true;
+    }
+    const myRefCode = crypto.randomBytes(3).toString('hex').toUpperCase();
+    const insert = {
+      name, email: String(email).toLowerCase().trim(), phone, password_hash: passwordHash, role,
+      ref_code: myRefCode, squad_code: squadCode, owns_squad: ownsSquad,
     };
-    s.users.push(u);
-    save();
-    return u;
+    const { data, error } = await sb.from('users').insert(insert).select().single();
+    if (error) throw error;
+    return rowOut(data);
   },
-  verifyCredentials(email, password) {
-    const u = users.findByEmail(email);
-    if (!u) return null;
+  async verifyCredentials(email, password) {
+    const u = await users.findByEmail(email);
+    if (!u || !u.passwordHash) return null;
     if (!verifyPassword(password, u.passwordHash)) return null;
     return u;
   },
-  changePassword(id, newPassword) {
-    return users.update(id, {
-      passwordHash: hashPassword(newPassword),
-      mustChangePassword: false,
-    });
+  async changePassword(id, newPassword) {
+    const passwordHash = hashPassword(newPassword);
+    const { data, error } = await sb.from('users').update({ password_hash: passwordHash, must_change_password: false }).eq('id', id).select().single();
+    if (error) throw error;
+    return rowOut(data);
   },
-  markEmailVerified(id) {
-    return users.update(id, { emailVerified: true });
+  async markEmailVerified(id) {
+    const { error } = await sb.from('users').update({ email_verified: true }).eq('id', id);
+    if (error) throw error;
+    return true;
   },
-  // Find or create a user from a Google sign-in. Google has already verified
-  // the email, so emailVerified=true. No password needed (passwordHash stays
-  // empty — verifyCredentials will refuse plain-password logins for them).
-  findOrCreateGoogle({ email, name, googleId, picture, refCode }) {
-    _ensureUserFields();
-    const s = load();
-    let u = users.findByEmail(email);
-    if (u) {
-      // Backfill googleId on first Google sign-in for existing accounts.
-      const patch = { emailVerified: true };
-      if (!u.googleId) patch.googleId = googleId;
-      if (picture && !u.picture) patch.picture = picture;
-      return users.update(u.id, patch);
+  async findOrCreateGoogle({ email, name, googleId, picture, refCode }) {
+    const lower = String(email).toLowerCase();
+    // Existing user by googleId or email
+    let u = null;
+    {
+      const r = await sb.from('users').select('*').eq('google_id', googleId).maybeSingle();
+      u = rowOut(r.data);
     }
-    const referralCode = _genCode(name);
-    let squadCode = referralCode;
-    if (refCode) {
-      const referrer = users.findByCode(refCode);
-      if (referrer) squadCode = referrer.squadCode || referrer.referralCode;
+    if (!u) {
+      const r = await sb.from('users').select('*').ilike('email', lower).maybeSingle();
+      u = rowOut(r.data);
+      if (u) {
+        // Link google_id to existing email user and mark verified
+        const upd = await sb.from('users').update({ google_id: googleId, email_verified: true, picture: picture || u.picture })
+          .eq('id', u.id).select().single();
+        u = rowOut(upd.data);
+      }
     }
-    u = {
-      id: s._nextUserId++,
-      name: name || 'Google User',
-      email: (email || '').trim().toLowerCase(),
-      phone: '',
-      passwordHash: '',           // password-less account — must use Google to sign in
-      googleId: googleId || null,
-      picture: picture || null,
-      referralCode,
-      squadCode,
-      totalSpent: 0,
-      discountPending: false,
-      role: 'customer',
-      emailVerified: true,
-      mustChangePassword: false,
-      createdAt: new Date().toISOString(),
-    };
-    s.users.push(u);
-    save();
+    if (!u) {
+      // Brand new google user — create
+      u = await users.create({ name, email: lower, phone: null, password: null, refCode, role: 'customer' });
+      const upd = await sb.from('users').update({ google_id: googleId, email_verified: true, picture: picture || null })
+        .eq('id', u.id).select().single();
+      u = rowOut(upd.data);
+    }
     return u;
   },
-  update(id, patch) {
-    _ensureUserFields();
-    const s = load();
-    const idx = s.users.findIndex(u => String(u.id) === String(id));
-    if (idx === -1) return null;
-    s.users[idx] = { ...s.users[idx], ...patch };
-    save();
-    return s.users[idx];
+};
+
+// ── Squads ───────────────────────────────────────────────────────────────
+const squads = {
+  async members(squadCode) {
+    if (!squadCode) return [];
+    const { data, error } = await sb.from('users').select('*').eq('squad_code', squadCode);
+    if (error) throw error;
+    return rowsOut(data);
+  },
+  // Records spend, then if EVERY squad member has crossed GHS 500,
+  // flag everyone as discountPending and reset their totals.
+  // Also accrues loyalty: GHS 50 off per GHS 1000 spent (loyalty_balance).
+  async recordSpend(userId, spendAmount) {
+    const u = await users.get(userId);
+    if (!u) return null;
+    // Loyalty: every GHS 1000 of TOTAL spend across all time gives GHS 50
+    const newTotal = Number(u.totalSpent || 0) + Number(spendAmount || 0);
+    const prevTiers = Math.floor(Number(u.totalSpent || 0) / 1000);
+    const newTiers = Math.floor(newTotal / 1000);
+    const loyaltyEarned = (newTiers - prevTiers) * 50;
+    const newLoyalty = Number(u.loyaltyBalance || 0) + loyaltyEarned;
+    await sb.from('users').update({ total_spent: newTotal, loyalty_balance: newLoyalty }).eq('id', userId);
+
+    // Squad goal logic
+    if (u.squadCode) {
+      const members = await squads.members(u.squadCode);
+      const allHit = members.length > 0 && members.every((m) =>
+        (String(m.id) === String(userId) ? newTotal : Number(m.totalSpent || 0)) >= 500,
+      );
+      if (allHit) {
+        await sb.from('users').update({ discount_pending: true, total_spent: 0 }).eq('squad_code', u.squadCode);
+      }
+    }
+    return { totalSpent: newTotal, loyaltyEarned, loyaltyBalance: newLoyalty };
+  },
+  async consumeDiscount(userId) {
+    await sb.from('users').update({ discount_pending: false }).eq('id', userId);
+    return true;
+  },
+  // Subtract loyalty credit when used
+  async consumeLoyalty(userId, amount) {
+    const u = await users.get(userId);
+    if (!u) return 0;
+    const used = Math.min(Number(u.loyaltyBalance || 0), Number(amount || 0));
+    await sb.from('users').update({ loyalty_balance: Number(u.loyaltyBalance) - used }).eq('id', userId);
+    return used;
   },
 };
 
-// ── Riders & order assignment ─────────────────────────────────────────────
-// Riders are users with role='rider'. Their live location is held in-memory
-// (lost on restart, which is fine — they reconnect every 15s anyway).
-const _riderState = new Map(); // userId -> { lat, lng, ts, online }
-
-const riders = {
-  list() {
-    return load().users
-      .filter(u => u.role === 'rider')
-      .map(u => {
-        const live = _riderState.get(u.id) || {};
-        return { id: u.id, name: u.name, email: u.email, phone: u.phone,
-                 online: !!live.online, lat: live.lat, lng: live.lng, lastSeen: live.ts };
-      });
+// ── Sessions ─────────────────────────────────────────────────────────────
+const SESSION_TTL_DAYS = 7;
+const sessions = {
+  async create(userId, userType = 'user') {
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + SESSION_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    const { error } = await sb.from('sessions').insert({ token, user_id: userId, user_type: userType, expires_at: expiresAt });
+    if (error) throw error;
+    return token;
   },
-  setLocation(userId, lat, lng) {
-    const cur = _riderState.get(userId) || {};
-    _riderState.set(userId, { ...cur, lat: Number(lat), lng: Number(lng), ts: Date.now() });
+  async get(token) {
+    if (!token) return null;
+    const { data, error } = await sb.from('sessions').select('*').eq('token', token).maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    if (new Date(data.expires_at) < new Date()) {
+      await sb.from('sessions').delete().eq('token', token);
+      return null;
+    }
+    return { token: data.token, userId: data.user_id, userType: data.user_type };
   },
-  setOnline(userId, online) {
-    const cur = _riderState.get(userId) || {};
-    _riderState.set(userId, { ...cur, online: !!online, ts: Date.now() });
+  async destroy(token) {
+    if (!token) return;
+    await sb.from('sessions').delete().eq('token', token);
   },
-  get(userId) {
-    const u = users.get(userId);
-    if (!u || u.role !== 'rider') return null;
-    const live = _riderState.get(userId) || {};
-    return { id: u.id, name: u.name, online: !!live.online, lat: live.lat, lng: live.lng, lastSeen: live.ts };
+  async destroyAllForUser(userId, userType = 'user') {
+    await sb.from('sessions').delete().eq('user_id', userId).eq('user_type', userType);
   },
 };
 
-// Haversine distance in km
-function _distKm(a, b) {
-  if (!a || !b || a.lat == null || b.lat == null) return Infinity;
-  const R = 6371, toRad = d => d * Math.PI / 180;
-  const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
-  const x = Math.sin(dLat/2)**2 + Math.cos(toRad(a.lat))*Math.cos(toRad(b.lat))*Math.sin(dLng/2)**2;
-  return 2 * R * Math.asin(Math.sqrt(x));
+// ── Email tokens (verify + password reset) ───────────────────────────────
+const EMAIL_TOKEN_TTL_HOURS = 24;
+async function makeEmailToken(userId, purpose = 'verify') {
+  const token = crypto.randomBytes(24).toString('hex');
+  const expiresAt = new Date(Date.now() + EMAIL_TOKEN_TTL_HOURS * 60 * 60 * 1000).toISOString();
+  await sb.from('email_tokens').insert({ token, user_id: userId, purpose, expires_at: expiresAt });
+  return token;
+}
+async function consumeEmailToken(token, expectedPurpose = null) {
+  if (!token) return null;
+  const { data } = await sb.from('email_tokens').select('*').eq('token', token).maybeSingle();
+  if (!data) return null;
+  if (new Date(data.expires_at) < new Date()) {
+    await sb.from('email_tokens').delete().eq('token', token);
+    return null;
+  }
+  if (expectedPurpose && data.purpose !== expectedPurpose) return null;
+  await sb.from('email_tokens').delete().eq('token', token);
+  return { userId: data.user_id, purpose: data.purpose };
 }
 
+// ── Riders ───────────────────────────────────────────────────────────────
+const riders = {
+  async list() {
+    const { data, error } = await sb.from('riders').select('*').order('name');
+    if (error) throw error;
+    return rowsOut(data);
+  },
+  async get(id) {
+    const { data, error } = await sb.from('riders').select('*').eq('id', id).maybeSingle();
+    if (error) throw error;
+    return rowOut(data);
+  },
+  async findByEmail(email) {
+    const { data, error } = await sb.from('riders').select('*').ilike('email', email).maybeSingle();
+    if (error) throw error;
+    return rowOut(data);
+  },
+  async setOnline(id, online) {
+    await sb.from('riders').update({ online: !!online }).eq('id', id);
+  },
+  async setLocation(id, lat, lng) {
+    await sb.from('riders').update({ lat, lng, last_location_at: new Date().toISOString() }).eq('id', id);
+  },
+  async verifyCredentials(email, password) {
+    const r = await riders.findByEmail(email);
+    if (!r) return null;
+    if (!verifyPassword(password, r.passwordHash)) return null;
+    return r;
+  },
+};
+
+async function createRider({ name, email, phone, password }) {
+  const { data, error } = await sb.from('riders').insert({
+    name, email: String(email).toLowerCase().trim(), phone, password_hash: hashPassword(password),
+  }).select().single();
+  if (error) throw error;
+  return rowOut(data);
+}
+
+// ── Orders ───────────────────────────────────────────────────────────────
+const _distKm = (a, b) => {
+  if (!a || !b || a.lat == null || a.lng == null || b.lat == null || b.lng == null) return 1e9;
+  const R = 6371;
+  const dLat = (b.lat - a.lat) * Math.PI / 180;
+  const dLng = (b.lng - a.lng) * Math.PI / 180;
+  const x = Math.sin(dLat/2) ** 2 + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLng/2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
+};
+
 const orders = {
-  // Returns orders assigned to a rider, sorted by nearest-neighbor route from
-  // the rider's current location (greedy heuristic).
-  forRider(riderId) {
-    const all = load().orders.filter(o => String(o.riderId) === String(riderId)
-                                       && ['assigned','in_transit'].includes(o.status));
-    const rider = riders.get(riderId);
-    if (!rider || rider.lat == null) return all;
+  async list({ status = null } = {}) {
+    let q = sb.from('orders').select('*').order('created_at', { ascending: false });
+    if (status) q = q.eq('status', status);
+    const { data, error } = await q;
+    if (error) throw error;
+    return rowsOut(data);
+  },
+  async get(id) {
+    const { data, error } = await sb.from('orders').select('*').eq('id', id).maybeSingle();
+    if (error) throw error;
+    return rowOut(data);
+  },
+  async create(payload) {
+    const { data, error } = await sb.from('orders').insert(rowIn(payload)).select().single();
+    if (error) throw error;
+    return rowOut(data);
+  },
+  async update(id, patch) {
+    const { data, error } = await sb.from('orders').update(rowIn(patch)).eq('id', id).select().single();
+    if (error) throw error;
+    return rowOut(data);
+  },
+  async setStatus(id, status, riderId = null) {
+    const patch = { status };
+    if (riderId != null) patch.rider_id = riderId;
+    return await orders.update(id, patch);
+  },
+  async forRider(riderId) {
+    const { data, error } = await sb.from('orders').select('*').eq('rider_id', riderId).in('status', ['assigned','in_transit']).order('created_at');
+    if (error) throw error;
+    const list = rowsOut(data);
+    // Nearest-neighbor sort starting from the rider's current location
+    const r = await riders.get(riderId);
+    if (!r || r.lat == null) return list;
+    const remaining = [...list];
     const ordered = [];
-    let cursor = { lat: rider.lat, lng: rider.lng };
-    const remaining = [...all];
+    let cursor = { lat: r.lat, lng: r.lng };
     while (remaining.length) {
-      remaining.sort((a, b) => _distKm(cursor, a.location) - _distKm(cursor, b.location));
+      remaining.sort((a, b) => _distKm(cursor, a.location || {}) - _distKm(cursor, b.location || {}));
       const next = remaining.shift();
       ordered.push(next);
-      if (next.location) cursor = next.location;
+      cursor = next.location || cursor;
     }
     return ordered;
   },
-  assignToNearestOnlineRider(orderId) {
-    const s = load();
-    const order = s.orders.find(o => String(o.id) === String(orderId));
-    if (!order || !order.location) return null;
-    const onlineRiders = riders.list().filter(r => r.online && r.lat != null);
-    if (!onlineRiders.length) return null;
-    onlineRiders.sort((a, b) => _distKm(order.location, a) - _distKm(order.location, b));
-    order.riderId = onlineRiders[0].id;
-    order.status = 'assigned';
-    save();
-    return onlineRiders[0];
+  async getWithTracking(orderId) {
+    const o = await orders.get(orderId);
+    if (!o) return null;
+    let rider = null;
+    if (o.riderId) rider = await riders.get(o.riderId);
+    // Position in this rider's route (1 = next, 2 = after that, etc.)
+    let queuePosition = null;
+    if (o.riderId && o.status === 'assigned') {
+      const route = await orders.forRider(o.riderId);
+      const idx = route.findIndex((x) => String(x.id) === String(orderId));
+      queuePosition = idx >= 0 ? idx + 1 : null;
+    }
+    return { order: o, rider, queuePosition };
   },
-  // Sweep all queued orders eligible for delivery NOW (i.e. their deliveryDate
-  // is today or in the past AND it's 14:00 or later) and assign each to the
-  // nearest online rider. Priority orders come first.
-  assignQueuedForToday() {
+  async assignToNearestOnlineRider(orderId) {
+    const o = await orders.get(orderId);
+    if (!o || !o.location) return null;
+    const all = await riders.list();
+    const online = all.filter((r) => r.online && r.lat != null);
+    if (!online.length) return null;
+    online.sort((a, b) => _distKm(o.location, a) - _distKm(o.location, b));
+    await orders.update(orderId, { riderId: online[0].id, status: 'assigned' });
+    return online[0];
+  },
+  async assignQueuedForToday() {
     const now = new Date();
     if (now.getHours() < 14) return [];
     const today = now.toISOString().slice(0, 10);
-    const s = load();
-    const eligible = s.orders.filter(o =>
-      (o.status === 'queued' || o.status === 'Pending')
-      && o.location
-      && !o.riderId
-      && (!o.deliveryDate || o.deliveryDate <= today)
-    );
-    // Priority orders first, then FIFO by createdAt
-    eligible.sort((a, b) => {
+    const { data, error } = await sb.from('orders').select('*')
+      .eq('status', 'queued').is('rider_id', null).not('location', 'is', null)
+      .or(`delivery_date.is.null,delivery_date.lte.${today}`);
+    if (error) throw error;
+    const eligible = rowsOut(data).sort((a, b) => {
       if (!!b.priority - !!a.priority !== 0) return !!b.priority - !!a.priority;
       return new Date(a.createdAt) - new Date(b.createdAt);
     });
     const assigned = [];
     for (const o of eligible) {
-      const r = orders.assignToNearestOnlineRider(o.id);
+      const r = await orders.assignToNearestOnlineRider(o.id);
       if (r) assigned.push({ orderId: o.id, riderId: r.id });
     }
     return assigned;
   },
-  setStatus(orderId, status, riderId) {
-    const s = load();
-    const o = s.orders.find(x => String(x.id) === String(orderId));
-    if (!o) return null;
-    if (riderId && String(o.riderId) !== String(riderId)) return null; // not yours
-    o.status = status;
-    if (status === 'delivered') o.deliveredAt = new Date().toISOString();
-    save();
-    return o;
-  },
-  getWithTracking(orderId) {
-    const o = load().orders.find(x => String(x.id) === String(orderId));
-    if (!o) return null;
-    const rider = o.riderId ? riders.get(o.riderId) : null;
-    // Queue position: count assigned/in_transit orders for same rider that come before this one
-    let queuePosition = null, queueAhead = 0;
-    if (rider) {
-      const route = orders.forRider(o.riderId);
-      const idx = route.findIndex(x => String(x.id) === String(o.id));
-      if (idx !== -1) { queuePosition = idx + 1; queueAhead = idx; }
-    }
-    return { order: o, rider, queuePosition, queueAhead };
-  },
 };
 
-const squads = {
-  // All members in a given squad (by squadCode)
-  members(squadCode) {
-    if (!squadCode) return [];
-    return load().users.filter(u => u.squadCode === squadCode);
-  },
-  // Apply spend, then check goal: if every member's totalSpent >= 500 → mark
-  // discountPending=true on all and reset their totals to 0.
-  recordSpend(userId, amount) {
-    const s = load();
-    const idx = s.users.findIndex(u => String(u.id) === String(userId));
-    if (idx === -1) return null;
-    s.users[idx].totalSpent = (s.users[idx].totalSpent || 0) + Number(amount || 0);
-    save();
-
-    const code = s.users[idx].squadCode;
-    const members = s.users.filter(u => u.squadCode === code);
-    const GOAL = 500;
-    const allMet = members.length > 0 && members.every(m => (m.totalSpent || 0) >= GOAL);
-    if (allMet) {
-      members.forEach(m => {
-        const i = s.users.findIndex(u => u.id === m.id);
-        if (i !== -1) {
-          s.users[i].discountPending = true;
-          s.users[i].totalSpent = 0;
-        }
-      });
-      save();
-      return { user: s.users[idx], discountUnlocked: true };
-    }
-    return { user: s.users[idx], discountUnlocked: false };
-  },
-  // Consume discount on checkout
-  consumeDiscount(userId) {
-    const s = load();
-    const idx = s.users.findIndex(u => String(u.id) === String(userId));
-    if (idx === -1) return false;
-    if (!s.users[idx].discountPending) return false;
-    s.users[idx].discountPending = false;
-    save();
-    return true;
-  },
-};
-
-// ── Bootstrap: migrate plaintext passwords + ensure admin exists ─────────
-function bootstrap() {
-  _ensureUserFields();
-  const s = load();
-  let dirty = false;
-
-  // Migrate legacy plaintext `password` → hashed `passwordHash`, ensure new
-  // fields exist on existing users.
-  s.users.forEach(u => {
-    if (u.password && !u.passwordHash) {
-      u.passwordHash = hashPassword(u.password);
-      delete u.password;
-      dirty = true;
-    }
-    if (!u.role) { u.role = 'customer'; dirty = true; }
-    if (u.emailVerified === undefined) {
-      // Pre-existing accounts are grandfathered in as verified.
-      u.emailVerified = true;
-      dirty = true;
-    }
-    if (u.mustChangePassword === undefined) { u.mustChangePassword = false; dirty = true; }
-  });
-
-  // Ensure the admin account exists. Force a password change on first login.
-  let admin = users.findByEmail(ADMIN_EMAIL);
-  if (!admin) {
-    const referralCode = 'ADMIN' + Math.random().toString(36).slice(2, 6).toUpperCase();
-    admin = {
-      id: s._nextUserId++,
-      name: 'Administrator',
-      email: ADMIN_EMAIL,
-      phone: '',
-      passwordHash: hashPassword(ADMIN_DEFAULT_PW),
-      referralCode,
-      squadCode: referralCode,
-      totalSpent: 0,
-      discountPending: false,
-      role: 'admin',
-      emailVerified: true,
-      mustChangePassword: true,
-      createdAt: new Date().toISOString(),
-    };
-    s.users.push(admin);
-    dirty = true;
-    console.log(`✅ Admin user created: ${ADMIN_EMAIL} (default pw: ${ADMIN_DEFAULT_PW} — change required on first login)`);
-  } else {
-    if (admin.role !== 'admin') { admin.role = 'admin'; dirty = true; }
-    // If the admin still has the default password, force a change.
-    if (verifyPassword(ADMIN_DEFAULT_PW, admin.passwordHash) && !admin.mustChangePassword) {
-      admin.mustChangePassword = true;
-      dirty = true;
-    }
-  }
-
-  // Prune any expired sessions left over from previous boots.
-  _pruneExpiredSessions();
-
-  if (dirty) save();
+// Persist location + scheduling info on a freshly-created order
+async function attachOrderLocation(orderId, location, userId, opts = {}) {
+  const patch = { location: location || null };
+  if (userId != null) patch.user_id = userId;
+  if (opts.deliveryDate) patch.delivery_date = opts.deliveryDate;
+  if (opts.priority != null) patch.priority = !!opts.priority;
+  if (!patch.status) patch.status = 'queued';
+  const { data, error } = await sb.from('orders').update(patch).eq('id', orderId).select().single();
+  if (error) throw error;
+  return rowOut(data);
 }
 
-// Initialise on first require
-load();
-bootstrap();
+// ── Push subscriptions ───────────────────────────────────────────────────
+const pushSubs = {
+  async forUser(userId) {
+    const { data, error } = await sb.from('push_subscriptions').select('*').eq('user_id', userId);
+    if (error) throw error;
+    return rowsOut(data);
+  },
+  async add(userId, subscription) {
+    await sb.from('push_subscriptions').delete().eq('endpoint', subscription.endpoint);
+    const { error } = await sb.from('push_subscriptions').insert({
+      user_id: userId, endpoint: subscription.endpoint, keys: subscription.keys,
+    });
+    if (error) throw error;
+  },
+  async remove(endpoint) {
+    await sb.from('push_subscriptions').delete().eq('endpoint', endpoint);
+  },
+};
 
-// ── Web Push: VAPID keypair + per-user subscriptions ─────────────────────
-// VAPID keys identify our server to push services. Generated once and
-// persisted to sdgmart.json. Override in production via VAPID_PUBLIC_KEY /
-// VAPID_PRIVATE_KEY env vars (recommended so the keys don't change on
-// hosts with ephemeral disk).
-function getVapidKeys() {
-  const env = { pub: process.env.VAPID_PUBLIC_KEY, priv: process.env.VAPID_PRIVATE_KEY };
-  if (env.pub && env.priv) return { publicKey: env.pub, privateKey: env.priv };
-  const s = load();
-  if (s.vapid && s.vapid.publicKey && s.vapid.privateKey) return s.vapid;
-  // First-time generation — only when web-push is available
+// ── Search analytics ─────────────────────────────────────────────────────
+const searchLog = {
+  async record(query, userId = null, resultCount = null) {
+    if (!query || !String(query).trim()) return;
+    await sb.from('search_queries').insert({
+      query: String(query).trim().slice(0, 200),
+      user_id: userId,
+      result_count: resultCount,
+    });
+  },
+  async topQueries({ days = 30, limit = 20 } = {}) {
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await sb.from('search_queries').select('query').gte('created_at', since);
+    if (error) throw error;
+    const counts = new Map();
+    for (const r of data) {
+      const q = String(r.query || '').toLowerCase();
+      counts.set(q, (counts.get(q) || 0) + 1);
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .map(([query, count]) => ({ query, count }));
+  },
+  async unmatchedQueries({ days = 30, limit = 20 } = {}) {
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await sb.from('search_queries').select('query, result_count').gte('created_at', since).eq('result_count', 0);
+    if (error) throw error;
+    const counts = new Map();
+    for (const r of data) {
+      const q = String(r.query || '').toLowerCase();
+      counts.set(q, (counts.get(q) || 0) + 1);
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .map(([query, count]) => ({ query, count }));
+  },
+};
+
+// ── Recurring orders ─────────────────────────────────────────────────────
+const recurring = {
+  async listForUser(userId) {
+    const { data, error } = await sb.from('recurring_orders').select('*').eq('user_id', userId).order('next_run_at');
+    if (error) throw error;
+    return rowsOut(data);
+  },
+  async create({ userId, items, cadenceDays, nextRunAt, deliveryInfo }) {
+    const { data, error } = await sb.from('recurring_orders').insert({
+      user_id: userId, items, cadence_days: cadenceDays,
+      next_run_at: nextRunAt, delivery_info: deliveryInfo || null,
+    }).select().single();
+    if (error) throw error;
+    return rowOut(data);
+  },
+  async setActive(id, userId, active) {
+    const { data, error } = await sb.from('recurring_orders').update({ active: !!active }).eq('id', id).eq('user_id', userId).select().single();
+    if (error) throw error;
+    return rowOut(data);
+  },
+  async delete(id, userId) {
+    await sb.from('recurring_orders').delete().eq('id', id).eq('user_id', userId);
+  },
+};
+
+// ── App config (singleton key/value table) ───────────────────────────────
+const appConfig = {
+  async get(key) {
+    const { data, error } = await sb.from('app_config').select('value').eq('key', key).maybeSingle();
+    if (error) throw error;
+    return data ? data.value : null;
+  },
+  async set(key, value) {
+    const { error } = await sb.from('app_config').upsert({ key, value, updated_at: new Date().toISOString() });
+    if (error) throw error;
+  },
+};
+
+// ── VAPID keys (env > app_config) ─────────────────────────────────────────
+async function getVapidKeys() {
+  if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+    return { publicKey: process.env.VAPID_PUBLIC_KEY, privateKey: process.env.VAPID_PRIVATE_KEY };
+  }
+  const stored = await appConfig.get('vapid');
+  if (stored && stored.publicKey && stored.privateKey) return stored;
   try {
     const webpush = require('web-push');
-    s.vapid = webpush.generateVAPIDKeys();
-    save();
-    return s.vapid;
+    const keys = webpush.generateVAPIDKeys();
+    await appConfig.set('vapid', keys);
+    return keys;
   } catch (_) {
     return null;
   }
 }
 
-// Push subscriptions: { userId, endpoint, keys: {p256dh, auth}, createdAt }
-const pushSubs = {
-  list() { const s = load(); return Array.isArray(s.pushSubs) ? s.pushSubs : []; },
-  forUser(userId) {
-    return pushSubs.list().filter(x => String(x.userId) === String(userId));
-  },
-  add(userId, subscription) {
-    const s = load();
-    if (!Array.isArray(s.pushSubs)) s.pushSubs = [];
-    // De-dupe on endpoint
-    s.pushSubs = s.pushSubs.filter(x => x.endpoint !== subscription.endpoint);
-    s.pushSubs.push({
-      userId, endpoint: subscription.endpoint, keys: subscription.keys,
-      createdAt: new Date().toISOString(),
+// ── Bootstrap (ensure admin exists) ──────────────────────────────────────
+async function bootstrap() {
+  let admin = await users.findByEmail(ADMIN_EMAIL);
+  if (!admin) {
+    admin = await users.create({
+      name: 'SDGMart Admin', email: ADMIN_EMAIL, phone: null,
+      password: ADMIN_DEFAULT_PW, refCode: null, role: 'admin',
     });
-    save();
-  },
-  remove(endpoint) {
-    const s = load();
-    if (!Array.isArray(s.pushSubs)) return;
-    s.pushSubs = s.pushSubs.filter(x => x.endpoint !== endpoint);
-    save();
-  },
-};
-
-// Admin-only rider creation (no public signup path).
-function createRider({ name, email, phone, password }) {
-  _ensureUserFields();
-  if (users.findByEmail(email)) throw new Error('Email already registered');
-  if (!password || String(password).length < 6) throw new Error('Password must be at least 6 characters');
-  const s = load();
-  const referralCode = 'RIDER' + Math.random().toString(36).slice(2, 6).toUpperCase();
-  const u = {
-    id: s._nextUserId++,
-    name: name || 'Rider',
-    email: (email || '').trim().toLowerCase(),
-    phone: phone || '',
-    passwordHash: hashPassword(password),
-    referralCode, squadCode: referralCode,
-    totalSpent: 0, discountPending: false,
-    role: 'rider',
-    emailVerified: true, // admin-vouched
-    mustChangePassword: false,
-    createdAt: new Date().toISOString(),
-  };
-  s.users.push(u);
-  save();
-  return u;
-}
-
-// Patch order on creation: accept location {lat,lng,address}, userId, and
-// scheduling metadata { deliveryDate: 'YYYY-MM-DD', priority: boolean }.
-function attachOrderLocation(orderId, location, userId, opts = {}) {
-  const s = load();
-  const o = s.orders.find(x => String(x.id) === String(orderId));
-  if (!o) return null;
-  o.location = location || null;
-  if (userId != null) o.userId = userId;
-  if (opts.deliveryDate) o.deliveryDate = opts.deliveryDate;
-  if (opts.priority != null) o.priority = !!opts.priority;
-  o.status = o.status === 'queued' || o.status === 'assigned' || o.status === 'in_transit' || o.status === 'delivered' ? o.status : 'queued';
-  save();
-  return o;
+    await sb.from('users').update({ email_verified: true, must_change_password: true }).eq('id', admin.id);
+    console.log('🛠  Created admin account ' + ADMIN_EMAIL + ' (default pw: ' + ADMIN_DEFAULT_PW + ' — change immediately)');
+  } else if (admin.passwordHash && verifyPassword(ADMIN_DEFAULT_PW, admin.passwordHash) && !admin.mustChangePassword) {
+    await sb.from('users').update({ must_change_password: true }).eq('id', admin.id);
+  }
 }
 
 module.exports = {
-  prepare, users, squads, sessions, riders, orders,
+  sb,
+  users, squads, sessions, riders, orders, products,
+  pushSubs, searchLog, recurring, appConfig,
   hashPassword, verifyPassword, validatePasswordStrength,
   rateCheck, rateClear,
   makeEmailToken, consumeEmailToken,
   createRider, attachOrderLocation,
-  getVapidKeys, pushSubs,
+  getVapidKeys, bootstrap,
   ADMIN_EMAIL, ADMIN_DEFAULT_PW,
 };
