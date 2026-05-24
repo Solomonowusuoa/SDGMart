@@ -87,21 +87,76 @@ function pngChunk(type, data) {
   const crcVal = Buffer.alloc(4); crcVal.writeUInt32BE(crc32(Buffer.concat([t, data])));
   return Buffer.concat([len, t, data, crcVal]);
 }
-function createSolidPNG(size, r, g, b) {
+// ── 5×7 bitmap font for S, D, G (each cell is a square pixel) ────────────
+// Used to draw the SDGMart wordmark onto the PWA home-screen icon.
+const GLYPHS = {
+  S: ['.XXXX', 'X....', 'X....', '.XXX.', '....X', '....X', 'XXXX.'],
+  D: ['XXXX.', 'X...X', 'X...X', 'X...X', 'X...X', 'X...X', 'XXXX.'],
+  G: ['.XXXX', 'X....', 'X....', 'X..XX', 'X...X', 'X...X', '.XXX.'],
+};
+
+// Build a 24-bit RGB PNG buffer at the given size, with a black background
+// and the text "SDG" centred in white.
+function createIconPNG(size) {
   const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(size, 0); ihdr.writeUInt32BE(size, 4); ihdr[8] = 8; ihdr[9] = 2;
   const rowSize = 1 + size * 3;
   const raw = Buffer.alloc(size * rowSize);
-  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) { raw[y * rowSize + 1 + x * 3] = r; raw[y * rowSize + 2 + x * 3] = g; raw[y * rowSize + 3 + x * 3] = b; }
+  // Pre-fill black (filter byte 0 + RGB stays 0)
+  // — buffers are zero-initialised in Node, so this is already #000000.
+  //   We still need to leave the filter byte (col 0) at 0 for each row.
+
+  const letters = ['S', 'D', 'G'];
+  const glyphW = 5, glyphH = 7;
+  const spacing = 1; // 1 glyph-cell of space between letters
+  const totalGlyphW = letters.length * glyphW + (letters.length - 1) * spacing;
+  // Fit text to 60% of icon width, scaled to nearest integer pixel
+  const scale = Math.max(1, Math.floor((size * 0.62) / totalGlyphW));
+  const textPxW = totalGlyphW * scale;
+  const textPxH = glyphH * scale;
+  const startX = Math.floor((size - textPxW) / 2);
+  const startY = Math.floor((size - textPxH) / 2);
+
+  // Write white pixels for each ON cell of each glyph
+  for (let i = 0; i < letters.length; i++) {
+    const g = GLYPHS[letters[i]];
+    const offsetX = startX + i * (glyphW + spacing) * scale;
+    for (let row = 0; row < glyphH; row++) {
+      for (let col = 0; col < glyphW; col++) {
+        if (g[row][col] !== 'X') continue;
+        for (let dy = 0; dy < scale; dy++) {
+          for (let dx = 0; dx < scale; dx++) {
+            const y = startY + row * scale + dy;
+            const x = offsetX + col * scale + dx;
+            const idx = y * rowSize + 1 + x * 3;
+            raw[idx] = 255; raw[idx + 1] = 255; raw[idx + 2] = 255;
+          }
+        }
+      }
+    }
+  }
   return Buffer.concat([sig, pngChunk('IHDR', ihdr), pngChunk('IDAT', zlib.deflateSync(raw)), pngChunk('IEND', Buffer.alloc(0))]);
 }
+
+// Crisp SVG icon — scales to any size. Used as the manifest's primary icon
+// on browsers that support SVG home-screen icons (Android Chrome, Edge, etc.)
+function createIconSVG() {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#000"/>
+  <text x="50%" y="50%" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif"
+        font-size="200" font-weight="900" fill="#fff"
+        text-anchor="middle" dominant-baseline="central" letter-spacing="-4">SDG</text>
+</svg>`;
+}
+
 function ensureIcons() {
   const iconsDir = path.join(__dirname, 'icons');
   if (!fs.existsSync(iconsDir)) fs.mkdirSync(iconsDir);
-  const r = 26, g = 26, b = 26;
-  if (!fs.existsSync(path.join(iconsDir, 'icon-192.png'))) fs.writeFileSync(path.join(iconsDir, 'icon-192.png'), createSolidPNG(192, r, g, b));
-  if (!fs.existsSync(path.join(iconsDir, 'icon-512.png'))) fs.writeFileSync(path.join(iconsDir, 'icon-512.png'), createSolidPNG(512, r, g, b));
+  // Always overwrite so updates to the icon code propagate to the file system.
+  fs.writeFileSync(path.join(iconsDir, 'icon-192.png'), createIconPNG(192));
+  fs.writeFileSync(path.join(iconsDir, 'icon-512.png'), createIconPNG(512));
+  fs.writeFileSync(path.join(iconsDir, 'icon.svg'), createIconSVG());
 }
 ensureIcons();
 

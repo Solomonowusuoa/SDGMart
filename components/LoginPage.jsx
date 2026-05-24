@@ -204,22 +204,9 @@ const LoginPage = ({ onAuth, onGuest }) => {
         backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
         width: '100%', maxWidth: 420,
       }}>
-        {/* Logo — "SDG" script wordmark, white on black */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 18 }}>
-          <div style={{
-            minWidth: 82, height: 56, padding: '0 14px',
-            borderRadius: 10, background: '#000',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <span style={{
-              fontFamily: "'Petit Formal Script', 'Allura', cursive",
-              fontSize: 38, lineHeight: 1, color: '#fff',
-              letterSpacing: '.01em',
-              transform: 'translateY(3px)',
-              whiteSpace: 'nowrap',
-            }}>SDG</span>
-          </div>
-          <span style={{ fontFamily: 'var(--font-head)', fontSize: 26, fontWeight: 700, color: '#000' }}>SDGMart</span>
+        {/* Wordmark */}
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 18 }}>
+          <span style={{ fontFamily: 'var(--font-head)', fontSize: 32, fontWeight: 700, color: '#000', letterSpacing: '-.01em' }}>SDGMart</span>
         </div>
         <p style={{ textAlign: 'center', fontSize: 13, color: 'var(--warm-gray)', marginBottom: 22 }}>
           Tamale's essentials, delivered.
