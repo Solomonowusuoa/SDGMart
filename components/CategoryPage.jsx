@@ -18,6 +18,20 @@ const CategoryPage = ({ selectedCategory, setSelectedCategory, onAdd, onView, se
     );
   }
 
+  // Log search queries (debounced) for the admin analytics dashboard
+  React.useEffect(() => {
+    if (!searchQuery || !searchQuery.trim()) return;
+    const t = setTimeout(() => {
+      try {
+        window.apiFetch('/api/search/log', {
+          method: 'POST',
+          body: JSON.stringify({ query: searchQuery.trim(), resultCount: filtered.length }),
+        }).catch(() => {});
+      } catch (_) {}
+    }, 1200); // wait 1.2s after typing stops before logging
+    return () => clearTimeout(t);
+  }, [searchQuery, filtered.length]);
+
   if (sortBy === 'price-asc') filtered = [...filtered].sort((a,b) => a.price - b.price);
   if (sortBy === 'price-desc') filtered = [...filtered].sort((a,b) => b.price - a.price);
   if (sortBy === 'expiry') filtered = [...filtered].sort((a,b) => new Date(a.bestBefore) - new Date(b.bestBefore));

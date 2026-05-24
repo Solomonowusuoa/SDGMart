@@ -42,24 +42,30 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
       .then(r => r.json())
       .then(data => setProducts(data))
       .catch(() => {});
+    loadOrders();
+  }, []);
+
+  const loadOrders = React.useCallback(() => {
     setOrdersLoading(true);
     apiFetch('/api/orders')
       .then(r => r.ok ? r.json() : [])
       .then(data => {
         setOrders((data || []).map(o => ({
           ...o,
-          items: Array.isArray(o.items)
-            ? o.items.map(i => `${i.name} x${i.qty}`).join(', ')
-            : o.items,
-          date: o.createdAt ? o.createdAt.slice(0, 10) : '',
+          // Keep items as the raw array — the Orders tab UI needs it
+          items: Array.isArray(o.items) ? o.items : (typeof o.items === 'string' ? (() => { try { return JSON.parse(o.items); } catch (_) { return []; } })() : []),
+          date: o.createdAt ? String(o.createdAt).slice(0, 10) : '',
         })));
       })
       .catch(() => {})
       .finally(() => setOrdersLoading(false));
   }, []);
 
-  const revenue = orders.filter(o => o.status === 'Delivered').reduce((s, o) => s + (o.total || 0), 0);
-  const pending = orders.filter(o => o.status === 'Pending').length;
+  // Status checks support both legacy capitalised and new lowercase enum values
+  const isDelivered = (s) => s === 'delivered' || s === 'Delivered';
+  const isPending = (s) => s === 'queued' || s === 'pending' || s === 'Pending';
+  const revenue = orders.filter(o => isDelivered(o.status)).reduce((s, o) => s + (Number(o.total) || 0), 0);
+  const pending = orders.filter(o => isPending(o.status)).length;
   const totalStock = products.reduce((s, p) => s + p.stock, 0);
   const stockValue = products.reduce((s, p) => s + p.price * p.stock, 0);
   const expiringSoon = products.filter(p => {
@@ -68,23 +74,59 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   });
 
   // Neighborhood route batching (live orders)
-  const byNeighborhood = orders.filter(o => o.status === 'Pending').reduce((acc, o) => {
+  const byNeighborhood = orders.filter(o => isPending(o.status)).reduce((acc, o) => {
     if (!acc[o.neighborhood]) acc[o.neighborhood] = [];
     acc[o.neighborhood].push(o);
     return acc;
   }, {});
 
-  const statusColor = { 'Delivered': 'var(--sage)', 'Out for Delivery': 'var(--accent-gold)', 'Pending': 'var(--accent-red)' };
+  // Status palette covers both the new lowercase enum (queued/assigned/in_transit/delivered/cancelled)
+  // and the legacy capitalised values left over from earlier orders.
+  const statusColor = {
+    queued: '#C8923A', assigned: '#3879BF', in_transit: '#1A1A1A', delivered: '#27AE60', cancelled: '#888',
+    Pending: '#C8923A', 'Out for Delivery': '#1A1A1A', Delivered: '#27AE60',
+  };
+  const statusLabel = {
+    queued: 'Queued', assigned: 'Assigned', in_transit: 'Out for delivery', delivered: 'Delivered', cancelled: 'Cancelled',
+  };
+  const STATUS_OPTIONS = ['queued','assigned','in_transit','delivered','cancelled'];
 
   const updateOrderStatus = async (id, status) => {
     try {
-      await apiFetch(`/api/orders/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify({ status }),
-      });
+      await apiFetch(`/api/orders/${id}`, { method: 'PUT', body: JSON.stringify({ status }) });
       setOrders(prev => prev.map(o => o.id === id ? { ...o, status } : o));
     } catch (_) {}
   };
+
+  const deleteOrder = async (id) => {
+    if (!window.confirm(`Permanently delete order #${String(id).slice(-6)}? This cannot be undone.`)) return;
+    try {
+      await apiFetch(`/api/orders/${id}`, { method: 'DELETE' });
+      setOrders(prev => prev.filter(o => o.id !== id));
+    } catch (_) {}
+  };
+
+  // Orders tab filter + search state
+  const [orderFilter, setOrderFilter] = React.useState('all');
+  const [orderSearch, setOrderSearch] = React.useState('');
+  const [orderDetail, setOrderDetail] = React.useState(null); // currently expanded order id
+
+  const filteredOrders = React.useMemo(() => {
+    const q = orderSearch.trim().toLowerCase();
+    return orders.filter(o => {
+      if (orderFilter !== 'all') {
+        const s = String(o.status || '').toLowerCase();
+        // Match both 'pending' (legacy) and 'queued'
+        if (orderFilter === 'queued' && !(s === 'queued' || s === 'pending')) return false;
+        if (orderFilter !== 'queued' && s !== orderFilter) return false;
+      }
+      if (!q) return true;
+      return String(o.id).toLowerCase().includes(q)
+        || String(o.customerName || o.customer || '').toLowerCase().includes(q)
+        || String(o.customerPhone || o.phone || '').toLowerCase().includes(q)
+        || String(o.neighborhood || '').toLowerCase().includes(q);
+    });
+  }, [orders, orderFilter, orderSearch]);
 
   const addProduct = async () => {
     if (!newProduct.name || !newProduct.price) return;
@@ -128,6 +170,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
       bestBefore: p.bestBefore || '',
       description: p.description || '',
       bestseller: !!p.bestseller,
+      lowStockThreshold: p.lowStockThreshold != null ? String(p.lowStockThreshold) : '5',
     });
   };
   const cancelEdit = () => { setEditingId(null); setEditDraft(null); };
@@ -142,6 +185,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
       stock: parseInt(editDraft.stock) || 0,
       description: editDraft.description,
       bestseller: !!editDraft.bestseller,
+      lowStockThreshold: editDraft.lowStockThreshold !== '' && editDraft.lowStockThreshold != null ? parseInt(editDraft.lowStockThreshold) : 5,
     };
     try {
       const res = await apiFetch(`/api/products/${editingId}`, {
@@ -161,9 +205,20 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
 
   const tabs = [
     ['overview','📊 Overview'],['orders','📦 Orders'],['inventory','🏪 Inventory'],
-    ['expiry','⏰ Expiry'],['routes','🗺 Routes'],['riders','🛵 Riders'],['comms','📣 Comms'],['metrics','📈 Metrics'],
+    ['expiry','⏰ Expiry'],['routes','🗺 Routes'],['riders','🛵 Riders'],
+    ['analytics','🔎 Analytics'],['comms','📣 Comms'],['metrics','📈 Metrics'],
     ['security','🔐 Security'],
   ];
+
+  // Search analytics state — only loaded when the tab opens
+  const [topQueries, setTopQueries] = React.useState(null);
+  const [unmatched, setUnmatched] = React.useState(null);
+  const [analyticsDays, setAnalyticsDays] = React.useState(30);
+  const loadAnalytics = React.useCallback(() => {
+    apiFetch(`/api/admin/search/top?days=${analyticsDays}`).then(r => r.ok ? r.json() : []).then(setTopQueries).catch(() => setTopQueries([]));
+    apiFetch(`/api/admin/search/unmatched?days=${analyticsDays}`).then(r => r.ok ? r.json() : []).then(setUnmatched).catch(() => setUnmatched([]));
+  }, [analyticsDays]);
+  React.useEffect(() => { if (adminTab === 'analytics') loadAnalytics(); }, [adminTab, loadAnalytics]);
 
   // Riders tab state
   const [riders, setRiders] = React.useState([]);
@@ -290,47 +345,124 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
         {/* ORDERS */}
         {adminTab === 'orders' && (
           <div>
-            <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginBottom: 24 }}>Orders</h1>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
+              <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700 }}>Orders</h1>
+              <div style={{ fontSize: 13, color: 'var(--warm-gray)' }}>
+                Showing <strong>{filteredOrders.length}</strong> of {orders.length} total
+              </div>
+            </div>
+
+            {/* Filter chips + search */}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 18 }}>
+              {[['all','All'],['queued','Queued'],['assigned','Assigned'],['in_transit','Out for delivery'],['delivered','Delivered'],['cancelled','Cancelled']].map(([k, label]) => (
+                <button key={k} onClick={() => setOrderFilter(k)}
+                  style={{
+                    fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 999,
+                    background: orderFilter === k ? 'var(--sage)' : 'var(--cream)',
+                    color: orderFilter === k ? '#fff' : 'var(--warm-gray)',
+                    border: orderFilter === k ? 'none' : '1px solid var(--cream-dark)',
+                  }}>{label}</button>
+              ))}
+              <input value={orderSearch} onChange={e => setOrderSearch(e.target.value)}
+                placeholder="Search by ID, name, phone, or area…"
+                style={{ flex: 1, minWidth: 180, padding: '8px 12px', borderRadius: 8, border: '1.5px solid var(--cream-dark)', fontSize: 13, outline: 'none', background: 'var(--white)' }} />
+              <button onClick={loadOrders} title="Refresh"
+                style={{ background: 'var(--cream)', color: 'var(--warm-gray)', borderRadius: 8, padding: '8px 14px', fontWeight: 700, fontSize: 12 }}>↻</button>
+            </div>
+
             {ordersLoading && <div style={{ color: 'var(--warm-gray)', marginBottom: 16 }}>Loading orders…</div>}
-            {orders.length === 0 && !ordersLoading && (
+            {filteredOrders.length === 0 && !ordersLoading && (
               <div style={{ textAlign: 'center', padding: '60px 0', color: 'var(--warm-gray)' }}>
                 <div style={{ fontSize: 40 }}>📦</div>
-                <div style={{ fontWeight: 700, marginTop: 12 }}>No orders yet</div>
-                <div style={{ fontSize: 13, marginTop: 6 }}>Orders placed through the site will appear here</div>
+                <div style={{ fontWeight: 700, marginTop: 12 }}>{orders.length === 0 ? 'No orders yet' : 'No orders match your filter'}</div>
+                <div style={{ fontSize: 13, marginTop: 6 }}>
+                  {orders.length === 0 ? 'Orders placed through the site will appear here' : 'Try a different filter or clear the search'}
+                </div>
               </div>
             )}
-            {orders.length > 0 && (
+
+            {filteredOrders.length > 0 && (
               <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ background: 'var(--cream-dark)' }}>
-                      {['Order ID','Customer','Neighborhood','Total','Status','Actions'].map(h => (
-                        <th key={h} style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 700, fontSize: 12, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.04em' }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {orders.map((o, i) => (
-                      <tr key={o.id} style={{ borderTop: '1px solid var(--cream-dark)', background: i%2===0?'var(--white)':'var(--cream)' }}>
-                        <td style={{ padding: '12px 16px', fontWeight: 700, color: 'var(--sage-dark)' }}>{o.id}</td>
-                        <td style={{ padding: '12px 16px', fontWeight: 600 }}>{o.customer}</td>
-                        <td style={{ padding: '12px 16px', color: 'var(--warm-gray)' }}>{o.neighborhood}</td>
-                        <td style={{ padding: '12px 16px', fontWeight: 700 }}>GHS {(o.total || 0).toFixed(2)}</td>
-                        <td style={{ padding: '12px 16px' }}>
-                          <select value={o.status}
-                            onChange={e => updateOrderStatus(o.id, e.target.value)}
-                            style={{ fontSize: 11, fontWeight: 700, borderRadius: 20, padding: '3px 10px', border: 'none', background: `${statusColor[o.status] || 'var(--warm-gray)'}22`, color: statusColor[o.status] || 'var(--warm-gray)', cursor: 'pointer' }}>
-                            {['Pending','Out for Delivery','Delivered'].map(s => <option key={s} value={s}>{s}</option>)}
-                          </select>
-                        </td>
-                        <td style={{ padding: '12px 16px' }}>
-                          <a href={`https://wa.me/233504082555?text=Update on order ${o.id}`} target="_blank" rel="noreferrer"
-                            style={{ fontSize: 11, fontWeight: 700, color: '#25D366' }}>WhatsApp</a>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                {filteredOrders.map((o, i) => {
+                  const expanded = String(orderDetail) === String(o.id);
+                  const statusKey = String(o.status || 'queued').toLowerCase();
+                  const itemsArr = Array.isArray(o.items) ? o.items : (typeof o.items === 'string' ? (() => { try { return JSON.parse(o.items); } catch (_) { return []; } })() : []);
+                  return (
+                    <div key={o.id} style={{ borderTop: i === 0 ? 'none' : '1px solid var(--cream-dark)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px', flexWrap: 'wrap' }}>
+                        <div style={{ flex: 1, minWidth: 200 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                            <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--sage-dark)' }}>#{String(o.id).slice(-6)}</span>
+                            <span style={{ background: `${statusColor[statusKey] || 'var(--warm-gray)'}22`, color: statusColor[statusKey] || 'var(--warm-gray)', borderRadius: 999, padding: '2px 10px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em' }}>
+                              {statusLabel[statusKey] || o.status}
+                            </span>
+                            {o.priority && <span style={{ background: '#FFF4E0', color: '#7A5A00', borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>⭐ Priority</span>}
+                          </div>
+                          <div style={{ marginTop: 4, fontSize: 12, color: 'var(--warm-gray)' }}>
+                            {o.customerName || o.customer || '—'} · {o.customerPhone || o.phone || 'no phone'} · {o.neighborhood || '—'}
+                          </div>
+                          <div style={{ marginTop: 2, fontSize: 11, color: 'var(--warm-gray)' }}>
+                            {o.createdAt ? new Date(o.createdAt).toLocaleString() : ''}
+                            {o.deliveryDate ? ` · delivery ${o.deliveryDate}` : ''}
+                            · {itemsArr.length} item{itemsArr.length === 1 ? '' : 's'}
+                          </div>
+                        </div>
+                        <div style={{ fontWeight: 700, fontSize: 14, minWidth: 100, textAlign: 'right' }}>GHS {Number(o.total || 0).toFixed(2)}</div>
+                        <select value={statusKey} onChange={e => updateOrderStatus(o.id, e.target.value)}
+                          style={{ fontSize: 11, fontWeight: 700, borderRadius: 8, padding: '6px 10px', border: '1px solid var(--cream-dark)', background: 'var(--white)' }}>
+                          {STATUS_OPTIONS.map(s => <option key={s} value={s}>{statusLabel[s] || s}</option>)}
+                        </select>
+                        <button onClick={() => setOrderDetail(expanded ? null : o.id)}
+                          style={{ fontSize: 11, fontWeight: 700, color: 'var(--sage-dark)', background: 'var(--cream)', borderRadius: 8, padding: '6px 10px' }}>
+                          {expanded ? 'Hide ▴' : 'Details ▾'}
+                        </button>
+                        <a href={`https://wa.me/${String(o.customerPhone || o.phone || '233504082555').replace(/\D/g,'').replace(/^0/, '233')}?text=${encodeURIComponent(`Hi ${o.customerName || o.customer || ''}, regarding your SDGMart order #${String(o.id).slice(-6)} —`)}`}
+                          target="_blank" rel="noreferrer"
+                          style={{ fontSize: 11, fontWeight: 700, color: '#25D366', padding: '6px 4px' }}>WhatsApp</a>
+                        <button onClick={() => deleteOrder(o.id)} title="Delete order"
+                          style={{ fontSize: 14, color: 'var(--accent-red)', background: 'transparent', padding: '6px 4px' }}>🗑</button>
+                      </div>
+                      {expanded && (
+                        <div style={{ padding: '0 18px 18px', background: 'var(--cream)' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16, paddingTop: 14 }}>
+                            <div>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>Address</div>
+                              <div style={{ fontSize: 13 }}>{(o.location && o.location.address) || o.address || o.recipientAddress || '—'}</div>
+                              {o.location && o.location.lat && (
+                                <a href={`https://www.google.com/maps?q=${o.location.lat},${o.location.lng}`} target="_blank" rel="noreferrer"
+                                  style={{ fontSize: 11, color: 'var(--sage)', fontWeight: 700, marginTop: 4, display: 'inline-block' }}>📍 Open in Maps</a>
+                              )}
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>Payment</div>
+                              <div style={{ fontSize: 13 }}>{o.paymentMethod || o.payMethod || 'momo'}{o.momoNumber ? ` · ${o.momoNumber}` : ''}</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>Breakdown</div>
+                              <div style={{ fontSize: 13, color: 'var(--warm-gray)' }}>Subtotal GHS {Number(o.subtotal || 0).toFixed(2)}</div>
+                              {Number(o.discount || 0) > 0 && <div style={{ fontSize: 13, color: 'var(--sage)' }}>Squad discount −GHS {Number(o.discount).toFixed(2)}</div>}
+                              {Number(o.loyaltyUsed || 0) > 0 && <div style={{ fontSize: 13, color: '#7A5A00' }}>Loyalty −GHS {Number(o.loyaltyUsed).toFixed(2)}</div>}
+                              <div style={{ fontSize: 13, color: 'var(--warm-gray)' }}>Delivery GHS {Number(o.deliveryFee || o.delivery || 0).toFixed(2)}</div>
+                            </div>
+                          </div>
+                          {itemsArr.length > 0 && (
+                            <div style={{ marginTop: 14 }}>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>Items</div>
+                              <div style={{ background: 'var(--white)', borderRadius: 8, overflow: 'hidden' }}>
+                                {itemsArr.map((it, idx) => (
+                                  <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', borderTop: idx === 0 ? 'none' : '1px solid var(--cream-dark)', fontSize: 13 }}>
+                                    <span>{it.qty || 1}× {it.name}</span>
+                                    <span style={{ fontWeight: 700 }}>GHS {(Number(it.price || 0) * Number(it.qty || 1)).toFixed(2)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -366,6 +498,28 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
             </div>
 
             {/* Products list */}
+            {/* Low-stock alert banner */}
+            {(() => {
+              const lowStock = products.filter(p => Number(p.stock || 0) <= Number(p.lowStockThreshold != null ? p.lowStockThreshold : 5));
+              if (lowStock.length === 0) return null;
+              return (
+                <div style={{ background: '#FFF4E0', border: '1px solid #F0C674', borderRadius: 12, padding: '14px 18px', marginBottom: 20, display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+                  <span style={{ fontSize: 22 }}>⚠️</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, color: '#7A5A00', fontSize: 14 }}>
+                      {lowStock.length} product{lowStock.length === 1 ? ' is' : 's are'} low on stock
+                    </div>
+                    <div style={{ fontSize: 12, color: '#7A5A00', marginTop: 4, opacity: .85 }}>
+                      {lowStock.slice(0, 5).map(p => `${p.name} (${p.stock})`).join(' · ')}{lowStock.length > 5 ? ` · +${lowStock.length - 5} more` : ''}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#7A5A00', marginTop: 6, opacity: .7 }}>
+                      Edit any product below to adjust its custom low-stock threshold (default: 5)
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
               <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--cream-dark)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontWeight: 700, fontSize: 15 }}>All Products ({products.length})</span>
@@ -375,7 +529,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead style={{ position: 'sticky', top: 0, background: 'var(--cream-dark)', zIndex: 1 }}>
                     <tr>
-                      {['Name','Category','Price','Unit','Stock','Best Before','Actions'].map(h => (
+                      {['Name','Category','Price','Unit','Stock','Alert ≤','Best Before','Actions'].map(h => (
                         <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 700, fontSize: 11, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.04em' }}>{h}</th>
                       ))}
                     </tr>
@@ -405,6 +559,11 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                             <input type="number" value={editDraft.stock} onChange={e => setEditField('stock', e.target.value)} style={{ ...cellEdit, width: 70 }} />
                           </td>
                           <td style={{ padding: '8px' }}>
+                            <input type="number" min="0" value={editDraft.lowStockThreshold} onChange={e => setEditField('lowStockThreshold', e.target.value)}
+                              title="Show low-stock alert when units drop to this number or below"
+                              style={{ ...cellEdit, width: 60 }} />
+                          </td>
+                          <td style={{ padding: '8px' }}>
                             <input type="date" value={editDraft.bestBefore} onChange={e => setEditField('bestBefore', e.target.value)} style={{ ...cellEdit, width: 130 }} />
                           </td>
                           <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>
@@ -420,7 +579,18 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                           <td style={{ padding: '10px 14px', fontWeight: 700 }}>GHS {Number(p.price).toFixed(2)}</td>
                           <td style={{ padding: '10px 14px', color: 'var(--warm-gray)' }}>{p.unit}</td>
                           <td style={{ padding: '10px 14px' }}>
-                            <span style={{ fontWeight: 700, color: p.stock < 10 ? 'var(--accent-red)' : 'var(--warm-black)' }}>{p.stock}</span>
+                            {(() => {
+                              const th = p.lowStockThreshold != null ? p.lowStockThreshold : 5;
+                              const isLow = Number(p.stock || 0) <= Number(th);
+                              return (
+                                <span style={{ fontWeight: 700, color: isLow ? 'var(--accent-red)' : 'var(--warm-black)' }}>
+                                  {p.stock}{isLow && p.stock > 0 ? ' ⚠' : ''}{p.stock === 0 ? ' (sold out)' : ''}
+                                </span>
+                              );
+                            })()}
+                          </td>
+                          <td style={{ padding: '10px 14px', color: 'var(--warm-gray)', fontSize: 12 }}>
+                            {p.lowStockThreshold != null ? p.lowStockThreshold : 5}
                           </td>
                           <td style={{ padding: '10px 14px' }}>
                             <span style={{ color: d <= 30 ? 'var(--accent-red)' : d <= 60 ? 'var(--accent-gold)' : 'var(--warm-gray)', fontWeight: d <= 60 ? 700 : 400 }}>
@@ -498,6 +668,75 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                 ))}
               </div>
             ))}
+          </div>
+        )}
+
+        {/* ANALYTICS — search query insights */}
+        {adminTab === 'analytics' && (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 8 }}>
+              <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700 }}>Search Analytics</h1>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {[7, 30, 90].map(d => (
+                  <button key={d} onClick={() => setAnalyticsDays(d)}
+                    style={{ fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 8, background: analyticsDays === d ? 'var(--sage)' : 'var(--cream)', color: analyticsDays === d ? '#fff' : 'var(--warm-gray)' }}>
+                    Last {d} days
+                  </button>
+                ))}
+                <button onClick={loadAnalytics} title="Refresh"
+                  style={{ fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 8, background: 'var(--cream)', color: 'var(--warm-gray)' }}>↻</button>
+              </div>
+            </div>
+            <p style={{ color: 'var(--warm-gray)', fontSize: 14, marginBottom: 24 }}>
+              What customers are searching for. <strong>Unmatched</strong> queries (zero results) are the highest-signal — they tell you what products to stock next.
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 20 }}>
+              {/* Top queries */}
+              <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
+                <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--cream-dark)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 16 }}>🔝</span>
+                  <span style={{ fontWeight: 700, fontSize: 15 }}>Top searches</span>
+                </div>
+                {topQueries === null ? (
+                  <div style={{ padding: '20px', color: 'var(--warm-gray)', fontSize: 13 }}>Loading…</div>
+                ) : topQueries.length === 0 ? (
+                  <div style={{ padding: '20px', color: 'var(--warm-gray)', fontSize: 13 }}>No searches in this window yet.</div>
+                ) : (
+                  <div>
+                    {topQueries.map((q, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 18px', borderTop: i === 0 ? 'none' : '1px solid var(--cream-dark)', fontSize: 13 }}>
+                        <span style={{ flex: 1 }}>{i + 1}. <strong>{q.query}</strong></span>
+                        <span style={{ background: 'var(--cream)', color: 'var(--warm-gray)', borderRadius: 999, padding: '2px 10px', fontSize: 11, fontWeight: 700 }}>{q.count}×</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Unmatched queries */}
+              <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
+                <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--cream-dark)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 16 }}>🚫</span>
+                  <span style={{ fontWeight: 700, fontSize: 15 }}>Unmatched searches</span>
+                  <span style={{ fontSize: 11, color: 'var(--warm-gray)', marginLeft: 'auto' }}>(zero results)</span>
+                </div>
+                {unmatched === null ? (
+                  <div style={{ padding: '20px', color: 'var(--warm-gray)', fontSize: 13 }}>Loading…</div>
+                ) : unmatched.length === 0 ? (
+                  <div style={{ padding: '20px', color: 'var(--warm-gray)', fontSize: 13 }}>Nice — every search found something!</div>
+                ) : (
+                  <div>
+                    {unmatched.map((q, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 18px', borderTop: i === 0 ? 'none' : '1px solid var(--cream-dark)', fontSize: 13 }}>
+                        <span style={{ flex: 1 }}>{i + 1}. <strong>{q.query}</strong></span>
+                        <span style={{ background: 'rgba(192,57,43,.1)', color: 'var(--accent-red)', borderRadius: 999, padding: '2px 10px', fontSize: 11, fontWeight: 700 }}>{q.count} miss{q.count === 1 ? '' : 'es'}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
 

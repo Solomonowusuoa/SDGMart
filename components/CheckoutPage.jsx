@@ -29,6 +29,9 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   const isMobile = useMobile();
   const [familyMode, setFamilyMode] = React.useState(false);
   const [downloadReceipt, setDownloadReceipt] = React.useState(false);
+  // Recurring orders: opt-in checkbox + cadence (every N days)
+  const [autoReorder, setAutoReorder] = React.useState(false);
+  const [reorderCadence, setReorderCadence] = React.useState(14);
   const [form, setForm] = React.useState({
     name: (currentUser && currentUser.name && currentUser.role !== 'guest') ? currentUser.name : '',
     phone: (currentUser && currentUser.phone) || '',
@@ -178,6 +181,25 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
           loyaltyUsed,
         }),
       });
+      // Set up a recurring order if the user opted in (signed-in users only)
+      if (autoReorder && currentUser && currentUser.id && currentUser.role !== 'guest') {
+        try {
+          const next = new Date(); next.setDate(next.getDate() + Number(reorderCadence || 14));
+          await apiFetch('/api/me/recurring', {
+            method: 'POST',
+            body: JSON.stringify({
+              items: snap.items,
+              cadenceDays: Number(reorderCadence) || 14,
+              nextRunAt: next.toISOString().slice(0, 10),
+              deliveryInfo: {
+                neighborhood: snap.neighborhood, address: snap.form.address,
+                location: snap.form.location || null, payMethod: snap.form.payMethod,
+              },
+            }),
+          });
+        } catch (_) {}
+      }
+
       // Refresh local user (clear consumed discount; sync new totalSpent)
       if (currentUser && currentUser.id && setCurrentUser) {
         try {
@@ -426,6 +448,33 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                   {familyMode && form.giftMessage && <div style={{ marginTop: 6, fontStyle: 'italic' }}>"{form.giftMessage}"</div>}
                 </div>
               </div>
+
+              {/* Auto-reorder — signed-in users only */}
+              {currentUser && currentUser.id && currentUser.role !== 'guest' && (
+                <div style={{ marginTop: 20, padding: '14px 16px', background: 'var(--cream)', borderRadius: 10, border: '1px solid var(--cream-dark)' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={autoReorder} onChange={e => setAutoReorder(e.target.checked)}
+                      style={{ accentColor: 'var(--sage)', width: 18, height: 18 }} />
+                    <span style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>🔁 Auto-reorder these items</div>
+                      <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 2 }}>
+                        We'll re-create this exact order every chosen interval. Pause or cancel any time from My Orders.
+                      </div>
+                    </span>
+                  </label>
+                  {autoReorder && (
+                    <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, paddingLeft: 28 }}>
+                      <span style={{ fontSize: 13, color: 'var(--warm-gray)' }}>Every</span>
+                      <select value={reorderCadence} onChange={e => setReorderCadence(Number(e.target.value))}
+                        style={{ padding: '6px 10px', borderRadius: 8, border: '1.5px solid var(--cream-dark)', fontSize: 13, background: 'var(--white)' }}>
+                        <option value={7}>7 days (weekly)</option>
+                        <option value={14}>14 days (fortnightly)</option>
+                        <option value={30}>30 days (monthly)</option>
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
                 <button onClick={() => setStep(1)} style={{ flex: 1, background: 'var(--cream)', color: 'var(--warm-gray)', borderRadius: 10, padding: '12px', fontWeight: 600, fontSize: 14 }}>← Back</button>
