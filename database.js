@@ -237,17 +237,34 @@ const squads = {
     const newLoyalty = Number(u.loyaltyBalance || 0) + loyaltyEarned;
     await sb.from('users').update({ total_spent: newTotal, loyalty_balance: newLoyalty }).eq('id', userId);
 
-    // Squad goal logic
+    // ── Squad goal logic ─────────────────────────────────────────────────
+    // When every squad member's totalSpent has hit GHS 500 (the target),
+    // each member is rewarded with GHS 25 (= 5% of the target) added
+    // straight to their loyalty_balance. Totals reset to 0 so the squad
+    // can chase the goal again.
+    let squadBonus = 0;
     if (u.squadCode) {
       const members = await squads.members(u.squadCode);
       const allHit = members.length > 0 && members.every((m) =>
         (String(m.id) === String(userId) ? newTotal : Number(m.totalSpent || 0)) >= 500,
       );
       if (allHit) {
-        await sb.from('users').update({ discount_pending: true, total_spent: 0 }).eq('squad_code', u.squadCode);
+        squadBonus = 25; // 5% of 500
+        // Award every member individually so we can add to their existing balance
+        for (const m of members) {
+          const newBal = Number(m.loyaltyBalance || 0) + 25
+            + (String(m.id) === String(userId) ? loyaltyEarned : 0);
+          await sb.from('users').update({
+            total_spent: 0,
+            loyalty_balance: newBal,
+            discount_pending: false, // clear any legacy flag
+          }).eq('id', m.id);
+        }
+        // Return the awarding user's fresh balance so the UI updates right away
+        return { totalSpent: 0, loyaltyEarned: loyaltyEarned + 25, loyaltyBalance: Number(u.loyaltyBalance || 0) + loyaltyEarned + 25, squadGoalHit: true };
       }
     }
-    return { totalSpent: newTotal, loyaltyEarned, loyaltyBalance: newLoyalty };
+    return { totalSpent: newTotal, loyaltyEarned, loyaltyBalance: newLoyalty, squadGoalHit: false };
   },
   async consumeDiscount(userId) {
     await sb.from('users').update({ discount_pending: false }).eq('id', userId);

@@ -24,7 +24,7 @@ const SquadPage = ({ setPage, currentUser }) => {
           <div style={{ fontSize: 48 }}>🤝</div>
           <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 24, fontWeight: 700, marginTop: 12 }}>Squad is for Members</h1>
           <p style={{ fontSize: 14, color: 'var(--warm-gray)', marginTop: 10, lineHeight: 1.6 }}>
-            Sign up for a free account to start a squad, invite friends, and unlock 5% group discounts when everyone hits GHS 500.
+            Sign up for a free account to start a squad, invite friends, and unlock GHS 25 credit each when everyone hits GHS 500.
           </p>
           <button onClick={() => { sessionStorage.removeItem('sdgmart_user'); window.location.reload(); }}
             style={{ marginTop: 20, background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '12px 24px', fontWeight: 700, fontSize: 14 }}>
@@ -60,14 +60,14 @@ const SquadPage = ({ setPage, currentUser }) => {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const shareText = `Sign up on SDGMart with my link — I get GHS 5 off and we both unlock 5% squad discounts: ${referralLink}`;
+  const shareText = `Sign up on SDGMart with my link — I get GHS 5 off, and when our squad each hit GHS 500 we all get GHS 25 credit: ${referralLink}`;
   const shareLink = async () => {
     // Prefer the native share sheet (lets the user pick WhatsApp, SMS, etc.)
     if (navigator.share) {
       try {
         await navigator.share({
           title: 'Join my SDGMart Squad',
-          text: 'Shop together, save together — 5% off when we all hit GHS 500.',
+          text: 'Shop together, save together — GHS 25 each when we all hit GHS 500.',
           url: referralLink,
         });
         return;
@@ -85,7 +85,7 @@ const SquadPage = ({ setPage, currentUser }) => {
         <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.1em', opacity: .8, textTransform: 'uppercase', marginBottom: 8 }}>Group Buying</div>
         <h1 style={{ fontFamily: 'var(--font-head)', fontSize: isMobile ? 26 : 32, fontWeight: 700, marginBottom: 8 }}>{squad.me.name}'s Squad 🤝</h1>
         <p style={{ opacity: .9, fontSize: 14, lineHeight: 1.6, maxWidth: 460 }}>
-          When every squad member hits <strong>GHS {GOAL}</strong> in purchases, everyone unlocks <strong>5% off</strong> their next order. Totals reset after the discount is unlocked.
+          When every squad member hits <strong>GHS {GOAL}</strong> in purchases, everyone is credited <strong>GHS 25</strong> (5% of the target) — applied automatically at your next checkout via your loyalty credit. Totals then reset so you can go again.
         </p>
       </div>
 
@@ -94,8 +94,8 @@ const SquadPage = ({ setPage, currentUser }) => {
         <div style={{ background: 'var(--sage)', color: '#fff', borderRadius: 'var(--radius-lg)', padding: '18px 22px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 14 }}>
           <span style={{ fontSize: 28 }}>🎉</span>
           <div>
-            <div style={{ fontWeight: 700, fontSize: 15 }}>Your 5% squad discount is ready!</div>
-            <div style={{ fontSize: 12, opacity: .9, marginTop: 2 }}>It will be applied automatically at your next checkout.</div>
+            <div style={{ fontWeight: 700, fontSize: 15 }}>Your legacy 5% squad discount is ready!</div>
+            <div style={{ fontSize: 12, opacity: .9, marginTop: 2 }}>It will be applied automatically at your next checkout. (Future squad goals will pay out as GHS 25 loyalty credit instead.)</div>
           </div>
         </div>
       )}

@@ -249,7 +249,12 @@ app.post('/api/orders', async (req, res) => {
       if (loyaltyUsed) await db.squads.consumeLoyalty(userId, loyaltyUsed);
       squadInfo = await db.squads.recordSpend(userId, Number(subtotal || total || 0));
     }
-    res.status(201).json({ ok: true, id: created.id, deliveryDate: deliveryDateStr, priority: afterCutoff, loyaltyEarned: squadInfo ? squadInfo.loyaltyEarned : 0 });
+    res.status(201).json({
+      ok: true, id: created.id,
+      deliveryDate: deliveryDateStr, priority: afterCutoff,
+      loyaltyEarned: squadInfo ? squadInfo.loyaltyEarned : 0,
+      squadGoalHit: !!(squadInfo && squadInfo.squadGoalHit),
+    });
   } catch (e) { console.error('order create failed:', e); res.status(500).json({ error: e.message }); }
 });
 

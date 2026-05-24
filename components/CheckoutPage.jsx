@@ -69,6 +69,10 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   const [orderSnapshot, setOrderSnapshot] = React.useState(null);
 
   // Squad discount eligibility (only for signed-in members)
+  // Legacy 'discountPending' (5%-off-subtotal squad reward) is deprecated.
+  // Squad rewards now go straight into loyalty_balance as a flat GHS 25 credit.
+  // We still honour an existing discountPending flag for users who earned it
+  // under the old rules but haven't redeemed yet.
   const canUseDiscount = !!(currentUser && currentUser.id && currentUser.discountPending);
   // Loyalty: GHS 50 credit per GHS 1000 lifetime spend, applied as a flat
   // discount the user can opt to use on this order (capped at the subtotal).
