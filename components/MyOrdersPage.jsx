@@ -54,13 +54,20 @@ const MyOrdersPage = ({ setPage, openTracking }) => {
                   {o.priority && <span style={{ background: '#FFF4E0', color: '#7A5A00', borderRadius: 999, padding: '3px 8px', fontSize: 10, fontWeight: 700 }}>⭐ Priority</span>}
                 </div>
                 <div style={{ marginTop: 4, fontSize: 12, color: 'var(--warm-gray)' }}>
-                  {new Date(o.createdAt).toLocaleString()} · GHS {Number(o.total || 0).toFixed(2)}
+                  {new Date(o.createdAt).toLocaleString()} · GHS {Number(o.total || 0).toFixed(2)} · {Array.isArray(o.items) ? o.items.length : 0} item{(Array.isArray(o.items) ? o.items.length : 0) === 1 ? '' : 's'}
                 </div>
+                {Array.isArray(o.items) && o.items.length > 0 && (
+                  <div style={{ marginTop: 4, fontSize: 12, color: 'var(--warm-black)', opacity: .8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {o.items.slice(0, 3).map(it => `${it.qty || 1}× ${it.name}`).join(', ')}{o.items.length > 3 ? `, +${o.items.length - 3} more` : ''}
+                  </div>
+                )}
                 <div style={{ marginTop: 2, fontSize: 12, color: 'var(--warm-gray)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  📍 {o.location?.address || o.neighborhood}
+                  📍 {(o.location && o.location.address) || o.neighborhood || '—'}
                 </div>
               </div>
-              <div style={{ fontSize: 12, color: 'var(--sage)', fontWeight: 700 }}>Track →</div>
+              <div style={{ fontSize: 12, color: 'var(--sage)', fontWeight: 700 }}>
+                {o.status === 'delivered' ? 'View →' : 'Track →'}
+              </div>
             </div>
           ))}
         </div>

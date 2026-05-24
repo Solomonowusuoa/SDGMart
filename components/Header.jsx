@@ -91,6 +91,12 @@ const Header = ({ cart, page, setPage, setSelectedCategory, searchQuery, setSear
               📦 My Orders
             </button>
           )}
+          {!isMobile && currentUser && currentUser.id && Number(currentUser.loyaltyBalance || 0) > 0 && (
+            <span title="Loyalty credit — apply at checkout"
+              style={{ fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 18, background: '#FFF8E1', color: '#7A5A00', border: '1px solid #F0DCA0' }}>
+              ⭐ GHS {Number(currentUser.loyaltyBalance).toFixed(0)}
+            </span>
+          )}
           {!isMobile && currentUser && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: isV2 ? 'rgba(255,255,255,.12)' : 'var(--cream)', borderRadius: 20, padding: '5px 6px 5px 12px' }}>
               <span style={{ fontSize: 12, fontWeight: 700, color: isV2 ? '#F5F0E8' : 'var(--sage-dark)' }}>

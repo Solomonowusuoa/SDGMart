@@ -46,10 +46,14 @@ const ProductCard = ({ product, onAdd, onView, compact }) => {
           <text x="30" y="36" textAnchor="middle" fontSize="28" fill={fg} fontFamily="sans-serif">{product.category[0]}</text>
         </svg>
         <div style={{ position: 'absolute', top: 8, left: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {product.bestseller && <span className="badge badge-green">★ Top</span>}
+          {(product.stock || 0) <= 0 && <span className="badge" style={{ background: '#1A1A1A', color: '#fff' }}>Sold out</span>}
+          {product.bestseller && (product.stock || 0) > 0 && <span className="badge badge-green">★ Top</span>}
           {expiring && dl > 0 && dl <= 30 && <span className="badge badge-gold">⏳ Clearance</span>}
           {expiring && dl > 30 && dl <= 60 && <span className="badge badge-gold">Sale</span>}
         </div>
+        {(product.stock || 0) <= 0 && (
+          <div style={{ position: 'absolute', inset: 0, background: 'rgba(255,255,255,.55)', pointerEvents: 'none' }} />
+        )}
         <div style={{ position: 'absolute', top: 8, right: 8 }}>
           <span style={{ background: 'rgba(255,255,255,.9)', borderRadius: 20, padding: '2px 8px', fontSize: 10, fontWeight: 600, color: 'var(--warm-gray)' }}>
             BB: {new Date(product.bestBefore).toLocaleDateString('en-GB',{month:'short',year:'numeric'})}
@@ -73,12 +77,20 @@ const ProductCard = ({ product, onAdd, onView, compact }) => {
               </span>
             )}
           </div>
-          <button onClick={() => onAdd(product)}
-            style={{ background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '7px 14px', fontSize: 12, fontWeight: 700, transition: 'background .2s' }}
-            onMouseEnter={e => e.currentTarget.style.background='var(--sage-dark)'}
-            onMouseLeave={e => e.currentTarget.style.background='var(--sage)'}>
-            + Add
-          </button>
+          {(product.stock || 0) <= 0 ? (
+            <button disabled
+              style={{ background: 'var(--cream-dark)', color: 'var(--warm-gray)', borderRadius: 8, padding: '7px 14px', fontSize: 12, fontWeight: 700, cursor: 'not-allowed' }}
+              title="Out of stock — tap the item for a notify-me option">
+              Out of stock
+            </button>
+          ) : (
+            <button onClick={(e) => { e.stopPropagation(); onAdd(product); }}
+              style={{ background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '7px 14px', fontSize: 12, fontWeight: 700, transition: 'background .2s' }}
+              onMouseEnter={e => e.currentTarget.style.background='var(--sage-dark)'}
+              onMouseLeave={e => e.currentTarget.style.background='var(--sage)'}>
+              + Add
+            </button>
+          )}
         </div>
       </div>
     </div>

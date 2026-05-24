@@ -2,17 +2,21 @@
 // Supports email+password and (optionally) Google Sign-In.
 const LoginPage = ({ onAuth, onGuest }) => {
   const isMobile = useMobile();
-  const [mode, setMode] = React.useState('signin'); // 'signin' | 'signup'
+  // Modes: 'signin' | 'signup' | 'forgot' | 'reset'
+  const [mode, setMode] = React.useState('signin');
   const [form, setForm] = React.useState({
     name: '', email: '', phone: '', password: '', refCode: '',
+    newPassword: '', confirmPassword: '',
   });
   const [err, setErr] = React.useState('');
+  const [info, setInfo] = React.useState('');
   const [loading, setLoading] = React.useState(false);
   const [googleClientId, setGoogleClientId] = React.useState('');
   const googleBtnRef = React.useRef(null);
   const refCodeRef = React.useRef('');
+  const resetTokenRef = React.useRef('');
 
-  // Pre-fill referral code from URL ?ref=CODE
+  // Pre-fill referral code from URL ?ref=CODE; switch to reset mode on ?reset=TOKEN
   React.useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const ref = params.get('ref');
@@ -20,6 +24,11 @@ const LoginPage = ({ onAuth, onGuest }) => {
       setMode('signup');
       setForm(f => ({ ...f, refCode: ref.toUpperCase() }));
       refCodeRef.current = ref.toUpperCase();
+    }
+    const resetToken = params.get('reset');
+    if (resetToken) {
+      resetTokenRef.current = resetToken;
+      setMode('reset');
     }
   }, []);
 
@@ -72,7 +81,9 @@ const LoginPage = ({ onAuth, onGuest }) => {
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   const submit = async () => {
-    setErr('');
+    setErr(''); setInfo('');
+    if (mode === 'forgot') return submitForgot();
+    if (mode === 'reset') return submitReset();
     if (mode === 'signin') {
       if (!form.email || !form.password) { setErr('Email and password required'); return; }
     } else {
@@ -106,6 +117,53 @@ const LoginPage = ({ onAuth, onGuest }) => {
     } finally {
       setLoading(false);
     }
+  };
+
+  // ── Forgot password: email user a reset link ──
+  const submitForgot = async () => {
+    if (!form.email) { setErr('Enter your email'); return; }
+    setLoading(true);
+    try {
+      const r = await fetch('/api/auth/forgot-password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: form.email }),
+      });
+      const data = await r.json();
+      // For dev convenience: server returns the reset link directly so users
+      // can complete the flow without real email being configured yet.
+      if (data.resetLink) {
+        const open = window.confirm(
+          `If an account exists for ${form.email}, a reset link has been generated:\n\n${data.resetLink}\n\nClick OK to open it now (also logged to server console).`
+        );
+        if (open) window.location.href = data.resetLink;
+      } else {
+        setInfo(`If an account exists for ${form.email}, we've sent a reset link. Check the server console (no email is configured yet).`);
+      }
+    } catch (_) {
+      setErr('Network error — please try again');
+    } finally { setLoading(false); }
+  };
+
+  // ── Reset password: submit new password with the token from URL ──
+  const submitReset = async () => {
+    if (!form.newPassword || form.newPassword.length < 8) { setErr('New password must be at least 8 characters'); return; }
+    if (form.newPassword !== form.confirmPassword) { setErr('Passwords do not match'); return; }
+    setLoading(true);
+    try {
+      const r = await fetch('/api/auth/reset-password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: resetTokenRef.current, newPassword: form.newPassword }),
+      });
+      const data = await r.json();
+      if (!r.ok) { setErr(data.error || 'Reset failed'); setLoading(false); return; }
+      // Clear the ?reset=… param so a refresh doesn't reopen the reset form
+      try { window.history.replaceState({}, '', window.location.pathname); } catch (_) {}
+      setInfo('Password updated — sign in with your new password.');
+      setMode('signin');
+      setForm(f => ({ ...f, password: '', newPassword: '', confirmPassword: '' }));
+    } catch (_) {
+      setErr('Network error — please try again');
+    } finally { setLoading(false); }
   };
 
   const inputS = {
@@ -157,39 +215,81 @@ const LoginPage = ({ onAuth, onGuest }) => {
           Tamale's essentials, delivered.
         </p>
 
-        {/* Tab switcher */}
-        <div style={{ display: 'flex', background: 'var(--cream)', borderRadius: 10, padding: 4, marginBottom: 22 }}>
-          {['signin', 'signup'].map(m => (
-            <button key={m} onClick={() => { setMode(m); setErr(''); }}
-              style={{
-                flex: 1, padding: '9px', borderRadius: 8, fontSize: 13, fontWeight: 700,
-                background: mode === m ? 'var(--white)' : 'transparent',
-                color: mode === m ? 'var(--sage-dark)' : 'var(--warm-gray)',
-                boxShadow: mode === m ? '0 1px 3px rgba(0,0,0,.08)' : 'none',
-                transition: 'all .15s',
-              }}>
-              {m === 'signin' ? 'Sign In' : 'Sign Up'}
-            </button>
-          ))}
-        </div>
+        {/* Tab switcher — hidden in forgot/reset modes */}
+        {(mode === 'signin' || mode === 'signup') && (
+          <div style={{ display: 'flex', background: 'var(--cream)', borderRadius: 10, padding: 4, marginBottom: 22 }}>
+            {['signin', 'signup'].map(m => (
+              <button key={m} onClick={() => { setMode(m); setErr(''); setInfo(''); }}
+                style={{
+                  flex: 1, padding: '9px', borderRadius: 8, fontSize: 13, fontWeight: 700,
+                  background: mode === m ? 'var(--white)' : 'transparent',
+                  color: mode === m ? 'var(--sage-dark)' : 'var(--warm-gray)',
+                  boxShadow: mode === m ? '0 1px 3px rgba(0,0,0,.08)' : 'none',
+                  transition: 'all .15s',
+                }}>
+                {m === 'signin' ? 'Sign In' : 'Sign Up'}
+              </button>
+            ))}
+          </div>
+        )}
 
-        {/* Form */}
+        {/* Mode-specific heading for forgot/reset */}
+        {mode === 'forgot' && (
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, color: 'var(--sage-dark)' }}>Reset your password</div>
+            <div style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 4 }}>Enter your email and we'll send you a link to choose a new password.</div>
+          </div>
+        )}
+        {mode === 'reset' && (
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, color: 'var(--sage-dark)' }}>Choose a new password</div>
+            <div style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 4 }}>At least 8 characters, with a letter and a number.</div>
+          </div>
+        )}
+
+        {/* Form — different fields per mode */}
         {mode === 'signup' && (
           <input placeholder="Full Name" value={form.name} onChange={e => set('name', e.target.value)} style={inputS} />
         )}
-        <input placeholder="Email" type="email" value={form.email} onChange={e => set('email', e.target.value)} style={inputS} />
+        {(mode === 'signin' || mode === 'signup' || mode === 'forgot') && (
+          <input placeholder="Email" type="email" value={form.email}
+            onChange={e => set('email', e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && submit()} style={inputS} />
+        )}
         {mode === 'signup' && (
           <input placeholder="Phone (optional)" value={form.phone} onChange={e => set('phone', e.target.value)} style={inputS} />
         )}
-        <input placeholder="Password" type="password" value={form.password}
-          onChange={e => set('password', e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && submit()} style={inputS} />
+        {(mode === 'signin' || mode === 'signup') && (
+          <input placeholder="Password" type="password" value={form.password}
+            onChange={e => set('password', e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && submit()} style={inputS} />
+        )}
         {mode === 'signup' && (
           <input placeholder="Referral Code (optional)" value={form.refCode}
             onChange={e => set('refCode', e.target.value.toUpperCase())} style={inputS} />
         )}
+        {mode === 'reset' && (
+          <>
+            <input placeholder="New password" type="password" value={form.newPassword}
+              onChange={e => set('newPassword', e.target.value)} style={inputS} />
+            <input placeholder="Confirm new password" type="password" value={form.confirmPassword}
+              onChange={e => set('confirmPassword', e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && submit()} style={inputS} />
+          </>
+        )}
+
+        {/* Forgot password link — only in signin mode */}
+        {mode === 'signin' && (
+          <div style={{ textAlign: 'right', marginTop: -4, marginBottom: 8 }}>
+            <button type="button" onClick={() => { setMode('forgot'); setErr(''); setInfo(''); }}
+              style={{ background: 'transparent', color: 'var(--sage-dark)', fontSize: 12, fontWeight: 600, padding: 0 }}>
+              Forgot password?
+            </button>
+          </div>
+        )}
 
         {err && <div style={{ background: 'rgba(192,57,43,.08)', color: 'var(--accent-red)', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10 }}>{err}</div>}
+        {info && <div style={{ background: 'rgba(46,139,87,.08)', color: 'var(--sage-dark)', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10 }}>{info}</div>}
 
         <button onClick={submit} disabled={loading}
           style={{
@@ -197,11 +297,24 @@ const LoginPage = ({ onAuth, onGuest }) => {
             padding: '13px', fontWeight: 700, fontSize: 15, marginTop: 4,
             opacity: loading ? .6 : 1, cursor: loading ? 'wait' : 'pointer',
           }}>
-          {loading ? 'Please wait…' : (mode === 'signin' ? 'Sign In' : 'Create Account')}
+          {loading ? 'Please wait…' : (
+            mode === 'signin' ? 'Sign In' :
+            mode === 'signup' ? 'Create Account' :
+            mode === 'forgot' ? 'Send reset link' :
+            'Update password'
+          )}
         </button>
 
+        {/* Back to sign in — when in forgot/reset */}
+        {(mode === 'forgot' || mode === 'reset') && (
+          <button type="button" onClick={() => { setMode('signin'); setErr(''); setInfo(''); }}
+            style={{ background: 'transparent', color: 'var(--warm-gray)', fontSize: 12, fontWeight: 600, marginTop: 14, width: '100%', textAlign: 'center' }}>
+            ← Back to sign in
+          </button>
+        )}
+
         {/* Google sign-in (only when configured on the server) */}
-        {googleClientId && (
+        {googleClientId && (mode === 'signin' || mode === 'signup') && (
           <>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '20px 0 14px' }}>
               <div style={{ flex: 1, height: 1, background: 'var(--cream-dark)' }} />
@@ -212,7 +325,8 @@ const LoginPage = ({ onAuth, onGuest }) => {
           </>
         )}
 
-        {/* Divider */}
+        {/* Divider + Guest — only on the main sign-in/up screens */}
+        {(mode === 'signin' || mode === 'signup') && (<>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '20px 0' }}>
           <div style={{ flex: 1, height: 1, background: 'var(--cream-dark)' }} />
           <span style={{ fontSize: 11, color: 'var(--warm-gray)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.05em' }}>or</span>
@@ -227,6 +341,7 @@ const LoginPage = ({ onAuth, onGuest }) => {
           }}>
           Continue as Guest
         </button>
+        </>)}
 
         <p style={{ textAlign: 'center', fontSize: 11, color: 'var(--warm-gray)', marginTop: 18, lineHeight: 1.6 }}>
           Sign up to track your spend, join a squad and unlock 5% group discounts.

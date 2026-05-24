@@ -46,12 +46,19 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
 
   // Squad discount eligibility (only for signed-in members)
   const canUseDiscount = !!(currentUser && currentUser.id && currentUser.discountPending);
+  // Loyalty: GHS 50 credit per GHS 1000 lifetime spend, applied as a flat
+  // discount the user can opt to use on this order (capped at the subtotal).
+  const loyaltyAvailable = Number(currentUser && currentUser.loyaltyBalance || 0);
+  const [useLoyalty, setUseLoyalty] = React.useState(false);
 
   const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
   const discount = canUseDiscount ? subtotal * 0.05 : 0;
   const subtotalAfterDiscount = subtotal - discount;
-  const delivery = subtotalAfterDiscount >= FREE_DELIVERY_MIN ? 0 : 15;
-  const total = subtotalAfterDiscount + delivery;
+  // Loyalty applies after squad discount, capped at remaining subtotal
+  const loyaltyUsed = useLoyalty ? Math.min(loyaltyAvailable, subtotalAfterDiscount) : 0;
+  const afterLoyalty = subtotalAfterDiscount - loyaltyUsed;
+  const delivery = afterLoyalty >= FREE_DELIVERY_MIN ? 0 : 15;
+  const total = afterLoyalty + delivery;
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const err = (k, msg) => setErrors(e => ({ ...e, [k]: msg }));
@@ -168,6 +175,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
           mapsPin: snap.form.mapsPin,
           location: snap.form.location || null,
           discountApplied: canUseDiscount,
+          loyaltyUsed,
         }),
       });
       // Refresh local user (clear consumed discount; sync new totalSpent)
@@ -496,6 +504,23 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                 <span>−GHS {discount.toFixed(2)}</span>
               </div>
             )}
+            {loyaltyAvailable > 0 && (
+              <div style={{ background: '#FFF8E1', border: '1px solid #F0DCA0', borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 12 }}>
+                  <input type="checkbox" checked={useLoyalty} onChange={e => setUseLoyalty(e.target.checked)} style={{ accentColor: 'var(--sage)' }} />
+                  <span style={{ flex: 1 }}>
+                    <strong>⭐ Loyalty credit:</strong> GHS {loyaltyAvailable.toFixed(2)} available
+                    {useLoyalty && loyaltyUsed > 0 && <span style={{ color: 'var(--sage)' }}> — using GHS {loyaltyUsed.toFixed(2)}</span>}
+                  </span>
+                </label>
+              </div>
+            )}
+            {useLoyalty && loyaltyUsed > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6, color: '#7A5A00' }}>
+                <span>⭐ Loyalty credit</span>
+                <span>−GHS {loyaltyUsed.toFixed(2)}</span>
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 12 }}>
               <span style={{ color: 'var(--warm-gray)' }}>Delivery</span>
               <span style={{ color: delivery === 0 ? 'var(--sage)' : 'inherit' }}>{delivery === 0 ? 'FREE' : `GHS ${delivery.toFixed(2)}`}</span>
@@ -505,9 +530,9 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
               <span style={{ color: 'var(--sage-dark)' }}>GHS {total.toFixed(2)}</span>
             </div>
           </div>
-          {subtotalAfterDiscount < FREE_DELIVERY_MIN && (
+          {afterLoyalty < FREE_DELIVERY_MIN && (
             <div style={{ marginTop: 14, padding: '10px 12px', background: 'rgba(107,124,74,.1)', borderRadius: 8, fontSize: 12, color: 'var(--sage-dark)', fontWeight: 600 }}>
-              Add GHS {(FREE_DELIVERY_MIN - subtotalAfterDiscount).toFixed(2)} more for free delivery!
+              Add GHS {(FREE_DELIVERY_MIN - afterLoyalty).toFixed(2)} more for free delivery!
             </div>
           )}
         </div>

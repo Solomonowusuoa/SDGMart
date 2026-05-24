@@ -1,3 +1,27 @@
+// Notify-me block shown when a product is out of stock. Opens WhatsApp so
+// the customer can ping the admin directly to be notified when stock returns.
+const OutOfStockBlock = ({ product }) => {
+  const notify = () => {
+    const msg = encodeURIComponent(`Hi SDGMart! Please notify me when "${product.name}" (${product.unit}) is back in stock.`);
+    window.open(`https://wa.me/233504082555?text=${msg}`, '_blank', 'noopener');
+  };
+  return (
+    <div style={{ marginTop: 28, padding: 20, background: 'var(--cream)', border: '1.5px dashed var(--cream-dark)', borderRadius: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <span style={{ fontSize: 22 }}>📦</span>
+        <span style={{ fontFamily: 'var(--font-head)', fontSize: 18, fontWeight: 700 }}>Sold out for now</span>
+      </div>
+      <p style={{ fontSize: 13, color: 'var(--warm-gray)', lineHeight: 1.5, marginBottom: 14 }}>
+        This item is temporarily unavailable. Tap below to ping the SDGMart team on WhatsApp — we'll let you know the moment it's restocked.
+      </p>
+      <button onClick={notify}
+        style={{ width: '100%', background: '#25D366', color: '#fff', borderRadius: 10, padding: '12px 18px', fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+        💬 Notify me on WhatsApp
+      </button>
+    </div>
+  );
+};
+
 // ProductPage — full product detail
 const ProductPage = ({ product, onAdd, setPage, setSelectedCategory }) => {
   const [qty, setQty] = React.useState(1);
@@ -90,20 +114,29 @@ const ProductPage = ({ product, onAdd, setPage, setSelectedCategory }) => {
 
           <p style={{ marginTop: 20, fontSize: 15, color: 'var(--warm-gray)', lineHeight: 1.7 }}>{product.description}</p>
 
-          {/* Qty + Add */}
-          <div style={{ marginTop: 28, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 0, border: '2px solid var(--cream-dark)', borderRadius: 10, overflow: 'hidden' }}>
-              <button onClick={() => setQty(q => Math.max(1, q - 1))}
-                style={{ width: 40, height: 44, fontSize: 20, fontWeight: 700, color: 'var(--warm-gray)', background: 'var(--cream)' }}>−</button>
-              <span style={{ width: 44, textAlign: 'center', fontWeight: 700, fontSize: 16 }}>{qty}</span>
-              <button onClick={() => setQty(q => q + 1)}
-                style={{ width: 40, height: 44, fontSize: 20, fontWeight: 700, color: 'var(--sage)', background: 'var(--cream)' }}>+</button>
+          {/* Qty + Add — or Out-of-stock state */}
+          {(product.stock || 0) <= 0 ? (
+            <OutOfStockBlock product={product} />
+          ) : (
+            <div style={{ marginTop: 28, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 0, border: '2px solid var(--cream-dark)', borderRadius: 10, overflow: 'hidden' }}>
+                <button onClick={() => setQty(q => Math.max(1, q - 1))}
+                  style={{ width: 40, height: 44, fontSize: 20, fontWeight: 700, color: 'var(--warm-gray)', background: 'var(--cream)' }}>−</button>
+                <span style={{ width: 44, textAlign: 'center', fontWeight: 700, fontSize: 16 }}>{qty}</span>
+                <button onClick={() => setQty(q => Math.min((product.stock || 99), q + 1))}
+                  style={{ width: 40, height: 44, fontSize: 20, fontWeight: 700, color: 'var(--sage)', background: 'var(--cream)' }}>+</button>
+              </div>
+              <button onClick={handleAdd}
+                style={{ flex: 1, minWidth: 180, background: added ? 'var(--sage-dark)' : 'var(--sage)', color: '#fff', borderRadius: 10, padding: '12px 24px', fontWeight: 700, fontSize: 15, transition: 'background .2s, transform .1s', transform: added ? 'scale(.97)' : 'scale(1)' }}>
+                {added ? '✓ Added to Cart!' : `Add ${qty > 1 ? qty + 'x' : ''} to Cart — GHS ${(finalPrice * qty).toFixed(2)}`}
+              </button>
             </div>
-            <button onClick={handleAdd}
-              style={{ flex: 1, minWidth: 180, background: added ? 'var(--sage-dark)' : 'var(--sage)', color: '#fff', borderRadius: 10, padding: '12px 24px', fontWeight: 700, fontSize: 15, transition: 'background .2s, transform .1s', transform: added ? 'scale(.97)' : 'scale(1)' }}>
-              {added ? '✓ Added to Cart!' : `Add ${qty > 1 ? qty + 'x' : ''} to Cart — GHS ${(finalPrice * qty).toFixed(2)}`}
-            </button>
-          </div>
+          )}
+          {(product.stock || 0) > 0 && (product.stock || 0) < 10 && (
+            <div style={{ marginTop: 10, color: 'var(--accent-red)', fontSize: 12, fontWeight: 700 }}>
+              ⚠ Only {product.stock} left in stock
+            </div>
+          )}
 
           {/* Family mode hint */}
           <div style={{ marginTop: 16, padding: '12px 16px', background: 'var(--cream-dark)', borderRadius: 10, display: 'flex', gap: 10, alignItems: 'center' }}>
