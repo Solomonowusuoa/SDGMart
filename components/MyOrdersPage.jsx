@@ -31,7 +31,7 @@ const MyOrdersPage = ({ setPage, openTracking }) => {
       queued: ['#C8923A', 'Queued'],
       assigned: ['#3879BF', 'Assigned'],
       in_transit: ['var(--sage)', 'Out for delivery'],
-      delivered: ['#27AE60', 'Delivered'],
+      delivered: ['#1A1A1A', 'Delivered'],
       Pending: ['var(--warm-gray)', 'Pending'],
     };
     const [bg, label] = map[s] || ['var(--warm-gray)', s];

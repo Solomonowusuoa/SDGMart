@@ -83,8 +83,8 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   // Status palette covers both the new lowercase enum (queued/assigned/in_transit/delivered/cancelled)
   // and the legacy capitalised values left over from earlier orders.
   const statusColor = {
-    queued: '#C8923A', assigned: '#3879BF', in_transit: '#1A1A1A', delivered: '#27AE60', cancelled: '#888',
-    Pending: '#C8923A', 'Out for Delivery': '#1A1A1A', Delivered: '#27AE60',
+    queued: '#C8923A', assigned: '#3879BF', in_transit: '#1A1A1A', delivered: '#1A1A1A', cancelled: '#888',
+    Pending: '#C8923A', 'Out for Delivery': '#1A1A1A', Delivered: '#1A1A1A',
   };
   const statusLabel = {
     queued: 'Queued', assigned: 'Assigned', in_transit: 'Out for delivery', delivered: 'Delivered', cancelled: 'Cancelled',

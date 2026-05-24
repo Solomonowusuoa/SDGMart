@@ -99,14 +99,14 @@ const ProductPage = ({ product, onAdd, setPage, setSelectedCategory }) => {
 
           {/* Freshness */}
           <div style={{ marginTop: 16, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <div style={{ background: daysLeft <= 30 ? 'rgba(192,57,43,.1)' : 'rgba(107,124,74,.1)', borderRadius: 8, padding: '10px 14px' }}>
+            <div style={{ background: daysLeft <= 30 ? 'rgba(192,57,43,.1)' : 'rgba(0,0,0,.06)', borderRadius: 8, padding: '10px 14px' }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Best Before</div>
               <div style={{ fontWeight: 700, fontSize: 15, color: daysLeft <= 30 ? 'var(--accent-red)' : 'var(--sage-dark)', marginTop: 2 }}>
                 {new Date(product.bestBefore).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
               </div>
               <div style={{ fontSize: 11, color: 'var(--warm-gray)', marginTop: 2 }}>{daysLeft} days remaining</div>
             </div>
-            <div style={{ background: 'rgba(107,124,74,.1)', borderRadius: 8, padding: '10px 14px' }}>
+            <div style={{ background: 'rgba(0,0,0,.06)', borderRadius: 8, padding: '10px 14px' }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>In Stock</div>
               <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--sage-dark)', marginTop: 2 }}>{product.stock} units</div>
             </div>

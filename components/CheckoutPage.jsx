@@ -299,7 +299,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
 
         <a href={waHref} target="_blank" rel="noopener noreferrer"
           onClick={e => { if (!waValid) { e.preventDefault(); alert('Please enter a valid WhatsApp number first.'); } }}
-          style={{ display: 'block', marginTop: 16, background: waValid ? '#25D366' : '#9DCFA9', color: '#fff', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 15, textDecoration: 'none', cursor: waValid ? 'pointer' : 'not-allowed' }}>
+          style={{ display: 'block', marginTop: 16, background: waValid ? '#25D366' : '#888', color: '#fff', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 15, textDecoration: 'none', cursor: waValid ? 'pointer' : 'not-allowed' }}>
           📱 Send Order to My WhatsApp
         </a>
         {currentUser && currentUser.id && openTracking && (
@@ -516,7 +516,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                 <div style={{ display: 'flex', gap: 10 }}>
                   {[['momo','📱 Mobile Money'],['cash','💵 Cash on Delivery']].map(([val, label]) => (
                     <button key={val} onClick={() => set('payMethod', val)}
-                      style={{ flex: 1, padding: '14px 10px', borderRadius: 10, border: `2px solid ${form.payMethod === val ? 'var(--sage)' : 'var(--cream-dark)'}`, background: form.payMethod === val ? 'rgba(107,124,74,.08)' : 'var(--white)', fontWeight: 700, fontSize: 13, transition: 'all .15s', color: 'var(--warm-black)' }}>
+                      style={{ flex: 1, padding: '14px 10px', borderRadius: 10, border: `2px solid ${form.payMethod === val ? 'var(--sage)' : 'var(--cream-dark)'}`, background: form.payMethod === val ? 'rgba(0,0,0,.06)' : 'var(--white)', fontWeight: 700, fontSize: 13, transition: 'all .15s', color: 'var(--warm-black)' }}>
                       {label}
                     </button>
                   ))}
@@ -673,7 +673,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
             </div>
           </div>
           {false && (
-            <div style={{ marginTop: 14, padding: '10px 12px', background: 'rgba(107,124,74,.1)', borderRadius: 8, fontSize: 12, color: 'var(--sage-dark)', fontWeight: 600 }}>
+            <div style={{ marginTop: 14, padding: '10px 12px', background: 'rgba(0,0,0,.06)', borderRadius: 8, fontSize: 12, color: 'var(--sage-dark)', fontWeight: 600 }}>
               Flat GHS 10 delivery anywhere in Tamale.
             </div>
           )}

@@ -3,7 +3,7 @@
 //   updates during development are picked up on reload.
 // - Listens for `push` events and shows native OS notifications.
 // - On notification click, focuses an existing tab or opens the target URL.
-const CACHE_NAME = 'sdgmart-v18-momo-and-delivery';
+const CACHE_NAME = 'sdgmart-v19-black-accent-script-logo';
 const STATIC_ASSETS = [
   '/SDGMart.html',
   '/manifest.json',

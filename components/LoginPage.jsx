@@ -200,15 +200,20 @@ const LoginPage = ({ onAuth, onGuest }) => {
         backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
         width: '100%', maxWidth: 420,
       }}>
-        {/* Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 18 }}>
-          <div style={{ width: 44, height: 44, borderRadius: 10, background: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <svg width="24" height="24" viewBox="0 0 20 20" fill="none">
-              <path d="M3 6l7-4 7 4v8l-7 4-7-4V6z" fill="none" stroke="#fff" strokeWidth="1.5"/>
-              <path d="M10 2v16M3 6l7 4 7-4" stroke="#fff" strokeWidth="1.5"/>
-            </svg>
+        {/* Logo — "SDG" script wordmark, white on black */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 18 }}>
+          <div style={{
+            width: 56, height: 56, borderRadius: 10, background: '#000',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            paddingTop: 5,
+          }}>
+            <span style={{
+              fontFamily: "'Petit Formal Script', 'Allura', cursive",
+              fontSize: 40, lineHeight: 1, color: '#fff',
+              letterSpacing: '.02em',
+            }}>SDG</span>
           </div>
-          <span style={{ fontFamily: 'var(--font-head)', fontSize: 26, fontWeight: 700, color: 'var(--sage-dark)' }}>SDGMart</span>
+          <span style={{ fontFamily: 'var(--font-head)', fontSize: 26, fontWeight: 700, color: '#000' }}>SDGMart</span>
         </div>
         <p style={{ textAlign: 'center', fontSize: 13, color: 'var(--warm-gray)', marginBottom: 22 }}>
           Tamale's essentials, delivered.
@@ -288,7 +293,7 @@ const LoginPage = ({ onAuth, onGuest }) => {
         )}
 
         {err && <div style={{ background: 'rgba(192,57,43,.08)', color: 'var(--accent-red)', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10 }}>{err}</div>}
-        {info && <div style={{ background: 'rgba(46,139,87,.08)', color: 'var(--sage-dark)', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10 }}>{info}</div>}
+        {info && <div style={{ background: 'rgba(0,0,0,.05)', color: '#1A1A1A', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10 }}>{info}</div>}
 
         <button onClick={submit} disabled={loading}
           style={{

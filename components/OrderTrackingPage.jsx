@@ -164,7 +164,7 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage }) => {
   } else if (status === 'delivered') {
     primaryMsg = '✅ Delivered';
     secondaryMsg = o.deliveredAt ? `Completed at ${new Date(o.deliveredAt).toLocaleTimeString()}` : 'Thanks for ordering with SDGMart!';
-    accent = '#27AE60';
+    accent = '#1A1A1A';
   } else {
     primaryMsg = status; secondaryMsg = '';
   }

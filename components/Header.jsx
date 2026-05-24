@@ -36,16 +36,21 @@ const Header = ({ cart, page, setPage, setSelectedCategory, searchQuery, setSear
 
       {/* Main nav */}
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: isMobile ? '10px 16px' : '12px 24px', display: 'flex', alignItems: 'center', gap: isMobile ? 10 : 16 }}>
-        {/* Logo */}
-        <button onClick={() => setPage('home')} style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-          <div style={{ width: 36, height: 36, borderRadius: 8, background: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-              <path d="M3 6l7-4 7 4v8l-7 4-7-4V6z" fill="none" stroke="#fff" strokeWidth="1.5"/>
-              <path d="M10 2v16M3 6l7 4 7-4" stroke="#fff" strokeWidth="1.5"/>
-            </svg>
+        {/* Logo — "SDG" script wordmark, white on black */}
+        <button onClick={() => setPage('home')} style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+          <div style={{
+            width: 44, height: 44, borderRadius: 8, background: '#000',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            paddingTop: 4,
+          }}>
+            <span style={{
+              fontFamily: "'Petit Formal Script', 'Allura', cursive",
+              fontSize: 30, lineHeight: 1, color: '#fff',
+              letterSpacing: '.02em',
+            }}>SDG</span>
           </div>
           {!isMobile && (
-            <span style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, color: isV2 ? '#F5F0E8' : 'var(--sage-dark)', letterSpacing: '-.01em' }}>SDGMart</span>
+            <span style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, color: isV2 ? '#F5F0E8' : '#000', letterSpacing: '-.01em' }}>SDGMart</span>
           )}
         </button>
 
