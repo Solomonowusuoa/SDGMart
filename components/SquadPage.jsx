@@ -60,7 +60,7 @@ const SquadPage = ({ setPage, currentUser }) => {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const shareText = `Join my SDGMart squad and unlock 5% group discounts! ${referralLink}`;
+  const shareText = `Sign up on SDGMart with my link — I get GHS 5 off and we both unlock 5% squad discounts: ${referralLink}`;
   const shareLink = async () => {
     // Prefer the native share sheet (lets the user pick WhatsApp, SMS, etc.)
     if (navigator.share) {
@@ -156,9 +156,12 @@ const SquadPage = ({ setPage, currentUser }) => {
 
       {/* Referral */}
       <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', padding: '24px 28px', boxShadow: 'var(--shadow)' }}>
-        <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Invite Friends to Your Squad</h2>
+        <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Invite Friends → Earn GHS 5 Each</h2>
         <p style={{ fontSize: 13, color: 'var(--warm-gray)', marginBottom: 14, lineHeight: 1.6 }}>
-          Your code: <strong style={{ color: 'var(--sage-dark)', letterSpacing: '.06em' }}>{squad.referralCode}</strong>
+          Every friend who signs up with your code adds <strong style={{ color: 'var(--warm-black)' }}>GHS 5 credit</strong> to your next order. Credits stack — invite as many as you like.
+        </p>
+        <p style={{ fontSize: 13, color: 'var(--warm-gray)', marginBottom: 14, lineHeight: 1.6 }}>
+          Your code: <strong style={{ color: '#000', letterSpacing: '.06em' }}>{squad.referralCode}</strong>
         </p>
         <div style={{ display: 'flex', gap: 10, flexDirection: isMobile ? 'column' : 'row' }}>
           <input readOnly value={referralLink}

@@ -39,14 +39,16 @@ const Header = ({ cart, page, setPage, setSelectedCategory, searchQuery, setSear
         {/* Logo — "SDG" script wordmark, white on black */}
         <button onClick={() => setPage('home')} style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
           <div style={{
-            width: 44, height: 44, borderRadius: 8, background: '#000',
+            minWidth: 58, height: 40, padding: '0 10px',
+            borderRadius: 8, background: '#000',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            paddingTop: 4,
           }}>
             <span style={{
               fontFamily: "'Petit Formal Script', 'Allura', cursive",
-              fontSize: 30, lineHeight: 1, color: '#fff',
-              letterSpacing: '.02em',
+              fontSize: 28, lineHeight: 1, color: '#fff',
+              letterSpacing: '.01em',
+              transform: 'translateY(2px)',
+              whiteSpace: 'nowrap',
             }}>SDG</span>
           </div>
           {!isMobile && (

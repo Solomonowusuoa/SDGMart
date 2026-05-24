@@ -188,10 +188,14 @@ const LoginPage = ({ onAuth, onGuest }) => {
   return (
     <div style={{
       minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-      backgroundColor: '#1a1a1a', // instant fill while photo loads
+      backgroundColor: '#000', // instant fill while photo loads
       backgroundImage: `linear-gradient(rgba(0,0,0,.55),rgba(0,0,0,.7)), url(${HERO_BG})`,
-      backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed',
-      padding: isMobile ? '20px 16px' : '40px 24px',
+      backgroundSize: 'cover',
+      backgroundPosition: isMobile ? 'center top' : 'center',
+      // backgroundAttachment:fixed is broken on iOS Safari and hurts performance
+      // on mobile in general — only use it on desktop.
+      backgroundAttachment: isMobile ? 'scroll' : 'fixed',
+      padding: isMobile ? '24px 14px' : '40px 24px',
     }}>
       <div style={{
         background: 'rgba(255,255,255,.97)', borderRadius: 'var(--radius-lg)',
@@ -203,14 +207,16 @@ const LoginPage = ({ onAuth, onGuest }) => {
         {/* Logo — "SDG" script wordmark, white on black */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 18 }}>
           <div style={{
-            width: 56, height: 56, borderRadius: 10, background: '#000',
+            minWidth: 82, height: 56, padding: '0 14px',
+            borderRadius: 10, background: '#000',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            paddingTop: 5,
           }}>
             <span style={{
               fontFamily: "'Petit Formal Script', 'Allura', cursive",
-              fontSize: 40, lineHeight: 1, color: '#fff',
-              letterSpacing: '.02em',
+              fontSize: 38, lineHeight: 1, color: '#fff',
+              letterSpacing: '.01em',
+              transform: 'translateY(3px)',
+              whiteSpace: 'nowrap',
             }}>SDG</span>
           </div>
           <span style={{ fontFamily: 'var(--font-head)', fontSize: 26, fontWeight: 700, color: '#000' }}>SDGMart</span>

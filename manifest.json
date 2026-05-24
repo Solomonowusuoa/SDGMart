@@ -4,8 +4,8 @@
   "description": "Tamale's smart grocery service. Fresh essentials delivered same-day.",
   "start_url": "/SDGMart.html",
   "display": "standalone",
-  "background_color": "#FDF6EC",
-  "theme_color": "#4E8B3F",
+  "background_color": "#000000",
+  "theme_color": "#000000",
   "orientation": "portrait-primary",
   "icons": [
     {

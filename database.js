@@ -137,12 +137,13 @@ const users = {
   },
   async create({ name, email, phone, password, refCode, role = 'customer' }) {
     const passwordHash = password ? hashPassword(password) : null;
-    // Look up the referrer (if any) to inherit their squadCode
+    // Look up the referrer (if any) — inherit their squadCode AND credit them
     let squadCode = null;
     let ownsSquad = false;
+    let referrer = null;
     if (refCode) {
-      const refUser = await users.findByRefCode(refCode);
-      if (refUser) squadCode = refUser.squadCode || refUser.refCode;
+      referrer = await users.findByRefCode(refCode);
+      if (referrer) squadCode = referrer.squadCode || referrer.refCode;
     }
     if (!squadCode) {
       // New user owns their own squad
@@ -156,6 +157,16 @@ const users = {
     };
     const { data, error } = await sb.from('users').insert(insert).select().single();
     if (error) throw error;
+
+    // Referral bonus: GHS 5 credit to the referrer for each new sign-up using
+    // their code. Stacks if not yet used. Stored on loyalty_balance so the
+    // existing checkout loyalty-toggle UI auto-picks it up.
+    if (referrer) {
+      try {
+        const newBalance = Number(referrer.loyaltyBalance || 0) + 5;
+        await sb.from('users').update({ loyalty_balance: newBalance }).eq('id', referrer.id);
+      } catch (_) { /* don't fail the signup over a credit issue */ }
+    }
     return rowOut(data);
   },
   async verifyCredentials(email, password) {
