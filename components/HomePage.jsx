@@ -224,10 +224,9 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
     items.forEach(p => onAdd(p));
   };
 
-  // Hero background — moody snacks/pantry photograph.
-  // Reduced from 2400→1600 width and added preload + neutral fallback color
-  // so the section paints instantly while the photo streams in.
-  const HERO_BG = 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=1600&q=80&auto=format&fit=crop';
+  // Hero background — local /icons/hero.jpg if present (recommended),
+  // otherwise fall back to the moody pantry Unsplash photo.
+  const HERO_BG = '/icons/hero.jpg';
 
   React.useEffect(() => {
     // Preload the hero image so it starts downloading before this section paints

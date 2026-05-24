@@ -1,5 +1,6 @@
 // CheckoutPage — full checkout with Family Mode + WhatsApp bridge
-const FREE_DELIVERY_MIN = 150;
+// Flat 10 GHS delivery for any location within Tamale.
+const FLAT_DELIVERY = 10;
 
 // Hoisted out of CheckoutPage so React doesn't recreate the component on
 // every render (which would unmount the input and steal focus on each
@@ -32,6 +33,26 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // Recurring orders: opt-in checkbox + cadence (every N days)
   const [autoReorder, setAutoReorder] = React.useState(false);
   const [reorderCadence, setReorderCadence] = React.useState(14);
+  // MoMo: customer's own number, admin's merchant numbers per telco, picked telco
+  const [customerMomo, setCustomerMomo] = React.useState('');
+  const [telco, setTelco] = React.useState('mtn');
+  const [merchantNumbers, setMerchantNumbers] = React.useState({ mtn: '', telecel: '', at: '', name: '' });
+  const [copyState, setCopyState] = React.useState('');
+
+  React.useEffect(() => {
+    fetch('/api/momo/numbers').then(r => r.ok ? r.json() : {}).then(setMerchantNumbers).catch(() => {});
+  }, []);
+
+  const copyMerchant = () => {
+    const n = merchantNumbers[telco] || '';
+    if (!n) return;
+    try {
+      navigator.clipboard.writeText(n).then(() => {
+        setCopyState('✓ Copied');
+        setTimeout(() => setCopyState(''), 1500);
+      });
+    } catch (_) {}
+  };
   const [form, setForm] = React.useState({
     name: (currentUser && currentUser.name && currentUser.role !== 'guest') ? currentUser.name : '',
     phone: (currentUser && currentUser.phone) || '',
@@ -60,7 +81,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // Loyalty applies after squad discount, capped at remaining subtotal
   const loyaltyUsed = useLoyalty ? Math.min(loyaltyAvailable, subtotalAfterDiscount) : 0;
   const afterLoyalty = subtotalAfterDiscount - loyaltyUsed;
-  const delivery = afterLoyalty >= FREE_DELIVERY_MIN ? 0 : 15;
+  const delivery = FLAT_DELIVERY;
   const total = afterLoyalty + delivery;
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -175,6 +196,8 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
           recipientAddress: snap.form.recipientAddress,
           giftMessage: snap.form.giftMessage,
           payMethod: snap.form.payMethod,
+          momoNumber: snap.form.payMethod === 'momo' ? customerMomo : '',
+          momoTelco: snap.form.payMethod === 'momo' ? telco : '',
           mapsPin: snap.form.mapsPin,
           location: snap.form.location || null,
           discountApplied: canUseDiscount,
@@ -491,7 +514,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
               <div style={{ marginBottom: 24 }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 12 }}>Payment Method</div>
                 <div style={{ display: 'flex', gap: 10 }}>
-                  {[['momo','📱 Mobile Money (MoMo)'],['cash','💵 Cash on Delivery']].map(([val, label]) => (
+                  {[['momo','📱 Mobile Money'],['cash','💵 Cash on Delivery']].map(([val, label]) => (
                     <button key={val} onClick={() => set('payMethod', val)}
                       style={{ flex: 1, padding: '14px 10px', borderRadius: 10, border: `2px solid ${form.payMethod === val ? 'var(--sage)' : 'var(--cream-dark)'}`, background: form.payMethod === val ? 'rgba(107,124,74,.08)' : 'var(--white)', fontWeight: 700, fontSize: 13, transition: 'all .15s', color: 'var(--warm-black)' }}>
                       {label}
@@ -499,6 +522,76 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                   ))}
                 </div>
               </div>
+
+              {/* MoMo telco picker — only shown when MoMo selected */}
+              {form.payMethod === 'momo' && (
+                <div style={{ marginBottom: 24, padding: '16px', background: 'var(--cream)', borderRadius: 12, border: '1px solid var(--cream-dark)' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>Choose your network</div>
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+                    {[
+                      ['mtn',     'MTN MoMo',     '#FFCC08', '#000'],
+                      ['telecel', 'Telecel Cash', '#E60012', '#fff'],
+                      ['at',      'AT Money',     '#1A1A1A', '#fff'],
+                    ].map(([key, label, bg, fg]) => {
+                      const active = telco === key;
+                      return (
+                        <button key={key} onClick={() => setTelco(key)}
+                          style={{
+                            flex: 1, padding: '12px 6px', borderRadius: 10,
+                            border: active ? `2.5px solid ${bg}` : '2px solid var(--cream-dark)',
+                            background: active ? bg : 'var(--white)',
+                            color: active ? fg : 'var(--warm-black)',
+                            fontWeight: 700, fontSize: 12, transition: 'all .15s',
+                          }}>
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Customer's MoMo number */}
+                  <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.04em', display: 'block', marginBottom: 6 }}>
+                    Your {telco === 'mtn' ? 'MTN' : telco === 'telecel' ? 'Telecel' : 'AT'} number
+                  </label>
+                  <input value={customerMomo} onChange={e => setCustomerMomo(e.target.value)}
+                    placeholder="e.g. 024 123 4567" type="tel" inputMode="tel"
+                    style={{ width: '100%', padding: '12px 14px', borderRadius: 10, border: '1.5px solid var(--cream-dark)', fontSize: 14, outline: 'none', background: 'var(--white)', marginBottom: 14 }} />
+
+                  {/* Merchant payout details */}
+                  {merchantNumbers[telco] ? (
+                    <div style={{ background: 'var(--white)', borderRadius: 10, padding: '14px 16px', border: '1.5px dashed var(--sage)' }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Send GHS {total.toFixed(2)} to</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                        <div style={{ flex: 1, minWidth: 180 }}>
+                          <div style={{ fontFamily: 'monospace', fontSize: 20, fontWeight: 700, color: 'var(--sage-dark)', letterSpacing: '.04em' }}>
+                            {merchantNumbers[telco]}
+                          </div>
+                          {merchantNumbers.name && (
+                            <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 2 }}>Account name: <strong>{merchantNumbers.name}</strong></div>
+                          )}
+                        </div>
+                        <button onClick={copyMerchant} type="button"
+                          style={{ background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '8px 16px', fontWeight: 700, fontSize: 12 }}>
+                          {copyState || '📋 Copy'}
+                        </button>
+                      </div>
+                      <div style={{ marginTop: 12, fontSize: 12, color: 'var(--warm-gray)', lineHeight: 1.55 }}>
+                        Dial <strong style={{ color: 'var(--warm-black)' }}>
+                          {telco === 'mtn' ? '*170#' : telco === 'telecel' ? '*110#' : '*100#'}
+                        </strong> on the number above → choose <em>Transfer Money</em> → MoMo to MoMo → paste the number above → enter <strong>GHS {total.toFixed(2)}</strong> → confirm with your PIN.
+                      </div>
+                      <a href={`tel:${telco === 'mtn' ? '*170' : telco === 'telecel' ? '*110' : '*100'}%23`}
+                        style={{ marginTop: 10, display: 'inline-block', fontSize: 12, fontWeight: 700, color: 'var(--sage-dark)' }}>
+                        📞 Open dialer with {telco === 'mtn' ? '*170#' : telco === 'telecel' ? '*110#' : '*100#'}
+                      </a>
+                    </div>
+                  ) : (
+                    <div style={{ background: '#FFF4E0', border: '1px solid #F0C674', borderRadius: 10, padding: '12px 14px', fontSize: 12, color: '#7A5A00' }}>
+                      ⚠ The shop hasn't configured a {telco === 'mtn' ? 'MTN' : telco === 'telecel' ? 'Telecel' : 'AT'} number yet. Please pick another network, or choose Cash on Delivery.
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Download receipt checkbox */}
               <label style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '14px 16px', background: 'var(--cream)', borderRadius: 10, cursor: 'pointer', marginBottom: 24 }}>
@@ -579,9 +672,9 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
               <span style={{ color: 'var(--sage-dark)' }}>GHS {total.toFixed(2)}</span>
             </div>
           </div>
-          {afterLoyalty < FREE_DELIVERY_MIN && (
+          {false && (
             <div style={{ marginTop: 14, padding: '10px 12px', background: 'rgba(107,124,74,.1)', borderRadius: 8, fontSize: 12, color: 'var(--sage-dark)', fontWeight: 600 }}>
-              Add GHS {(FREE_DELIVERY_MIN - afterLoyalty).toFixed(2)} more for free delivery!
+              Flat GHS 10 delivery anywhere in Tamale.
             </div>
           )}
         </div>

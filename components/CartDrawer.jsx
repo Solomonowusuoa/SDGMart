@@ -66,11 +66,11 @@ const CartDrawer = ({ cart, setCart, setPage, onClose }) => {
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
               <span style={{ color: 'var(--warm-gray)', fontSize: 13 }}>Delivery</span>
-              <span style={{ fontSize: 13, color: total >= 150 ? 'var(--sage)' : 'var(--warm-gray)' }}>{total >= 150 ? 'FREE 🎉' : 'GHS 15.00'}</span>
+              <span style={{ fontSize: 13, color: 'var(--warm-gray)' }}>GHS 10.00</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20, paddingTop: 10, borderTop: '1.5px solid var(--cream-dark)' }}>
               <span style={{ fontWeight: 700, fontSize: 16 }}>Total</span>
-              <span style={{ fontWeight: 700, fontSize: 18, color: 'var(--sage-dark)' }}>GHS {(total + (total >= 150 ? 0 : 15)).toFixed(2)}</span>
+              <span style={{ fontWeight: 700, fontSize: 18, color: 'var(--sage-dark)' }}>GHS {(total + 10).toFixed(2)}</span>
             </div>
             <button onClick={() => { onClose(); setPage('checkout'); }}
               style={{ width: '100%', background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 15, transition: 'background .2s' }}

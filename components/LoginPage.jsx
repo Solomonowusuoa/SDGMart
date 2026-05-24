@@ -172,9 +172,8 @@ const LoginPage = ({ onAuth, onGuest }) => {
     background: 'var(--white)', marginBottom: 10,
   };
 
-  // Moody pantry/snacks photograph — same theme as the homepage hero.
-  // Reduced 3840→1920 width and quality 90→80 for faster first paint.
-  const HERO_BG = 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=1920&q=80&auto=format&fit=crop';
+  // Same image used by the homepage hero. Drop the file at icons/hero.jpg.
+  const HERO_BG = '/icons/hero.jpg';
 
   React.useEffect(() => {
     const link = document.createElement('link');

@@ -206,9 +206,21 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   const tabs = [
     ['overview','📊 Overview'],['orders','📦 Orders'],['inventory','🏪 Inventory'],
     ['expiry','⏰ Expiry'],['routes','🗺 Routes'],['riders','🛵 Riders'],
-    ['analytics','🔎 Analytics'],['comms','📣 Comms'],['metrics','📈 Metrics'],
+    ['analytics','🔎 Analytics'],['payments','💳 Payments'],['comms','📣 Comms'],['metrics','📈 Metrics'],
     ['security','🔐 Security'],
   ];
+
+  // Payments tab — admin sets per-telco merchant numbers shown to customers at checkout
+  const [momoCfg, setMomoCfg] = React.useState({ mtn: '', telecel: '', at: '', name: '' });
+  const [momoSavedAt, setMomoSavedAt] = React.useState('');
+  const loadMomo = React.useCallback(() => {
+    fetch('/api/momo/numbers').then(r => r.ok ? r.json() : {}).then(d => setMomoCfg({ mtn: d.mtn || '', telecel: d.telecel || '', at: d.at || '', name: d.name || '' })).catch(() => {});
+  }, []);
+  React.useEffect(() => { if (adminTab === 'payments') loadMomo(); }, [adminTab, loadMomo]);
+  const saveMomo = async () => {
+    const r = await apiFetch('/api/admin/momo/numbers', { method: 'POST', body: JSON.stringify(momoCfg) });
+    if (r.ok) { setMomoSavedAt(new Date().toLocaleTimeString()); setTimeout(() => setMomoSavedAt(''), 2500); }
+  };
 
   // Search analytics state — only loaded when the tab opens
   const [topQueries, setTopQueries] = React.useState(null);
@@ -736,6 +748,53 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* PAYMENTS — admin sets the MoMo numbers shown at checkout */}
+        {adminTab === 'payments' && (
+          <div>
+            <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginBottom: 8 }}>Payment Settings</h1>
+            <p style={{ color: 'var(--warm-gray)', fontSize: 14, marginBottom: 24, lineHeight: 1.5 }}>
+              Customers pick a network at checkout, then send money to the matching number below.
+              Leave a field blank to hide that network on the checkout page.
+            </p>
+
+            <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', padding: '24px 28px', boxShadow: 'var(--shadow)', maxWidth: 640 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {[
+                  ['mtn',     'MTN MoMo',     'e.g. 024 123 4567',  '#FFCC08', '#000'],
+                  ['telecel', 'Telecel Cash', 'e.g. 020 123 4567',  '#E60012', '#fff'],
+                  ['at',      'AT Money',     'e.g. 027 123 4567',  '#1A1A1A', '#fff'],
+                ].map(([key, label, ph, bg, fg]) => (
+                  <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                    <span style={{ width: 110, padding: '8px 12px', borderRadius: 8, background: bg, color: fg, fontWeight: 700, fontSize: 12, textAlign: 'center' }}>{label}</span>
+                    <input value={momoCfg[key]} onChange={e => setMomoCfg(c => ({ ...c, [key]: e.target.value }))}
+                      placeholder={ph}
+                      style={{ flex: 1, padding: '10px 12px', borderRadius: 8, border: '1.5px solid var(--cream-dark)', fontSize: 14, outline: 'none', background: 'var(--white)', fontFamily: 'monospace' }} />
+                  </div>
+                ))}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 6 }}>
+                  <span style={{ width: 110, fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textAlign: 'right' }}>Account name</span>
+                  <input value={momoCfg.name} onChange={e => setMomoCfg(c => ({ ...c, name: e.target.value }))}
+                    placeholder="e.g. SDGMart Tamale (shown to the customer so they can verify before sending)"
+                    style={{ flex: 1, padding: '10px 12px', borderRadius: 8, border: '1.5px solid var(--cream-dark)', fontSize: 14, outline: 'none', background: 'var(--white)' }} />
+                </div>
+              </div>
+              <div style={{ marginTop: 22, display: 'flex', gap: 12, alignItems: 'center' }}>
+                <button onClick={saveMomo}
+                  style={{ background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '11px 24px', fontWeight: 700, fontSize: 13 }}>
+                  Save numbers
+                </button>
+                {momoSavedAt && <span style={{ color: 'var(--sage)', fontSize: 13 }}>✓ Saved at {momoSavedAt}</span>}
+              </div>
+            </div>
+
+            <div style={{ marginTop: 24, padding: '16px 18px', background: 'var(--cream)', borderRadius: 10, fontSize: 12, color: 'var(--warm-gray)', lineHeight: 1.6, maxWidth: 640 }}>
+              <strong style={{ color: 'var(--warm-black)' }}>🔮 Want fully automatic MoMo?</strong> Hook the site up to <strong>Paystack</strong> later
+              — customer enters their phone, gets a USSD prompt to enter their PIN, money lands in your Paystack balance, your order is auto-marked paid via webhook.
+              ~1.95% per transaction. Requires a Ghana bank account and ~10 min of setup. Until then, the manual flow above works perfectly.
             </div>
           </div>
         )}

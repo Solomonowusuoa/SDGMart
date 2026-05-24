@@ -576,6 +576,26 @@ app.get('/api/admin/search/unmatched', requireAdmin, async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── MoMo merchant numbers (admin-configured, read by checkout) ───────────
+// Stored in app_config under key 'momo_numbers' as { mtn, telecel, at, name }
+app.get('/api/momo/numbers', async (req, res) => {
+  try {
+    const cfg = (await db.appConfig.get('momo_numbers')) || {};
+    res.json(cfg);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/admin/momo/numbers', requireAdmin, async (req, res) => {
+  const { mtn, telecel, at, name } = req.body || {};
+  // Light validation — accept whatever format; just trim and cap length
+  const clean = (v) => v == null ? '' : String(v).trim().slice(0, 30);
+  try {
+    await db.appConfig.set('momo_numbers', {
+      mtn: clean(mtn), telecel: clean(telecel), at: clean(at), name: clean(name),
+    });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Recurring orders ─────────────────────────────────────────────────────
 app.get('/api/me/recurring', requireAuth, async (req, res) => {
   try { res.json(await db.recurring.listForUser(req.user.id)); }
