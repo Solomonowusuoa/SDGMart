@@ -8,6 +8,50 @@ const zlib = require('zlib');
 const fs = require('fs');
 const db = require('./database');
 
+// ── Resend (transactional email) ─────────────────────────────────────────
+// RESEND_API_KEY = your key from https://resend.com/api-keys
+// RESEND_FROM_EMAIL = sender address (default: onboarding@resend.dev for
+//   immediate use without a custom domain. Once you verify your own domain
+//   in Resend, set this to e.g. 'noreply@sdgmart.com').
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'SDGMart <onboarding@resend.dev>';
+let _resend = null;
+function getResend() {
+  if (!RESEND_API_KEY) return null;
+  if (_resend) return _resend;
+  try {
+    const { Resend } = require('resend');
+    _resend = new Resend(RESEND_API_KEY);
+    return _resend;
+  } catch (_) { return null; }
+}
+async function sendEmail({ to, subject, html, text }) {
+  const client = getResend();
+  if (!client) return { skipped: true, reason: 'RESEND_API_KEY not set' };
+  try {
+    const r = await client.emails.send({ from: RESEND_FROM_EMAIL, to, subject, html, text });
+    return { ok: true, id: r.data && r.data.id };
+  } catch (e) {
+    console.warn('email send failed:', e.message);
+    return { error: e.message };
+  }
+}
+
+// Minimal on-brand wrapper for transactional emails — neutral, no images.
+function emailLayout({ title, intro, cta, ctaUrl, footer }) {
+  return `<!doctype html><html><body style="margin:0;background:#FFFFFF;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1A1A1A;line-height:1.5">
+    <div style="max-width:520px;margin:0 auto;padding:40px 28px">
+      <div style="font-weight:900;font-size:26px;letter-spacing:-.5px;margin-bottom:28px">SDGMart</div>
+      <h1 style="font-size:22px;font-weight:700;margin:0 0 14px">${title}</h1>
+      <p style="font-size:15px;color:#444;margin:0 0 24px">${intro}</p>
+      ${cta && ctaUrl ? `<a href="${ctaUrl}" style="display:inline-block;background:#000;color:#fff;text-decoration:none;padding:13px 26px;border-radius:8px;font-weight:700;font-size:14px">${cta}</a>
+      <p style="font-size:12px;color:#888;margin:20px 0 0;word-break:break-all">Or copy this link: <br/>${ctaUrl}</p>` : ''}
+      <hr style="border:none;border-top:1px solid #EEE;margin:36px 0 18px"/>
+      <p style="font-size:12px;color:#888;margin:0">${footer || "SDGMart — Tamale's smart grocery service."}</p>
+    </div>
+  </body></html>`;
+}
+
 // Google OAuth client ID — set GOOGLE_CLIENT_ID to enable "Sign in with Google".
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 let _googleClient = null;
@@ -364,9 +408,27 @@ app.post('/api/auth/signup', async (req, res) => {
     const u = await db.users.create({ name, email, phone, password, refCode, role: 'customer' });
     const verifyToken = await db.makeEmailToken(u.id, 'verify');
     const verifyLink = `${req.protocol}://${req.get('host')}/api/auth/verify?token=${verifyToken}`;
-    console.log(`✉️  Verification link for ${u.email}: ${verifyLink}`);
+    // Send real email if Resend is configured; otherwise fall back to dev-style link surfacing.
+    const emailResult = await sendEmail({
+      to: u.email,
+      subject: 'Verify your SDGMart email',
+      html: emailLayout({
+        title: `Welcome to SDGMart, ${u.name.split(' ')[0]}!`,
+        intro: 'Tap the button below to verify your email. This link expires in 24 hours.',
+        cta: 'Verify my email', ctaUrl: verifyLink,
+        footer: "If you didn't sign up, you can safely ignore this email.",
+      }),
+      text: `Welcome to SDGMart!\n\nVerify your email by opening: ${verifyLink}\n\n(Link expires in 24 hours.)`,
+    });
+    if (emailResult.skipped) console.log(`✉️  (no email config) verification link for ${u.email}: ${verifyLink}`);
     const token = await db.sessions.create(u.id);
-    res.status(201).json({ user: publicUser(u), token, verificationLink: verifyLink, message: 'Account created. Please verify your email.' });
+    res.status(201).json({
+      user: publicUser(u), token,
+      // Only return the raw link in dev (when no real email goes out) so the UI can still surface it
+      verificationLink: emailResult.skipped ? verifyLink : undefined,
+      emailSent: !!emailResult.ok,
+      message: emailResult.ok ? 'Account created — check your email to verify.' : 'Account created. Please verify your email.',
+    });
   } catch (e) {
     console.error('signup failed:', e);
     res.status(500).json({ error: e.message || 'Signup failed' });
@@ -437,8 +499,18 @@ app.post('/api/auth/resend-verification', requireAuth, async (req, res) => {
   if (req.user.emailVerified) return res.json({ ok: true, alreadyVerified: true });
   const verifyToken = await db.makeEmailToken(req.user.id, 'verify');
   const verifyLink = `${req.protocol}://${req.get('host')}/api/auth/verify?token=${verifyToken}`;
-  console.log(`✉️  Re-sent verification for ${req.user.email}: ${verifyLink}`);
-  res.json({ ok: true, verificationLink: verifyLink });
+  const emailResult = await sendEmail({
+    to: req.user.email,
+    subject: 'Verify your SDGMart email',
+    html: emailLayout({
+      title: 'Verify your email',
+      intro: 'You asked us to re-send your verification link. Tap below to verify (expires in 24h).',
+      cta: 'Verify my email', ctaUrl: verifyLink,
+    }),
+    text: `Verify your email: ${verifyLink}`,
+  });
+  if (emailResult.skipped) console.log(`✉️  (no email config) re-sent for ${req.user.email}: ${verifyLink}`);
+  res.json({ ok: true, emailSent: !!emailResult.ok, verificationLink: emailResult.skipped ? verifyLink : undefined });
 });
 
 // ── Password reset ───────────────────────────────────────────────────────
@@ -454,8 +526,18 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     if (!u) return res.json({ ok: true });
     const token = await db.makeEmailToken(u.id, 'reset');
     const link = `${req.protocol}://${req.get('host')}/?reset=${token}`;
-    console.log(`🔑 Password reset link for ${u.email}: ${link}`);
-    res.json({ ok: true, resetLink: link });
+    const emailResult = await sendEmail({
+      to: u.email,
+      subject: 'Reset your SDGMart password',
+      html: emailLayout({
+        title: 'Reset your password',
+        intro: 'Tap below to choose a new password. This link expires in 24 hours. If you didn\'t request this, ignore the email — your current password stays unchanged.',
+        cta: 'Set a new password', ctaUrl: link,
+      }),
+      text: `Reset your SDGMart password: ${link}`,
+    });
+    if (emailResult.skipped) console.log(`🔑 (no email config) reset for ${u.email}: ${link}`);
+    res.json({ ok: true, emailSent: !!emailResult.ok, resetLink: emailResult.skipped ? link : undefined });
   } catch (e) { console.error('forgot-password failed:', e); res.status(500).json({ error: e.message }); }
 });
 

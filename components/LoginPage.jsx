@@ -104,11 +104,17 @@ const LoginPage = ({ onAuth, onGuest }) => {
       if (!res.ok) { setErr(data.error || 'Login failed'); setLoading(false); return; }
       // For signup, surface the verification link so the user can confirm
       // their email even when no real SMTP is configured.
-      if (mode === 'signup' && data.verificationLink) {
-        const proceed = window.confirm(
-          `Account created!\n\nA verification link has been generated:\n${data.verificationLink}\n\nClick OK to open it now (you can also find it in the server console).`
-        );
-        if (proceed) window.open(data.verificationLink, '_blank', 'noopener');
+      if (mode === 'signup') {
+        if (data.emailSent) {
+          // Real email landed — friendly toast, no popup
+          setInfo(`Account created — check ${form.email} for your verification link.`);
+        } else if (data.verificationLink) {
+          // Dev fallback when no email provider is configured
+          const proceed = window.confirm(
+            `Account created!\n\nA verification link has been generated:\n${data.verificationLink}\n\nClick OK to open it now (also logged to server console).`
+          );
+          if (proceed) window.open(data.verificationLink, '_blank', 'noopener');
+        }
       }
       // Stash the session token alongside the user so apiFetch can find it.
       onAuth({ ...data.user, token: data.token });
@@ -131,13 +137,15 @@ const LoginPage = ({ onAuth, onGuest }) => {
       const data = await r.json();
       // For dev convenience: server returns the reset link directly so users
       // can complete the flow without real email being configured yet.
-      if (data.resetLink) {
+      if (data.emailSent) {
+        setInfo(`If an account exists for ${form.email}, a reset link has been emailed. Check your inbox.`);
+      } else if (data.resetLink) {
         const open = window.confirm(
           `If an account exists for ${form.email}, a reset link has been generated:\n\n${data.resetLink}\n\nClick OK to open it now (also logged to server console).`
         );
         if (open) window.location.href = data.resetLink;
       } else {
-        setInfo(`If an account exists for ${form.email}, we've sent a reset link. Check the server console (no email is configured yet).`);
+        setInfo(`If an account exists for ${form.email}, a reset link has been sent.`);
       }
     } catch (_) {
       setErr('Network error — please try again');
