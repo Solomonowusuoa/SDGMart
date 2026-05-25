@@ -278,8 +278,13 @@ const App = () => {
         <MyOrdersPage
           setPage={navigateTo}
           openTracking={(id) => { setTrackingOrderId(id); navigateTo('tracking'); }}
+          setCart={setCart}
         />
       )}
+      {page === 'account' && currentUser && currentUser.id && (
+        <AccountPage setPage={navigateTo} currentUser={currentUser} setCurrentUser={setCurrentUser} />
+      )}
+      <ReviewPromptModal currentUser={currentUser} />
       {page === 'tracking' && trackingOrderId && (
         <OrderTrackingPage
           orderId={trackingOrderId}

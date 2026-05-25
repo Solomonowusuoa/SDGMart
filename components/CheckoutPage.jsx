@@ -1,6 +1,8 @@
 // CheckoutPage — full checkout with Family Mode + WhatsApp bridge
 // Flat 10 GHS delivery for any location within Tamale.
 const FLAT_DELIVERY = 10;
+// Signed-in users get their first ever order delivered free.
+const FIRST_ORDER_FREE = true;
 
 // Hoisted out of CheckoutPage so React doesn't recreate the component on
 // every render (which would unmount the input and steal focus on each
@@ -33,6 +35,32 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // Recurring orders: opt-in checkbox + cadence (every N days)
   const [autoReorder, setAutoReorder] = React.useState(false);
   const [reorderCadence, setReorderCadence] = React.useState(14);
+  // Saved-address book for one-tap checkout
+  const [savedAddresses, setSavedAddresses] = React.useState([]);
+  React.useEffect(() => {
+    if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
+    apiFetch('/api/me/addresses').then(r => r.ok ? r.json() : []).then(list => {
+      setSavedAddresses(list || []);
+      // Auto-pre-select last-used or default address
+      const preferred = list.find(a => a.isLastUsed) || list.find(a => a.isDefault);
+      if (preferred && !form.neighborhood) {
+        setForm(f => ({
+          ...f,
+          neighborhood: preferred.neighborhood || f.neighborhood,
+          address: preferred.address || f.address,
+          location: preferred.location || f.location,
+        }));
+      }
+    }).catch(() => {});
+  }, []);
+  const applyAddress = (a) => {
+    setForm(f => ({
+      ...f,
+      neighborhood: a.neighborhood || '',
+      address: a.address || '',
+      location: a.location || null,
+    }));
+  };
   // MoMo: customer's own number, admin's merchant numbers per telco, picked telco
   const [customerMomo, setCustomerMomo] = React.useState('');
   const [telco, setTelco] = React.useState('mtn');
@@ -85,7 +113,11 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // Loyalty applies after squad discount, capped at remaining subtotal
   const loyaltyUsed = useLoyalty ? Math.min(loyaltyAvailable, subtotalAfterDiscount) : 0;
   const afterLoyalty = subtotalAfterDiscount - loyaltyUsed;
-  const delivery = FLAT_DELIVERY;
+  // First-order-free for signed-in users (prevents guest abuse: guests pay normally)
+  const isFirstOrderFree = FIRST_ORDER_FREE
+    && currentUser && currentUser.id && currentUser.role !== 'guest'
+    && currentUser.firstOrderDone === false;
+  const delivery = isFirstOrderFree ? 0 : FLAT_DELIVERY;
   const total = afterLoyalty + delivery;
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -367,6 +399,38 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                   </div>
                 );
               })()}
+
+              {/* First-order-free notice */}
+              {isFirstOrderFree && (
+                <div style={{ background: '#FFF8E1', border: '1px solid #F0DCA0', borderRadius: 10, padding: '12px 14px', marginBottom: 16, display: 'flex', gap: 10 }}>
+                  <span style={{ fontSize: 18 }}>🎁</span>
+                  <div style={{ fontSize: 13, lineHeight: 1.5, color: '#7A5A00' }}>
+                    <div style={{ fontWeight: 700 }}>Welcome — your first delivery is FREE</div>
+                    No delivery fee on this order. (Future orders are a flat GHS 10.)
+                  </div>
+                </div>
+              )}
+
+              {/* Saved-address quick picker */}
+              {savedAddresses.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>
+                    Deliver to one of your saved addresses
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {savedAddresses.map(a => {
+                      const active = form.neighborhood === a.neighborhood && (a.location && form.location && Math.abs(a.location.lat - (form.location.lat || 0)) < 0.0005);
+                      return (
+                        <button key={a.id} type="button" onClick={() => applyAddress(a)}
+                          style={{ fontSize: 12, fontWeight: 700, padding: '8px 14px', borderRadius: 999, border: `1.5px solid ${active ? 'var(--sage)' : 'var(--cream-dark)'}`, background: active ? 'rgba(0,0,0,.04)' : 'var(--white)' }}>
+                          {a.label}{a.isLastUsed ? ' (last used)' : ''}
+                          <span style={{ color: 'var(--warm-gray)', fontWeight: 500, marginLeft: 6, fontSize: 11 }}>{a.neighborhood}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {/* Family mode toggle */}
               <div style={{ marginBottom: 24, padding: '14px 18px', background: familyMode ? 'rgba(212,160,23,.12)' : 'var(--cream)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
@@ -669,7 +733,9 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
             )}
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 12 }}>
               <span style={{ color: 'var(--warm-gray)' }}>Delivery</span>
-              <span style={{ color: delivery === 0 ? 'var(--sage)' : 'inherit' }}>{delivery === 0 ? 'FREE' : `GHS ${delivery.toFixed(2)}`}</span>
+              <span style={{ color: delivery === 0 ? 'var(--sage)' : 'inherit', fontWeight: delivery === 0 ? 700 : 400 }}>
+                {delivery === 0 ? (isFirstOrderFree ? '🎁 FIRST ORDER FREE' : 'FREE') : `GHS ${delivery.toFixed(2)}`}
+              </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 16 }}>
               <span>Total</span>

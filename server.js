@@ -28,7 +28,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 app.set('trust proxy', 1);
 app.use(cors());
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '3mb' })); // allow base64 product photos (~1.5MB raw)
 
 // ── Session-based auth middleware ────────────────────────────────────────
 async function authMiddleware(req, res, next) {
@@ -303,7 +303,15 @@ app.post('/api/orders', async (req, res) => {
       if (discountApplied) await db.squads.consumeDiscount(userId);
       if (loyaltyUsed) await db.squads.consumeLoyalty(userId, loyaltyUsed);
       squadInfo = await db.squads.recordSpend(userId, Number(subtotal || total || 0));
+      // Mark first order done so future orders don't get the free-delivery benefit
+      if (!req.user.firstOrderDone) {
+        await db.sb.from('users').update({ first_order_done: true }).eq('id', userId);
+      }
+      // Remember this location as the user's last-used pickup so checkout pre-selects it next time
+      if (loc) await db.addresses.markLastUsed(userId, loc, neighborhood);
     }
+    // Invalidate the cached delivered-count so ticker increments quickly
+    db.stats.invalidateDelivered();
     res.status(201).json({
       ok: true, id: created.id,
       deliveryDate: deliveryDateStr, priority: afterCutoff,
@@ -634,6 +642,163 @@ app.get('/api/admin/search/top', requireAdmin, async (req, res) => {
 app.get('/api/admin/search/unmatched', requireAdmin, async (req, res) => {
   try { res.json(await db.searchLog.unmatchedQueries({ days: parseInt(req.query.days) || 30, limit: parseInt(req.query.limit) || 20 })); }
   catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Saved addresses ──────────────────────────────────────────────────────
+app.get('/api/me/addresses', requireAuth, async (req, res) => {
+  try { res.json(await db.addresses.list(req.user.id)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/me/addresses', requireAuth, async (req, res) => {
+  try { res.json(await db.addresses.create(req.user.id, req.body || {})); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/me/addresses/:id', requireAuth, async (req, res) => {
+  try { res.json(await db.addresses.update(req.user.id, req.params.id, req.body || {})); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/me/addresses/:id', requireAuth, async (req, res) => {
+  try { await db.addresses.delete(req.user.id, req.params.id); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Update profile (name + phone)
+app.put('/api/me/profile', requireAuth, async (req, res) => {
+  const { name, phone } = req.body || {};
+  try {
+    const { data, error } = await db.sb.from('users').update({
+      name: String(name || req.user.name).slice(0, 100),
+      phone: String(phone || '').slice(0, 30),
+    }).eq('id', req.user.id).select().single();
+    if (error) throw error;
+    const out = {}; for (const k of Object.keys(data)) out[k.replace(/_([a-z])/g, (_, c) => c.toUpperCase())] = data[k];
+    res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Reviews ──────────────────────────────────────────────────────────────
+app.get('/api/products/:id/reviews', async (req, res) => {
+  try { res.json(await db.reviews.forProduct(req.params.id)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/products/reviews/summary', async (req, res) => {
+  // ?ids=1,2,3
+  try {
+    const ids = String(req.query.ids || '').split(',').map(s => parseInt(s)).filter(Boolean);
+    res.json(await db.reviews.summaryForProducts(ids));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/me/pending-reviews', requireAuth, async (req, res) => {
+  try { res.json(await db.reviews.pendingForUser(req.user.id)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/me/reviews', requireAuth, async (req, res) => {
+  const { productId, orderId, rating, message } = req.body || {};
+  if (!productId || !rating) return res.status(400).json({ error: 'productId and rating required' });
+  try { res.json(await db.reviews.create({ userId: req.user.id, productId, orderId, rating, message })); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ── Issue reports (delivered-order complaints) ───────────────────────────
+app.post('/api/me/orders/:id/report-issue', requireAuth, async (req, res) => {
+  const o = await db.orders.get(req.params.id);
+  if (!o) return res.status(404).json({ error: 'Order not found' });
+  if (String(o.userId) !== String(req.user.id)) return res.status(403).json({ error: 'Not your order' });
+  const { issueType, description } = req.body || {};
+  if (!description) return res.status(400).json({ error: 'Please describe the issue' });
+  try {
+    const rep = await db.issueReports.create({ orderId: o.id, userId: req.user.id, issueType, description });
+    res.json(rep);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/admin/issue-reports', requireAdmin, async (req, res) => {
+  try { res.json(await db.issueReports.listAll()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/admin/issue-reports/:id/resolve', requireAdmin, async (req, res) => {
+  try { await db.issueReports.resolve(req.params.id, (req.body && req.body.note) || ''); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Cancel order (customer, within 15 min of placement) ──────────────────
+app.post('/api/me/orders/:id/cancel', requireAuth, async (req, res) => {
+  const result = await db.cancelOrder(req.params.id, req.user.id, (req.body && req.body.reason) || '');
+  if (!result || result.error) return res.status(400).json({ error: (result && result.error) || 'Cancel failed' });
+  res.json({ ok: true });
+});
+
+// ── Live counter ─────────────────────────────────────────────────────────
+app.get('/api/stats/delivered-count', async (req, res) => {
+  try { res.json({ count: await db.stats.deliveredCount() }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Promotions ───────────────────────────────────────────────────────────
+app.get('/api/promotions/active', async (req, res) => {
+  try { res.json(await db.promotions.listActive()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/admin/promotions', requireAdmin, async (req, res) => {
+  try { res.json(await db.promotions.listAll()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/admin/promotions', requireAdmin, async (req, res) => {
+  try { res.json(await db.promotions.create(req.body || {})); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/admin/promotions/:id', requireAdmin, async (req, res) => {
+  try { await db.promotions.delete(req.params.id); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Publish + broadcast push notification to all subscribers
+app.post('/api/admin/promotions/:id/publish', requireAdmin, async (req, res) => {
+  try {
+    const promo = await db.promotions.publish(req.params.id);
+    if (!promo) return res.status(404).json({ error: 'Not found' });
+    if (!promo.pushSent && webpush && VAPID) {
+      // Fire push to every subscriber asynchronously — don't make admin wait
+      (async () => {
+        const { data: subs } = await db.sb.from('push_subscriptions').select('user_id, endpoint, keys');
+        await Promise.all((subs || []).map(async s => {
+          try {
+            await webpush.sendNotification({ endpoint: s.endpoint, keys: s.keys }, JSON.stringify({
+              title: `⚡ ${promo.title}`,
+              body: promo.description || `Up to ${promo.discountPercent}% off — limited time`,
+              url: '/', tag: `promo-${promo.id}`,
+            }));
+          } catch (e) {
+            if (e.statusCode === 404 || e.statusCode === 410) await db.pushSubs.remove(s.endpoint);
+          }
+        }));
+        await db.promotions.markPushSent(promo.id);
+      })().catch(e => console.warn('promo broadcast failed:', e.message));
+    }
+    res.json(promo);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Admin: upload product photo ──────────────────────────────────────────
+app.post('/api/admin/upload-image', requireAdmin, async (req, res) => {
+  const { dataUrl } = req.body || {};
+  if (!dataUrl || !dataUrl.startsWith('data:')) return res.status(400).json({ error: 'dataUrl required' });
+  try {
+    const m = dataUrl.match(/^data:(.+?);base64,(.+)$/);
+    if (!m) return res.status(400).json({ error: 'invalid data url' });
+    const mime = m[1];
+    const buf = Buffer.from(m[2], 'base64');
+    if (buf.length > 1.5 * 1024 * 1024) return res.status(413).json({ error: 'image too large (max ~1.5MB)' });
+    const url = await db.uploadProductPhoto(buf, mime);
+    res.json({ url });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Admin: surprise extra on an order ────────────────────────────────────
+app.post('/api/admin/orders/:id/surprise', requireAdmin, async (req, res) => {
+  const { note } = req.body || {};
+  try {
+    await db.sb.from('orders').update({ surprise_extra: String(note || '').slice(0, 200) }).eq('id', req.params.id);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── MoMo merchant numbers (admin-configured, read by checkout) ───────────

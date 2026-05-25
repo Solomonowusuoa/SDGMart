@@ -40,14 +40,21 @@ const ProductCard = ({ product, onAdd, onView, compact }) => {
       onMouseLeave={e => { e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.boxShadow='var(--shadow)'; }}
     >
       {/* Image area */}
-      <div onClick={() => onView(product)} style={{ position: 'relative', background: bg, height: compact ? 120 : 150, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <svg width="60" height="60" viewBox="0 0 60 60">
-          <rect width="60" height="60" rx="8" fill={bg}/>
-          <text x="30" y="36" textAnchor="middle" fontSize="28" fill={fg} fontFamily="sans-serif">{product.category[0]}</text>
-        </svg>
+      <div onClick={() => onView(product)} style={{ position: 'relative', background: bg, height: compact ? 120 : 150, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+        {product.img ? (
+          <img src={product.img} alt={product.name}
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            onError={e => { e.target.style.display = 'none'; }} />
+        ) : (
+          <svg width="60" height="60" viewBox="0 0 60 60">
+            <rect width="60" height="60" rx="8" fill={bg}/>
+            <text x="30" y="36" textAnchor="middle" fontSize="28" fill={fg} fontFamily="sans-serif">{product.category[0]}</text>
+          </svg>
+        )}
         <div style={{ position: 'absolute', top: 8, left: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
           {(product.stock || 0) <= 0 && <span className="badge" style={{ background: '#1A1A1A', color: '#fff' }}>Sold out</span>}
-          {product.bestseller && (product.stock || 0) > 0 && <span className="badge badge-green">★ Top</span>}
+          {product.onSale && (product.stock || 0) > 0 && <span className="badge" style={{ background: '#E03A2B', color: '#fff' }}>⚡ -{product.onSale}%</span>}
+          {product.bestseller && (product.stock || 0) > 0 && !product.onSale && <span className="badge badge-green">★ Top</span>}
           {expiring && dl > 0 && dl <= 30 && <span className="badge badge-gold">⏳ Clearance</span>}
           {expiring && dl > 30 && dl <= 60 && <span className="badge badge-gold">Sale</span>}
         </div>
@@ -239,8 +246,25 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
     return () => { try { document.head.removeChild(link); } catch (_) {} };
   }, []);
 
+  // Live counters + active promotions
+  const [deliveredCount, setDeliveredCount] = React.useState(null);
+  const [promos, setPromos] = React.useState([]);
+  React.useEffect(() => {
+    fetch('/api/stats/delivered-count').then(r => r.ok ? r.json() : { count: 0 }).then(d => setDeliveredCount(d.count));
+    fetch('/api/promotions/active').then(r => r.ok ? r.json() : []).then(setPromos).catch(() => {});
+    const t = setInterval(() => fetch('/api/stats/delivered-count').then(r => r.ok ? r.json() : null).then(d => d && setDeliveredCount(d.count)).catch(() => {}), 60000);
+    return () => clearInterval(t);
+  }, []);
+
   return (
     <div>
+      {/* Active flash sale banner */}
+      {promos.length > 0 && (
+        <div style={{ background: 'linear-gradient(90deg,#1A1A1A,#000)', color: '#fff', padding: '12px 16px', textAlign: 'center', fontSize: 13, fontWeight: 600 }}>
+          ⚡ <strong>{promos[0].title}</strong> — up to {promos[0].discountPercent}% off · ends {new Date(promos[0].endsAt).toLocaleString('en-GB', { weekday: 'short', hour: 'numeric', minute: '2-digit' })}
+        </div>
+      )}
+
       {/* Full-width hero */}
       <section style={{
         position: 'relative', height: 380, overflow: 'hidden',
@@ -252,6 +276,11 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
         <div style={{ maxWidth: 1280, margin: '0 auto', padding: isMobile ? '0 20px' : '0 32px', color: '#fff', width: '100%' }}>
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.18em', textTransform: 'uppercase', opacity: .85 }}>
             Tamale's Smart Grocery Service
+            {deliveredCount != null && deliveredCount > 0 && (
+              <span style={{ marginLeft: 12, opacity: .8, fontWeight: 600, letterSpacing: '.08em' }}>
+                · {deliveredCount.toLocaleString()} order{deliveredCount === 1 ? '' : 's'} delivered
+              </span>
+            )}
           </div>
           <h1 style={{
             fontFamily: 'var(--font-head)', fontWeight: 700,

@@ -612,14 +612,226 @@ async function bootstrap() {
   }
 }
 
+// ── Saved addresses ──────────────────────────────────────────────────────
+const addresses = {
+  async list(userId) {
+    const { data, error } = await sb.from('addresses').select('*').eq('user_id', userId).order('is_default', { ascending: false }).order('created_at');
+    if (error) throw error;
+    return rowsOut(data);
+  },
+  async create(userId, { label, neighborhood, address, location, isDefault }) {
+    if (isDefault) await sb.from('addresses').update({ is_default: false }).eq('user_id', userId);
+    const { data, error } = await sb.from('addresses').insert({
+      user_id: userId, label, neighborhood, address, location: location || null, is_default: !!isDefault,
+    }).select().single();
+    if (error) throw error;
+    return rowOut(data);
+  },
+  async update(userId, id, patch) {
+    if (patch.isDefault) await sb.from('addresses').update({ is_default: false }).eq('user_id', userId);
+    const { data, error } = await sb.from('addresses').update(rowIn(patch)).eq('id', id).eq('user_id', userId).select().single();
+    if (error) throw error;
+    return rowOut(data);
+  },
+  async delete(userId, id) {
+    await sb.from('addresses').delete().eq('id', id).eq('user_id', userId);
+  },
+  // Called automatically when an order is placed — marks the chosen location as the user's last-used
+  async markLastUsed(userId, location, neighborhood) {
+    await sb.from('addresses').update({ is_last_used: false }).eq('user_id', userId);
+    if (!location || !location.lat) return;
+    // Try to find an existing matching address (lat/lng within ~50m)
+    const { data: existing } = await sb.from('addresses').select('*').eq('user_id', userId);
+    let match = null;
+    for (const a of (existing || [])) {
+      if (a.location && Math.abs(a.location.lat - location.lat) < 0.0005 && Math.abs(a.location.lng - location.lng) < 0.0005) {
+        match = a; break;
+      }
+    }
+    if (match) {
+      await sb.from('addresses').update({ is_last_used: true }).eq('id', match.id);
+    } else {
+      await sb.from('addresses').insert({
+        user_id: userId, label: 'Recent', neighborhood, location, is_last_used: true,
+      });
+    }
+  },
+};
+
+// ── Reviews ──────────────────────────────────────────────────────────────
+const reviews = {
+  async forProduct(productId) {
+    const { data, error } = await sb.from('reviews').select('*').eq('product_id', productId).eq('approved', true).order('created_at', { ascending: false });
+    if (error) throw error;
+    return rowsOut(data);
+  },
+  async summaryForProducts(productIds) {
+    if (!productIds || !productIds.length) return {};
+    const { data, error } = await sb.from('reviews').select('product_id, rating').in('product_id', productIds).eq('approved', true);
+    if (error) throw error;
+    const out = {};
+    (data || []).forEach(r => {
+      if (!out[r.product_id]) out[r.product_id] = { sum: 0, count: 0 };
+      out[r.product_id].sum += r.rating;
+      out[r.product_id].count += 1;
+    });
+    Object.keys(out).forEach(k => { out[k] = { avg: out[k].sum / out[k].count, count: out[k].count }; });
+    return out;
+  },
+  async create({ userId, productId, orderId, rating, message }) {
+    const { data, error } = await sb.from('reviews').insert({
+      user_id: userId, product_id: productId, order_id: orderId,
+      rating: Math.max(1, Math.min(5, parseInt(rating))),
+      message: (message || '').slice(0, 800),
+    }).select().single();
+    if (error) throw error;
+    return rowOut(data);
+  },
+  // Returns the items still pending review from the user's recent delivered orders
+  async pendingForUser(userId) {
+    const { data: ordrs } = await sb.from('orders').select('*').eq('user_id', userId).eq('status', 'delivered').order('created_at', { ascending: false }).limit(5);
+    if (!ordrs || !ordrs.length) return [];
+    const orderIds = ordrs.map(o => o.id);
+    const { data: existing } = await sb.from('reviews').select('product_id, order_id').eq('user_id', userId).in('order_id', orderIds);
+    const reviewed = new Set((existing || []).map(r => `${r.order_id}:${r.product_id}`));
+    const pending = [];
+    for (const o of ordrs) {
+      const items = Array.isArray(o.items) ? o.items : [];
+      for (const it of items) {
+        if (!reviewed.has(`${o.id}:${it.id}`)) pending.push({ orderId: o.id, productId: it.id, name: it.name });
+      }
+    }
+    return pending.slice(0, 5); // cap at 5 items at a time
+  },
+};
+
+// ── Issue reports ────────────────────────────────────────────────────────
+const issueReports = {
+  async create({ orderId, userId, issueType, description }) {
+    const { data, error } = await sb.from('issue_reports').insert({
+      order_id: orderId, user_id: userId,
+      issue_type: String(issueType || 'other').slice(0, 30),
+      description: String(description || '').slice(0, 1000),
+    }).select().single();
+    if (error) throw error;
+    return rowOut(data);
+  },
+  async listAll() {
+    const { data, error } = await sb.from('issue_reports').select('*').order('created_at', { ascending: false });
+    if (error) throw error;
+    return rowsOut(data);
+  },
+  async resolve(id, note) {
+    await sb.from('issue_reports').update({
+      resolved: true, resolved_at: new Date().toISOString(), resolved_note: note || '',
+    }).eq('id', id);
+  },
+};
+
+// ── Promotions ───────────────────────────────────────────────────────────
+const promotions = {
+  async listActive() {
+    const now = new Date().toISOString();
+    const { data, error } = await sb.from('promotions').select('*')
+      .eq('published', true).lte('starts_at', now).gte('ends_at', now)
+      .order('starts_at', { ascending: false });
+    if (error) throw error;
+    return rowsOut(data);
+  },
+  async listAll() {
+    const { data, error } = await sb.from('promotions').select('*').order('created_at', { ascending: false });
+    if (error) throw error;
+    return rowsOut(data);
+  },
+  async get(id) {
+    const { data, error } = await sb.from('promotions').select('*').eq('id', id).maybeSingle();
+    if (error) throw error;
+    return rowOut(data);
+  },
+  async create({ title, description, productIds, discountPercent, startsAt, endsAt }) {
+    const { data, error } = await sb.from('promotions').insert({
+      title, description: description || '',
+      product_ids: productIds || [],
+      discount_percent: parseInt(discountPercent),
+      starts_at: startsAt, ends_at: endsAt,
+    }).select().single();
+    if (error) throw error;
+    return rowOut(data);
+  },
+  async publish(id) {
+    const { data, error } = await sb.from('promotions').update({
+      published: true, published_at: new Date().toISOString(),
+    }).eq('id', id).select().single();
+    if (error) throw error;
+    return rowOut(data);
+  },
+  async markPushSent(id) {
+    await sb.from('promotions').update({ push_sent: true }).eq('id', id);
+  },
+  async delete(id) {
+    await sb.from('promotions').delete().eq('id', id);
+  },
+};
+
+// ── Stats (cached lightly) ───────────────────────────────────────────────
+let _deliveredCache = { count: 0, at: 0 };
+const stats = {
+  async deliveredCount() {
+    if (Date.now() - _deliveredCache.at < 30000) return _deliveredCache.count; // 30s cache
+    const { count } = await sb.from('orders').select('*', { count: 'exact', head: true }).eq('status', 'delivered');
+    _deliveredCache = { count: count || 0, at: Date.now() };
+    return _deliveredCache.count;
+  },
+  invalidateDelivered() { _deliveredCache.at = 0; },
+};
+
+// ── Photo upload to Supabase Storage ─────────────────────────────────────
+async function ensurePhotoBucket() {
+  try {
+    // Will return error if bucket already exists; we ignore that.
+    await sb.storage.createBucket('product-photos', { public: true });
+  } catch (_) {}
+}
+async function uploadProductPhoto(buffer, mimeType = 'image/jpeg') {
+  await ensurePhotoBucket();
+  const ext = (mimeType.split('/')[1] || 'jpg').replace('+xml', '');
+  const path = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
+  const { error } = await sb.storage.from('product-photos').upload(path, buffer, {
+    contentType: mimeType, cacheControl: '31536000',
+  });
+  if (error) throw error;
+  const { data } = sb.storage.from('product-photos').getPublicUrl(path);
+  return data.publicUrl;
+}
+
+// ── Cancel order ─────────────────────────────────────────────────────────
+// Wraps orders.update with a reason + timestamp.
+async function cancelOrder(orderId, userId, reason) {
+  const o = await orders.get(orderId);
+  if (!o) return null;
+  if (o.userId && String(o.userId) !== String(userId)) return { error: 'not yours' };
+  if (o.status !== 'queued') return { error: 'order is already being processed' };
+  // 15-minute cancellation window
+  const ageMin = (Date.now() - new Date(o.createdAt).getTime()) / 60000;
+  if (ageMin > 15) return { error: 'cancellation window has passed (15 min)' };
+  await sb.from('orders').update({
+    status: 'cancelled',
+    cancel_reason: String(reason || '').slice(0, 300),
+    cancelled_at: new Date().toISOString(),
+  }).eq('id', orderId);
+  return { ok: true };
+}
+
 module.exports = {
   sb,
   users, squads, sessions, riders, orders, products,
+  addresses, reviews, issueReports, promotions, stats,
   pushSubs, searchLog, recurring, appConfig,
   hashPassword, verifyPassword, validatePasswordStrength,
   rateCheck, rateClear,
   makeEmailToken, consumeEmailToken,
   createRider, attachOrderLocation,
+  uploadProductPhoto, cancelOrder,
   getVapidKeys, bootstrap,
   ADMIN_EMAIL, ADMIN_DEFAULT_PW,
 };

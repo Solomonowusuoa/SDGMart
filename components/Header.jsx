@@ -105,10 +105,12 @@ const Header = ({ cart, page, setPage, setSelectedCategory, searchQuery, setSear
             </span>
           )}
           {!isMobile && currentUser && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: isV2 ? 'rgba(255,255,255,.12)' : 'var(--cream)', borderRadius: 20, padding: '5px 6px 5px 12px' }}>
-              <span style={{ fontSize: 12, fontWeight: 700, color: isV2 ? '#F5F0E8' : 'var(--sage-dark)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: isV2 ? 'rgba(255,255,255,.12)' : 'var(--cream)', borderRadius: 20, padding: '5px 6px 5px 6px' }}>
+              <button onClick={() => currentUser.role !== 'guest' && setPage('account')}
+                title={currentUser.role === 'guest' ? 'Guest' : 'Account settings'}
+                style={{ fontSize: 12, fontWeight: 700, color: isV2 ? '#F5F0E8' : 'var(--sage-dark)', padding: '0 8px', cursor: currentUser.role === 'guest' ? 'default' : 'pointer' }}>
                 {currentUser.role === 'guest' ? 'Guest' : (currentUser.name || 'You').split(' ')[0]}
-              </span>
+              </button>
               <button onClick={onLogout} title="Sign out"
                 style={{ fontSize: 11, fontWeight: 700, color: isV2 ? 'rgba(245,240,232,.85)' : 'var(--warm-gray)', padding: '3px 10px', borderRadius: 14, background: isV2 ? 'rgba(255,255,255,.12)' : 'var(--white)' }}>
                 {currentUser.role === 'guest' ? 'Sign in' : 'Sign out'}

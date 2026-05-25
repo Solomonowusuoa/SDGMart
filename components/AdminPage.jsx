@@ -6,7 +6,8 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   const [products, setProducts] = React.useState(window.PRODUCTS.map(p => ({ ...p })));
   const [orders, setOrders] = React.useState([]);
   const [ordersLoading, setOrdersLoading] = React.useState(false);
-  const [newProduct, setNewProduct] = React.useState({ name:'', category: window.CATEGORIES[0], price:'', unit:'', bestBefore:'', stock:'', description:'' });
+  const [newProduct, setNewProduct] = React.useState({ name:'', category: window.CATEGORIES[0], price:'', unit:'', bestBefore:'', stock:'', description:'', img:'' });
+  const [uploadingPhoto, setUploadingPhoto] = React.useState(false);
   const [editingId, setEditingId] = React.useState(null);
   const [editDraft, setEditDraft] = React.useState(null);
   const [smsText, setSmsText] = React.useState('');
@@ -148,7 +149,26 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
       const p = { ...newProduct, id: Date.now(), price: parseFloat(newProduct.price), stock: parseInt(newProduct.stock)||0, bestseller: false };
       setProducts(prev => [...prev, p]);
     }
-    setNewProduct({ name:'', category: window.CATEGORIES[0], price:'', unit:'', bestBefore:'', stock:'', description:'' });
+    setNewProduct({ name:'', category: window.CATEGORIES[0], price:'', unit:'', bestBefore:'', stock:'', description:'', img:'' });
+  };
+
+  // Shared photo-upload helper: reads file → base64 → POST to /api/admin/upload-image → returns URL
+  const uploadPhoto = async (file) => {
+    if (!file) return null;
+    if (file.size > 1.5 * 1024 * 1024) { alert('Image too large (max 1.5 MB). Try a smaller photo.'); return null; }
+    setUploadingPhoto(true);
+    try {
+      const dataUrl = await new Promise((res, rej) => {
+        const reader = new FileReader();
+        reader.onload = () => res(reader.result);
+        reader.onerror = rej;
+        reader.readAsDataURL(file);
+      });
+      const r = await apiFetch('/api/admin/upload-image', { method: 'POST', body: JSON.stringify({ dataUrl }) });
+      const d = await r.json();
+      if (!r.ok) { alert(d.error || 'Upload failed'); return null; }
+      return d.url;
+    } finally { setUploadingPhoto(false); }
   };
 
   const removeProduct = async (id) => {
@@ -206,9 +226,30 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   const tabs = [
     ['overview','📊 Overview'],['orders','📦 Orders'],['inventory','🏪 Inventory'],
     ['expiry','⏰ Expiry'],['routes','🗺 Routes'],['riders','🛵 Riders'],
+    ['promotions','⚡ Promotions'],['issues','🚨 Issues'],
     ['analytics','🔎 Analytics'],['payments','💳 Payments'],['comms','📣 Comms'],['metrics','📈 Metrics'],
     ['security','🔐 Security'],
   ];
+
+  // ── Promotions tab state ──
+  const [promos, setPromos] = React.useState([]);
+  const [newPromo, setNewPromo] = React.useState({ title: '', description: '', productIds: [], discountPercent: 15, startsAt: '', endsAt: '' });
+  const loadPromos = React.useCallback(() => {
+    apiFetch('/api/admin/promotions').then(r => r.ok ? r.json() : []).then(setPromos).catch(() => {});
+  }, []);
+  React.useEffect(() => { if (adminTab === 'promotions') loadPromos(); }, [adminTab, loadPromos]);
+
+  // ── Issues tab state ──
+  const [issues, setIssues] = React.useState([]);
+  const loadIssues = React.useCallback(() => {
+    apiFetch('/api/admin/issue-reports').then(r => r.ok ? r.json() : []).then(setIssues).catch(() => {});
+  }, []);
+  React.useEffect(() => { if (adminTab === 'issues') loadIssues(); }, [adminTab, loadIssues]);
+  const resolveIssue = async (id) => {
+    const note = window.prompt('Resolution note (optional):') || '';
+    await apiFetch(`/api/admin/issue-reports/${id}/resolve`, { method: 'PUT', body: JSON.stringify({ note }) });
+    loadIssues();
+  };
 
   // Payments tab — admin sets per-telco merchant numbers shown to customers at checkout
   const [momoCfg, setMomoCfg] = React.useState({ mtn: '', telecel: '', at: '', name: '' });
@@ -457,6 +498,22 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                               <div style={{ fontSize: 13, color: 'var(--warm-gray)' }}>Delivery GHS {Number(o.deliveryFee || o.delivery || 0).toFixed(2)}</div>
                             </div>
                           </div>
+                          {/* Surprise extra — admin can attach a free gift / note that the customer sees on their order */}
+                          <div style={{ marginTop: 14, padding: '10px 12px', background: '#FCE4F0', border: '1px solid #F4A8C8', borderRadius: 8 }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: '#9B2D60', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>🎁 Surprise extra (free gift / handwritten note)</div>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                              <input defaultValue={o.surpriseExtra || ''} placeholder="e.g. Free Fan Ice on a hot day — enjoy!"
+                                onBlur={async (e) => {
+                                  const v = e.target.value;
+                                  if (v === (o.surpriseExtra || '')) return;
+                                  await apiFetch(`/api/admin/orders/${o.id}/surprise`, { method: 'POST', body: JSON.stringify({ note: v }) });
+                                  o.surpriseExtra = v; // optimistic
+                                }}
+                                style={{ flex: 1, minWidth: 220, padding: '8px 12px', borderRadius: 6, border: '1px solid #F4A8C8', background: '#fff', fontSize: 13, outline: 'none' }} />
+                              <span style={{ fontSize: 11, color: '#9B2D60' }}>Saves on blur</span>
+                            </div>
+                          </div>
+
                           {itemsArr.length > 0 && (
                             <div style={{ marginTop: 14 }}>
                               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>Items</div>
@@ -504,6 +561,21 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                 <div style={{ gridColumn: '1/-1' }}>
                   <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', display:'block', marginBottom:4, textTransform:'uppercase', letterSpacing:'.05em' }}>Description</label>
                   <input value={newProduct.description} onChange={e => setNewProduct(p => ({...p,description:e.target.value}))} style={inputS} placeholder="Short product description" />
+                </div>
+                <div style={{ gridColumn: '1/-1' }}>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', display:'block', marginBottom:6, textTransform:'uppercase', letterSpacing:'.05em' }}>Photo</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                    {newProduct.img && <img src={newProduct.img} alt="" style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--cream-dark)' }} />}
+                    <label style={{ background: 'var(--cream)', color: 'var(--sage-dark)', borderRadius: 8, padding: '8px 14px', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+                      {uploadingPhoto ? 'Uploading…' : (newProduct.img ? 'Replace photo' : '📷 Upload photo')}
+                      <input type="file" accept="image/*" hidden disabled={uploadingPhoto}
+                        onChange={async e => { const url = await uploadPhoto(e.target.files[0]); if (url) setNewProduct(p => ({ ...p, img: url })); e.target.value = ''; }} />
+                    </label>
+                    {newProduct.img && (
+                      <button onClick={() => setNewProduct(p => ({ ...p, img: '' }))} style={{ fontSize: 12, color: 'var(--accent-red)', fontWeight: 700 }}>Remove</button>
+                    )}
+                    <span style={{ fontSize: 11, color: 'var(--warm-gray)' }}>JPG or PNG, max 1.5 MB</span>
+                  </div>
                 </div>
               </div>
               <button onClick={addProduct} style={{ marginTop: 16, background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '11px 24px', fontWeight: 700, fontSize: 13 }}>+ Add Product</button>
@@ -749,6 +821,120 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                 )}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* PROMOTIONS — flash sales / weekly drops */}
+        {adminTab === 'promotions' && (
+          <div>
+            <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginBottom: 6 }}>Promotions</h1>
+            <p style={{ color: 'var(--warm-gray)', fontSize: 14, marginBottom: 20 }}>Create flash sales. Customers see a banner + sale badges on featured products. When you publish, every push subscriber gets a notification.</p>
+
+            <div style={{ background: 'var(--white)', borderRadius: 12, padding: '20px 22px', boxShadow: 'var(--shadow)', marginBottom: 22 }}>
+              <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 17, fontWeight: 700, marginBottom: 14 }}>New promotion</h2>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
+                <input value={newPromo.title} onChange={e => setNewPromo(p => ({ ...p, title: e.target.value }))} placeholder="Title (e.g. Friday Drop)" style={inputS} />
+                <input type="number" min="1" max="90" value={newPromo.discountPercent} onChange={e => setNewPromo(p => ({ ...p, discountPercent: e.target.value }))} placeholder="Discount %" style={inputS} />
+                <input type="datetime-local" value={newPromo.startsAt} onChange={e => setNewPromo(p => ({ ...p, startsAt: e.target.value }))} style={inputS} />
+                <input type="datetime-local" value={newPromo.endsAt} onChange={e => setNewPromo(p => ({ ...p, endsAt: e.target.value }))} style={inputS} />
+                <input value={newPromo.description} onChange={e => setNewPromo(p => ({ ...p, description: e.target.value }))} placeholder="Short description" style={{ ...inputS, gridColumn: '1/-1' }} />
+                <div style={{ gridColumn: '1/-1' }}>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Products on sale (Ctrl+click to multi-select)</label>
+                  <select multiple value={newPromo.productIds.map(String)} onChange={e => setNewPromo(p => ({ ...p, productIds: Array.from(e.target.selectedOptions).map(o => parseInt(o.value)) }))}
+                    style={{ ...inputS, height: 140 }}>
+                    {products.map(p => <option key={p.id} value={p.id}>{p.name} — GHS {Number(p.price).toFixed(2)}</option>)}
+                  </select>
+                </div>
+              </div>
+              <button onClick={async () => {
+                if (!newPromo.title || !newPromo.startsAt || !newPromo.endsAt) { alert('Title, start, and end are required'); return; }
+                const r = await apiFetch('/api/admin/promotions', { method: 'POST', body: JSON.stringify({
+                  ...newPromo,
+                  startsAt: new Date(newPromo.startsAt).toISOString(),
+                  endsAt: new Date(newPromo.endsAt).toISOString(),
+                })});
+                if (!r.ok) { const d = await r.json(); alert(d.error || 'Failed'); return; }
+                setNewPromo({ title: '', description: '', productIds: [], discountPercent: 15, startsAt: '', endsAt: '' });
+                loadPromos();
+              }} style={{ marginTop: 14, background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '11px 24px', fontWeight: 700, fontSize: 13 }}>
+                Save as draft
+              </button>
+            </div>
+
+            <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 17, fontWeight: 700, marginBottom: 12 }}>All promotions</h2>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {promos.length === 0 ? (
+                <div style={{ color: 'var(--warm-gray)', fontSize: 13, padding: 20, background: 'var(--cream)', borderRadius: 10, textAlign: 'center' }}>No promotions yet.</div>
+              ) : promos.map(p => {
+                const now = new Date();
+                const live = p.published && new Date(p.startsAt) <= now && new Date(p.endsAt) >= now;
+                return (
+                  <div key={p.id} style={{ background: 'var(--white)', borderRadius: 10, padding: '14px 16px', boxShadow: 'var(--shadow)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1, minWidth: 220 }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <strong style={{ fontSize: 14 }}>{p.title}</strong>
+                        <span style={{ background: '#E03A2B', color: '#fff', borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>-{p.discountPercent}%</span>
+                        {live && <span style={{ background: 'var(--sage)', color: '#fff', borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>LIVE</span>}
+                        {p.published && !live && <span style={{ background: 'var(--cream-dark)', color: 'var(--warm-gray)', borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>{new Date(p.startsAt) > now ? 'SCHEDULED' : 'ENDED'}</span>}
+                        {!p.published && <span style={{ background: 'var(--cream-dark)', color: 'var(--warm-gray)', borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>DRAFT</span>}
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 4 }}>
+                        {Array.isArray(p.productIds) ? p.productIds.length : 0} product{(p.productIds || []).length === 1 ? '' : 's'} · {new Date(p.startsAt).toLocaleString()} → {new Date(p.endsAt).toLocaleString()}
+                      </div>
+                      {p.pushSent && <div style={{ fontSize: 11, color: 'var(--sage)', marginTop: 2 }}>✓ Push notification sent</div>}
+                    </div>
+                    {!p.published && (
+                      <button onClick={async () => {
+                        if (!window.confirm(`Publish "${p.title}"? This will send a push notification to all subscribers and the sale will appear on the homepage.`)) return;
+                        await apiFetch(`/api/admin/promotions/${p.id}/publish`, { method: 'POST' });
+                        loadPromos();
+                      }} style={{ fontSize: 12, fontWeight: 700, background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '8px 14px' }}>
+                        🚀 Publish + Notify
+                      </button>
+                    )}
+                    <button onClick={async () => {
+                      if (!window.confirm('Delete this promotion?')) return;
+                      await apiFetch(`/api/admin/promotions/${p.id}`, { method: 'DELETE' });
+                      loadPromos();
+                    }} style={{ fontSize: 12, color: 'var(--accent-red)', fontWeight: 700, padding: '8px 10px' }}>
+                      Delete
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ISSUES — customer-reported problems on delivered orders */}
+        {adminTab === 'issues' && (
+          <div>
+            <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginBottom: 14 }}>Customer Issues</h1>
+            {issues.length === 0 ? (
+              <div style={{ background: 'var(--cream)', borderRadius: 10, padding: 30, textAlign: 'center', color: 'var(--warm-gray)', fontSize: 14 }}>
+                ✨ No reported issues. Keep it up!
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {issues.map(i => (
+                  <div key={i.id} style={{ background: 'var(--white)', borderRadius: 10, padding: '14px 16px', boxShadow: 'var(--shadow)', opacity: i.resolved ? .6 : 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                      <strong style={{ fontSize: 13 }}>Order #{String(i.orderId).slice(-6)}</strong>
+                      <span style={{ background: 'rgba(192,57,43,.1)', color: 'var(--accent-red)', borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>{i.issueType}</span>
+                      {i.resolved && <span style={{ background: 'var(--sage)', color: '#fff', borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>RESOLVED</span>}
+                      <span style={{ fontSize: 11, color: 'var(--warm-gray)', marginLeft: 'auto' }}>{new Date(i.createdAt).toLocaleString()}</span>
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.5 }}>{i.description}</div>
+                    {i.resolvedNote && <div style={{ marginTop: 6, fontSize: 12, color: 'var(--warm-gray)', fontStyle: 'italic' }}>Note: {i.resolvedNote}</div>}
+                    {!i.resolved && (
+                      <button onClick={() => resolveIssue(i.id)} style={{ marginTop: 10, fontSize: 12, fontWeight: 700, background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '7px 14px' }}>
+                        Mark resolved
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
