@@ -163,10 +163,13 @@ const App = () => {
   // ── Login gate ────────────────────────────────────────────────────────────
   if (!currentUser) {
     return (
-      <LoginPage
-        onAuth={(user) => { setCurrentUser(user); setAuthChecked(true); }}
-        onGuest={() => { setCurrentUser({ role: 'guest', name: 'Guest' }); setAuthChecked(true); }}
-      />
+      <>
+        <LoginPage
+          onAuth={(user) => { setCurrentUser(user); setAuthChecked(true); }}
+          onGuest={() => { setCurrentUser({ role: 'guest', name: 'Guest' }); setAuthChecked(true); }}
+        />
+        <IOSInstallHint />
+      </>
     );
   }
 
@@ -176,6 +179,7 @@ const App = () => {
       <div style={{ minHeight: '100vh', background: 'var(--cream)' }}>
         <AdminPage setPage={navigateTo} onLogout={logout} currentUser={currentUser} setCurrentUser={setCurrentUser} />
         <WhatsAppFloat />
+      <IOSInstallHint />
       </div>
     );
   }
@@ -294,6 +298,7 @@ const App = () => {
       )}
 
       <WhatsAppFloat />
+      <IOSInstallHint />
 
       <TweaksPanel>
         <TweakSection title="Theme">

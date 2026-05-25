@@ -214,4 +214,60 @@ const WhatsAppFloat = () => (
   </a>
 );
 
-Object.assign(window, { Header, WhatsAppFloat });
+// iOS install hint — Safari has no programmatic install API, so we tell
+// the user how to add SDGMart to their home screen via the Share sheet.
+// Shows only when: iOS Safari, not already running standalone, not previously
+// dismissed within the last 14 days.
+const IOSInstallHint = () => {
+  const [show, setShow] = React.useState(false);
+  React.useEffect(() => {
+    try {
+      const ua = window.navigator.userAgent || '';
+      const isIOS = /iPad|iPhone|iPod/.test(ua) && !window.MSStream;
+      const isSafari = /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|Chrome/.test(ua);
+      // navigator.standalone is the iOS-specific flag for "running from home screen"
+      const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+      if (!isIOS || !isSafari || isStandalone) return;
+      const dismissedAt = Number(localStorage.getItem('sdg-ios-hint-dismissed') || 0);
+      const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000;
+      if (dismissedAt && Date.now() - dismissedAt < fourteenDaysMs) return;
+      // Wait 4s before showing so we don't crowd the first page paint
+      const t = setTimeout(() => setShow(true), 4000);
+      return () => clearTimeout(t);
+    } catch (_) {}
+  }, []);
+  if (!show) return null;
+  const dismiss = () => {
+    try { localStorage.setItem('sdg-ios-hint-dismissed', String(Date.now())); } catch (_) {}
+    setShow(false);
+  };
+  return (
+    <div role="dialog" aria-label="Install SDGMart"
+      style={{
+        position: 'fixed', left: 12, right: 12, bottom: 18, zIndex: 10000,
+        background: '#000', color: '#fff', borderRadius: 16,
+        padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12,
+        boxShadow: '0 16px 48px rgba(0,0,0,.45)',
+        animation: 'sdg-ios-rise .4s cubic-bezier(.16,1,.3,1)',
+      }}>
+      <style>{`@keyframes sdg-ios-rise{from{transform:translateY(140%);opacity:0}to{transform:translateY(0);opacity:1}}`}</style>
+      <div style={{ width: 36, height: 36, borderRadius: 8, background: '#fff', color: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, fontSize: 14, flexShrink: 0 }}>
+        SDG
+      </div>
+      <div style={{ flex: 1, fontSize: 13, lineHeight: 1.4 }}>
+        <div style={{ fontWeight: 700, marginBottom: 2 }}>Install SDGMart</div>
+        <div style={{ opacity: .85, fontSize: 12 }}>
+          Tap <span aria-label="Share" role="img" style={{ display: 'inline-block', transform: 'translateY(2px)' }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: 'middle' }}>
+              <path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/>
+            </svg>
+          </span> Share, then <strong>Add to Home Screen</strong>
+        </div>
+      </div>
+      <button onClick={dismiss} aria-label="Dismiss"
+        style={{ background: 'rgba(255,255,255,.15)', color: '#fff', borderRadius: 6, width: 28, height: 28, fontSize: 14, padding: 0, lineHeight: 1, flexShrink: 0, cursor: 'pointer' }}>✕</button>
+    </div>
+  );
+};
+
+Object.assign(window, { Header, WhatsAppFloat, IOSInstallHint });
