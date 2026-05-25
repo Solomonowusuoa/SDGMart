@@ -774,15 +774,23 @@ const promotions = {
 };
 
 // ── Stats (cached lightly) ───────────────────────────────────────────────
-let _deliveredCache = { count: 0, at: 0 };
+let _statsCache = { delivered: 0, total: 0, at: 0 };
 const stats = {
-  async deliveredCount() {
-    if (Date.now() - _deliveredCache.at < 30000) return _deliveredCache.count; // 30s cache
-    const { count } = await sb.from('orders').select('*', { count: 'exact', head: true }).eq('status', 'delivered');
-    _deliveredCache = { count: count || 0, at: Date.now() };
-    return _deliveredCache.count;
+  async counts() {
+    if (Date.now() - _statsCache.at < 30000) return { delivered: _statsCache.delivered, total: _statsCache.total };
+    const [delRes, totRes] = await Promise.all([
+      sb.from('orders').select('*', { count: 'exact', head: true }).eq('status', 'delivered'),
+      sb.from('orders').select('*', { count: 'exact', head: true }).neq('status', 'cancelled'),
+    ]);
+    _statsCache = {
+      delivered: delRes.count || 0,
+      total: totRes.count || 0,
+      at: Date.now(),
+    };
+    return { delivered: _statsCache.delivered, total: _statsCache.total };
   },
-  invalidateDelivered() { _deliveredCache.at = 0; },
+  async deliveredCount() { return (await stats.counts()).delivered; },
+  invalidateDelivered() { _statsCache.at = 0; },
 };
 
 // ── Photo upload to Supabase Storage ─────────────────────────────────────

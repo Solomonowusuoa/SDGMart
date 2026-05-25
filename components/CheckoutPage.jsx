@@ -1,7 +1,8 @@
 // CheckoutPage — full checkout with Family Mode + WhatsApp bridge
-// Flat 10 GHS delivery for any location within Tamale.
-const FLAT_DELIVERY = 10;
-// Signed-in users get their first ever order delivered free.
+// GHS 10 delivery for orders under FREE_DELIVERY_MIN, free above it.
+const STANDARD_DELIVERY = 10;
+const FREE_DELIVERY_MIN = 150;
+// Signed-in users also get their first ever order delivered free.
 const FIRST_ORDER_FREE = true;
 
 // Hoisted out of CheckoutPage so React doesn't recreate the component on
@@ -117,7 +118,9 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   const isFirstOrderFree = FIRST_ORDER_FREE
     && currentUser && currentUser.id && currentUser.role !== 'guest'
     && currentUser.firstOrderDone === false;
-  const delivery = isFirstOrderFree ? 0 : FLAT_DELIVERY;
+  // afterLoyalty is the customer's effective subtotal (post-squad, post-loyalty)
+  const qualifiesFreeByThreshold = afterLoyalty >= FREE_DELIVERY_MIN;
+  const delivery = (isFirstOrderFree || qualifiesFreeByThreshold) ? 0 : STANDARD_DELIVERY;
   const total = afterLoyalty + delivery;
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -734,7 +737,9 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 12 }}>
               <span style={{ color: 'var(--warm-gray)' }}>Delivery</span>
               <span style={{ color: delivery === 0 ? 'var(--sage)' : 'inherit', fontWeight: delivery === 0 ? 700 : 400 }}>
-                {delivery === 0 ? (isFirstOrderFree ? '🎁 FIRST ORDER FREE' : 'FREE') : `GHS ${delivery.toFixed(2)}`}
+                {delivery === 0
+                  ? (isFirstOrderFree ? '🎁 FIRST ORDER FREE' : (qualifiesFreeByThreshold ? 'FREE 🎉' : 'FREE'))
+                  : `GHS ${delivery.toFixed(2)}`}
               </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 16 }}>
@@ -742,9 +747,9 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
               <span style={{ color: 'var(--sage-dark)' }}>GHS {total.toFixed(2)}</span>
             </div>
           </div>
-          {false && (
+          {afterLoyalty < FREE_DELIVERY_MIN && !isFirstOrderFree && (
             <div style={{ marginTop: 14, padding: '10px 12px', background: 'rgba(0,0,0,.06)', borderRadius: 8, fontSize: 12, color: 'var(--sage-dark)', fontWeight: 600 }}>
-              Flat GHS 10 delivery anywhere in Tamale.
+              Add <strong>GHS {(FREE_DELIVERY_MIN - afterLoyalty).toFixed(2)}</strong> more for free delivery 🚚
             </div>
           )}
         </div>

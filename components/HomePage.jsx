@@ -278,7 +278,7 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
             Tamale's Smart Grocery Service
             {deliveredCount != null && deliveredCount > 0 && (
               <span style={{ marginLeft: 12, opacity: .8, fontWeight: 600, letterSpacing: '.08em' }}>
-                · {deliveredCount.toLocaleString()} order{deliveredCount === 1 ? '' : 's'} delivered
+                · {deliveredCount.toLocaleString()} order{deliveredCount === 1 ? '' : 's'} served in Tamale
               </span>
             )}
           </div>

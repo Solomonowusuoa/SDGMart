@@ -302,7 +302,8 @@ const App = () => {
         />
       )}
 
-      <WhatsAppFloat />
+      {/* Hide WhatsApp float on checkout — it covers the totals + Confirm button on mobile */}
+      {page !== 'checkout' && <WhatsAppFloat />}
       <IOSInstallHint />
 
       <TweaksPanel>

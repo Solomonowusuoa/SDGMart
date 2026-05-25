@@ -811,8 +811,12 @@ app.post('/api/me/orders/:id/cancel', requireAuth, async (req, res) => {
 
 // ── Live counter ─────────────────────────────────────────────────────────
 app.get('/api/stats/delivered-count', async (req, res) => {
-  try { res.json({ count: await db.stats.deliveredCount() }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  try {
+    const c = await db.stats.counts();
+    // Show whichever is larger so the ticker shows from the very first order placed,
+    // while still preferring the (more impressive) delivered count once it climbs.
+    res.json({ count: Math.max(c.delivered, c.total), delivered: c.delivered, total: c.total });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── Promotions ───────────────────────────────────────────────────────────

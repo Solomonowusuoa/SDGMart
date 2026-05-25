@@ -30,7 +30,7 @@ const Header = ({ cart, page, setPage, setSelectedCategory, searchQuery, setSear
       {/* Top bar */}
       {!isMobile && (
         <div style={{ background: isV2 ? '#1C2710' : 'var(--sage)', color: '#fff', textAlign: 'center', padding: '7px 16px', fontSize: 12, fontWeight: 500, letterSpacing: '.04em' }}>
-          🚚 Flat GHS 10 delivery · Tamale Same-Day Service
+          🚚 Free delivery on orders above GHS 150 · Tamale Same-Day Service
         </div>
       )}
 
@@ -165,7 +165,7 @@ const Header = ({ cart, page, setPage, setSelectedCategory, searchQuery, setSear
             </button>
           )}
           <div style={{ borderTop: `1px solid ${isV2 ? 'rgba(255,255,255,.1)' : 'var(--cream-dark)'}`, marginTop: 8, paddingTop: 8, fontSize: 12, color: isV2 ? 'rgba(255,255,255,.5)' : 'var(--warm-gray)', textAlign: 'center' }}>
-            🚚 Flat GHS 10 delivery
+            🚚 Free delivery above GHS 150
           </div>
         </div>
       )}
