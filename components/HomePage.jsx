@@ -109,7 +109,7 @@ const TrustBadges = () => (
   <div style={{ background: 'linear-gradient(90deg, var(--sage-dark) 0%, var(--sage) 100%)', color: '#fff', padding: '18px 24px' }}>
     <div style={{ maxWidth: 1280, margin: '0 auto', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 20 }}>
       {[
-        ['⚡','Same-Day Delivery','Order before 2pm, get it today in Tamale'],
+        ['⚡','Same-Day Delivery','Order before 12pm, get it today in Tamale'],
         ['🔒','MoMo Payments','Secure Mobile Money checkout'],
         ['📅','Freshness Dates','Every product shows its Best Before date'],
       ].map(([icon,title,sub]) => (
@@ -290,7 +290,7 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
             Fresh essentials,<br/><em style={{ fontWeight: 600 }}>delivered the same day.</em>
           </h1>
           <p style={{ fontSize: isMobile ? 13 : 15, opacity: .9, marginTop: 14, maxWidth: 540, lineHeight: 1.55 }}>
-            Pantry staples, snacks, drinks and household goods — order before 2pm and we'll have it at your door today.
+            Pantry staples, snacks, drinks and household goods — order before 12pm and we'll have it at your door today.
           </p>
           <div style={{ marginTop: 22, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             <button onClick={() => { setSelectedCategory(null); setPage('category'); }}

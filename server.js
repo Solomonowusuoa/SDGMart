@@ -323,7 +323,7 @@ app.post('/api/orders', async (req, res) => {
     } = req.body;
     const userId = req.user ? req.user.id : null;
     const now = new Date();
-    const afterCutoff = now.getHours() >= 14;
+    const afterCutoff = now.getHours() >= 12;
     const deliveryDate = new Date(now);
     if (afterCutoff) deliveryDate.setDate(deliveryDate.getDate() + 1);
     const deliveryDateStr = deliveryDate.toISOString().slice(0, 10);

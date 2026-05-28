@@ -309,10 +309,10 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
         <div style={{ color: 'var(--warm-gray)', marginTop: 8, fontSize: 14 }}>Your order <strong>{orderId}</strong> is confirmed.</div>
         {(() => {
           const now = new Date();
-          const afterCutoff = now.getHours() >= 14;
+          const afterCutoff = now.getHours() >= 12;
           const txt = afterCutoff
-            ? '📅 Delivery: tomorrow from 2 PM (priority queue)'
-            : '🛵 Delivery: today, starting from 2 PM';
+            ? '📅 Delivery: tomorrow from 12 PM (priority queue)'
+            : '🛵 Delivery: today, starting from 12 PM';
           return (
             <div style={{ marginTop: 14, display: 'inline-block', background: 'var(--cream)', border: '1px solid var(--cream-dark)', borderRadius: 999, padding: '8px 16px', fontSize: 13, fontWeight: 600, color: 'var(--warm-black)' }}>
               {txt}
@@ -380,14 +380,14 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
               {/* Delivery window notice — depends on time of day */}
               {(() => {
                 const now = new Date();
-                const afterCutoff = now.getHours() >= 14;
+                const afterCutoff = now.getHours() >= 12;
                 if (afterCutoff) {
                   return (
                     <div style={{ background: '#FFF4E0', border: '1px solid #F0C674', borderRadius: 10, padding: '12px 14px', marginBottom: 20, display: 'flex', gap: 10 }}>
                       <span style={{ fontSize: 18 }}>⏰</span>
                       <div style={{ fontSize: 13, lineHeight: 1.5, color: '#7A5A00' }}>
-                        <div style={{ fontWeight: 700 }}>Order after the 2 PM cut-off</div>
-                        Today's deliveries are already on the road. Your order will be delivered <strong>tomorrow from 2 PM</strong>, and we'll prioritise it ahead of new same-day orders.
+                        <div style={{ fontWeight: 700 }}>Order after the 12 PM cut-off</div>
+                        Today's deliveries are already on the road. Your order will be delivered <strong>tomorrow from 12 PM</strong>, and we'll prioritise it ahead of new same-day orders.
                       </div>
                     </div>
                   );
@@ -397,7 +397,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                     <span style={{ fontSize: 18 }}>🛵</span>
                     <div style={{ fontSize: 13, lineHeight: 1.5, color: '#1F5D3A' }}>
                       <div style={{ fontWeight: 700 }}>Same-day delivery</div>
-                      Order before 2 PM and your delivery will be made today. Riders begin their routes at 2 PM.
+                      Order before 12 PM and your delivery will be made today. Riders begin their routes at 12 PM.
                     </div>
                   </div>
                 );

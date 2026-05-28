@@ -1,6 +1,6 @@
 // OrderTrackingPage — live order tracking for customers.
 // Polls /api/orders/:id/tracking every 8s. Shows:
-//  - queued (no rider yet) → "Waiting for the 2 PM dispatch / your priority slot"
+//  - queued (no rider yet) → "Waiting for the 12 PM dispatch / your priority slot"
 //  - assigned + queueAhead > 0 → "Completing another delivery nearby" + position
 //  - assigned + queueAhead === 0 → "You are NEXT — ETA based on distance"
 //  - in_transit → live map with rider's blinking position
@@ -146,7 +146,7 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage }) => {
   const status = o.status;
   let primaryMsg, secondaryMsg, accent = 'var(--sage)';
   if (status === 'queued') {
-    primaryMsg = o.priority ? '⭐ Priority queued for tomorrow at 2 PM' : '🕑 Queued for the 2 PM dispatch';
+    primaryMsg = o.priority ? '⭐ Priority queued for tomorrow at 12 PM' : '🕑 Queued for the 12 PM dispatch';
     secondaryMsg = 'A rider will be assigned when the dispatch starts.';
     accent = '#C8923A';
   } else if (status === 'assigned' && data.queueAhead > 0) {

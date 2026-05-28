@@ -11,6 +11,53 @@ const MapPicker = ({ value, onChange, height = 240, allowGeolocate = true, defau
   // Tamale, Ghana as default center
   const TAMALE = { lat: 9.4034, lng: -0.8424 };
   const center = value || defaultCenter || TAMALE;
+  // Roughly bounds Tamale metro for biased searches (lon_min, lat_min, lon_max, lat_max)
+  const TAMALE_VIEWBOX = '-0.95,9.30,-0.70,9.55';
+
+  // Place search
+  const [search, setSearch] = React.useState('');
+  const [results, setResults] = React.useState([]);
+  const [searching, setSearching] = React.useState(false);
+  const [showResults, setShowResults] = React.useState(false);
+  const searchTimerRef = React.useRef(null);
+
+  // Debounced search on the user's query — biased to Tamale, restricted to Ghana
+  React.useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (!search.trim() || search.trim().length < 2) { setResults([]); setShowResults(false); return; }
+    searchTimerRef.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(search)}&limit=8&countrycodes=gh&viewbox=${TAMALE_VIEWBOX}&bounded=1&addressdetails=1`;
+        const r = await fetch(url);
+        const d = await r.json();
+        // If Tamale-only returns nothing, fall back to all-Ghana so common landmarks still resolve
+        let list = Array.isArray(d) ? d : [];
+        if (list.length === 0) {
+          const r2 = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(search + ' Tamale')}&limit=8&countrycodes=gh&addressdetails=1`);
+          list = await r2.json();
+        }
+        setResults(list);
+        setShowResults(true);
+      } catch (_) { setResults([]); }
+      finally { setSearching(false); }
+    }, 350);
+    return () => searchTimerRef.current && clearTimeout(searchTimerRef.current);
+  }, [search]);
+
+  const pickResult = (r) => {
+    const lat = parseFloat(r.lat), lng = parseFloat(r.lon);
+    setSearch(r.display_name.split(',').slice(0, 2).join(','));
+    setShowResults(false);
+    // Skip a fresh reverse-geocode round-trip — Nominatim already gave us a name
+    if (markerRef.current) markerRef.current.setLatLng([lat, lng]);
+    else if (mapRef.current && window.L) {
+      markerRef.current = window.L.marker([lat, lng], { draggable: true }).addTo(mapRef.current);
+      markerRef.current.on('dragend', e => { const ll = e.target.getLatLng(); setLocation(ll.lat, ll.lng); });
+    }
+    if (mapRef.current) mapRef.current.setView([lat, lng], 17);
+    onChange && onChange({ lat, lng, address: r.display_name });
+  };
 
   // Reverse geocode lat/lng → human address (Nominatim is free, no key, but
   // please respect their fair-use policy — we only call on user action).
@@ -79,6 +126,35 @@ const MapPicker = ({ value, onChange, height = 240, allowGeolocate = true, defau
 
   return (
     <div>
+      {/* Search box for landmarks (e.g. "Tamale Teaching Hospital") */}
+      <div style={{ position: 'relative', marginBottom: 8 }}>
+        <input value={search}
+          onChange={e => setSearch(e.target.value)}
+          onFocus={() => results.length && setShowResults(true)}
+          onBlur={() => setTimeout(() => setShowResults(false), 150)}
+          placeholder="🔎 Search a place (e.g. Tamale Teaching Hospital, Aliu Mahama Stadium)"
+          style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1.5px solid var(--cream-dark)', fontSize: 13, outline: 'none', background: 'var(--white)' }} />
+        {searching && <span style={{ position: 'absolute', right: 12, top: 11, fontSize: 11, color: 'var(--warm-gray)' }}>searching…</span>}
+        {showResults && results.length > 0 && (
+          <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: '#fff', border: '1px solid var(--cream-dark)', borderRadius: 10, marginTop: 4, maxHeight: 260, overflowY: 'auto', zIndex: 1000, boxShadow: '0 8px 24px rgba(0,0,0,.12)' }}>
+            {results.map((r, i) => (
+              <button key={r.place_id || i} type="button" onMouseDown={() => pickResult(r)}
+                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 14px', borderTop: i === 0 ? 'none' : '1px solid var(--cream-dark)', background: 'transparent', cursor: 'pointer', fontSize: 13 }}
+                onMouseEnter={e => e.currentTarget.style.background = 'var(--cream)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                <div style={{ fontWeight: 600 }}>{r.display_name.split(',').slice(0, 2).join(',')}</div>
+                <div style={{ fontSize: 11, color: 'var(--warm-gray)', marginTop: 2 }}>{r.display_name.split(',').slice(2).join(',').trim() || (r.type || '')}</div>
+              </button>
+            ))}
+          </div>
+        )}
+        {showResults && !searching && search.trim().length >= 2 && results.length === 0 && (
+          <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: '#fff', border: '1px solid var(--cream-dark)', borderRadius: 10, marginTop: 4, padding: 12, fontSize: 12, color: 'var(--warm-gray)', zIndex: 1000 }}>
+            No matches. Try a different spelling, or click the map to drop a pin.
+          </div>
+        )}
+      </div>
+
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
         {allowGeolocate && (
           <button type="button" onClick={useMyLocation} disabled={resolving}

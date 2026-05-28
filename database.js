@@ -452,7 +452,7 @@ const orders = {
   },
   async assignQueuedForToday() {
     const now = new Date();
-    if (now.getHours() < 14) return [];
+    if (now.getHours() < 12) return [];
     const today = now.toISOString().slice(0, 10);
     const { data, error } = await sb.from('orders').select('*')
       .eq('status', 'queued').is('rider_id', null).not('location', 'is', null)
