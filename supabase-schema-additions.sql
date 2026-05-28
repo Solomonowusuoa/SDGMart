@@ -74,8 +74,8 @@ create table if not exists promotions (
 );
 create index if not exists promotions_published_idx on promotions(published, ends_at);
 
--- ── Disable RLS on the new tables (service_role bypasses anyway) ─────────
-alter table addresses     disable row level security;
-alter table reviews       disable row level security;
-alter table issue_reports disable row level security;
-alter table promotions    disable row level security;
+-- ── Enable RLS (defence-in-depth; service_role still bypasses) ──────────
+alter table addresses     enable row level security;
+alter table reviews       enable row level security;
+alter table issue_reports enable row level security;
+alter table promotions    enable row level security;

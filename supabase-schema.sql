@@ -151,16 +151,17 @@ insert into app_config (key, value)
   on conflict (key) do nothing;
 
 -- ── Row-Level Security ────────────────────────────────────────────────────
--- We use the service_role key from the server, which bypasses RLS by design,
--- so we can keep RLS off on all our tables. (If we ever expose the anon key
--- to the browser for direct table access, revisit this.)
-alter table products disable row level security;
-alter table users disable row level security;
-alter table riders disable row level security;
-alter table orders disable row level security;
-alter table sessions disable row level security;
-alter table email_tokens disable row level security;
-alter table push_subscriptions disable row level security;
-alter table search_queries disable row level security;
-alter table recurring_orders disable row level security;
-alter table app_config disable row level security;
+-- RLS is ENABLED on every table for defence-in-depth. Our server uses the
+-- service_role key, which bypasses RLS entirely, so the app works exactly
+-- the same. The anon/authenticated keys (never used in this codebase) get
+-- no access by default — a leaked anon key cannot read or write anything.
+alter table products            enable row level security;
+alter table users               enable row level security;
+alter table riders              enable row level security;
+alter table orders              enable row level security;
+alter table sessions            enable row level security;
+alter table email_tokens        enable row level security;
+alter table push_subscriptions  enable row level security;
+alter table search_queries      enable row level security;
+alter table recurring_orders    enable row level security;
+alter table app_config          enable row level security;
