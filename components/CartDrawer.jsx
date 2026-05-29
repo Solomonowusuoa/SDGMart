@@ -29,10 +29,10 @@ const CartDrawer = ({ cart, setCart, setPage, onClose }) => {
         {/* Items */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
           {cart.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '60px 0', color: 'var(--warm-gray)' }}>
-              <div style={{ fontSize: 48 }}>🛒</div>
-              <div style={{ fontWeight: 700, marginTop: 12 }}>Your cart is empty</div>
-              <div style={{ fontSize: 13, marginTop: 6 }}>Add some essentials to get started</div>
+            <div style={{ textAlign: 'center', padding: '60px 16px', color: 'var(--warm-gray)' }}>
+              <div style={{ fontSize: 48 }}>☀️</div>
+              <div style={{ fontWeight: 700, marginTop: 12, fontSize: 15 }}>Your cart is dustier than harmattan</div>
+              <div style={{ fontSize: 13, marginTop: 6, lineHeight: 1.5, maxWidth: 280, margin: '6px auto 0' }}>Drop something in to cool it down.</div>
             </div>
           ) : cart.map(item => (
             <div key={item.id} style={{ display: 'flex', gap: 14, padding: '14px 0', borderBottom: '1px solid var(--cream-dark)', alignItems: 'center' }}>

@@ -305,8 +305,11 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     <div style={{ maxWidth: 520, margin: '60px auto', padding: '0 24px', textAlign: 'center' }}>
       <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', padding: '40px 32px', boxShadow: 'var(--shadow-lg)' }}>
         <div style={{ fontSize: 56 }}>🎉</div>
-        <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginTop: 16 }}>Order Placed!</h1>
-        <div style={{ color: 'var(--warm-gray)', marginTop: 8, fontSize: 14 }}>Your order <strong>{orderId}</strong> is confirmed.</div>
+        <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginTop: 16 }}>Order Received!</h1>
+        <div style={{ color: 'var(--warm-gray)', marginTop: 8, fontSize: 14, lineHeight: 1.55 }}>
+          🛵 Your rider is lacing up the boots.<br/>
+          <span style={{ fontSize: 12, opacity: .85 }}>Order <strong>{orderId}</strong> is confirmed.</span>
+        </div>
         {(() => {
           const now = new Date();
           const afterCutoff = now.getHours() >= 12;

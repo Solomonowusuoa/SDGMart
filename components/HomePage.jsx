@@ -52,7 +52,12 @@ const ProductCard = ({ product, onAdd, onView, compact }) => {
           </svg>
         )}
         <div style={{ position: 'absolute', top: 8, left: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {(product.stock || 0) <= 0 && <span className="badge" style={{ background: '#1A1A1A', color: '#fff' }}>Sold out</span>}
+          {(product.stock || 0) <= 0 && (
+            <span className="badge" title="Snapped up faster than waakye at lunch"
+              style={{ background: '#1A1A1A', color: '#fff' }}>
+              Sold out 🥵
+            </span>
+          )}
           {product.onSale && (product.stock || 0) > 0 && <span className="badge" style={{ background: '#E03A2B', color: '#fff' }}>⚡ -{product.onSale}%</span>}
           {product.bestseller && (product.stock || 0) > 0 && !product.onSale && <span className="badge badge-green">★ Top</span>}
           {expiring && dl > 0 && dl <= 30 && <span className="badge badge-gold">⏳ Clearance</span>}
@@ -87,8 +92,8 @@ const ProductCard = ({ product, onAdd, onView, compact }) => {
           {(product.stock || 0) <= 0 ? (
             <button disabled
               style={{ background: 'var(--cream-dark)', color: 'var(--warm-gray)', borderRadius: 8, padding: '7px 14px', fontSize: 12, fontWeight: 700, cursor: 'not-allowed' }}
-              title="Out of stock — tap the item for a notify-me option">
-              Out of stock
+              title="Snapped up faster than waakye at lunch. Tap the item to be notified.">
+              Sold out 🥵
             </button>
           ) : (
             <button onClick={(e) => { e.stopPropagation(); onAdd(product); }}

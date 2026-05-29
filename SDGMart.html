@@ -76,7 +76,23 @@ img{display:block;max-width:100%}
 </style>
 <!-- inline pre-compiled JSX removed: Babel source files at bottom now handle all rendering --><link id="gfont-Roboto" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;600;700&amp;display=swap"><link id="gfont-Montserrat" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&amp;display=swap"></head>
 <body style="font-family: Roboto;">
-<div id="app"><div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#000;color:#fff;flex-direction:column;gap:18px"><div class="sdg-bag-wrap"><svg viewBox="0 0 100 120" width="84" height="100" style="overflow:visible"><defs><clipPath id="sdg-bagclip"><rect x="14" y="42" width="72" height="68" rx="3"/></clipPath></defs><g clip-path="url(#sdg-bagclip)"><rect class="sdg-fill" x="14" y="42" width="72" height="68" fill="#fff"/></g><path d="M14 42 L14 108 Q14 110 16 110 L84 110 Q86 110 86 108 L86 42 Z" fill="none" stroke="#fff" stroke-width="3" stroke-linejoin="round"/><path d="M32 42 C32 22, 68 22, 68 42" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/></svg></div><div style="font-family:'Petit Formal Script','Allura',cursive;font-size:32px;line-height:1;color:#fff;letter-spacing:.02em;transform:translateY(2px)">SDG<span style="font-family:sans-serif;font-size:11px;letter-spacing:.32em;color:#888;margin-left:10px;text-transform:uppercase;display:inline-block;transform:translateY(-3px)">Mart</span></div></div></div>
+<div id="app"><div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#000;color:#fff;flex-direction:column;gap:18px"><div class="sdg-bag-wrap"><svg viewBox="0 0 100 120" width="84" height="100" style="overflow:visible"><defs><clipPath id="sdg-bagclip"><rect x="14" y="42" width="72" height="68" rx="3"/></clipPath></defs><g clip-path="url(#sdg-bagclip)"><rect class="sdg-fill" x="14" y="42" width="72" height="68" fill="#fff"/></g><path d="M14 42 L14 108 Q14 110 16 110 L84 110 Q86 110 86 108 L86 42 Z" fill="none" stroke="#fff" stroke-width="3" stroke-linejoin="round"/><path d="M32 42 C32 22, 68 22, 68 42" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/></svg></div><div style="font-family:'Petit Formal Script','Allura',cursive;font-size:32px;line-height:1;color:#fff;letter-spacing:.02em;transform:translateY(2px)">SDG<span style="font-family:sans-serif;font-size:11px;letter-spacing:.32em;color:#888;margin-left:10px;text-transform:uppercase;display:inline-block;transform:translateY(-3px)">Mart</span></div><div id="sdg-loader-msg" style="font-family:sans-serif;font-size:12px;color:#666;letter-spacing:.05em;margin-top:6px;min-height:14px"></div></div></div>
+<script>
+  // Rotating Tamale-flavored loader message (picked once on each page load)
+  (function() {
+    var msgs = [
+      'Packing your bag…',
+      'Tying the bag tight…',
+      'Cooling the sachets…',
+      'Counting the eggs…',
+      'Lacing up rider boots…',
+      'Greeting the rider…',
+      'Dusting off the harmattan…',
+    ];
+    var el = document.getElementById('sdg-loader-msg');
+    if (el) el.textContent = msgs[Math.floor(Math.random() * msgs.length)];
+  })();
+</script>
 <style>
 /* Bag-filling loader. Pure CSS + SVG, GPU-accelerated via scaleY. */
 .sdg-fill{transform-origin:50% 100%;transform:scaleY(0);animation:sdg-bag-fill 2.4s cubic-bezier(.5,0,.4,1) infinite;will-change:transform}
