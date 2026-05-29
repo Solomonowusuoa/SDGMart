@@ -12,7 +12,7 @@ const OutOfStockBlock = ({ product }) => {
         <span style={{ fontFamily: 'var(--font-head)', fontSize: 18, fontWeight: 700 }}>This one's gone</span>
       </div>
       <p style={{ fontSize: 13, color: 'var(--warm-gray)', lineHeight: 1.55, marginBottom: 14 }}>
-        Vanished faster than the last cold sachet on a 38° afternoon. We'll restock soon — tap below and we'll WhatsApp you the moment it lands.
+        Vanished faster than the last cold sachet on a 38° afternoon. We'll restock soon.
       </p>
       <button onClick={notify}
         style={{ width: '100%', background: '#25D366', color: '#fff', borderRadius: 10, padding: '12px 18px', fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>

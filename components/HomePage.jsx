@@ -53,9 +53,8 @@ const ProductCard = ({ product, onAdd, onView, compact }) => {
         )}
         <div style={{ position: 'absolute', top: 8, left: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
           {(product.stock || 0) <= 0 && (
-            <span className="badge" title="Snapped up faster than waakye at lunch"
-              style={{ background: '#1A1A1A', color: '#fff' }}>
-              Sold out 🥵
+            <span className="badge" style={{ background: '#1A1A1A', color: '#fff' }}>
+              Sold out
             </span>
           )}
           {product.onSale && (product.stock || 0) > 0 && <span className="badge" style={{ background: '#E03A2B', color: '#fff' }}>⚡ -{product.onSale}%</span>}
