@@ -567,6 +567,33 @@ const recurring = {
   },
 };
 
+// ── Product requests (customer-submitted "do you sell X?") ───────────────
+const productRequests = {
+  async create({ userId, name, phone, productName, notes }) {
+    const { data, error } = await sb.from('product_requests').insert({
+      user_id: userId || null,
+      name: String(name || '').slice(0, 100),
+      phone: String(phone || '').slice(0, 30),
+      product_name: String(productName || '').slice(0, 200),
+      notes: String(notes || '').slice(0, 600),
+    }).select().single();
+    if (error) throw error;
+    return rowOut(data);
+  },
+  async listAll({ status = null } = {}) {
+    let q = sb.from('product_requests').select('*').order('created_at', { ascending: false });
+    if (status) q = q.eq('status', status);
+    const { data, error } = await q;
+    if (error) throw error;
+    return rowsOut(data);
+  },
+  async update(id, patch) {
+    const { data, error } = await sb.from('product_requests').update(rowIn(patch)).eq('id', id).select().single();
+    if (error) throw error;
+    return rowOut(data);
+  },
+};
+
 // ── App config (singleton key/value table) ───────────────────────────────
 const appConfig = {
   async get(key) {
@@ -833,7 +860,7 @@ async function cancelOrder(orderId, userId, reason) {
 module.exports = {
   sb,
   users, squads, sessions, riders, orders, products,
-  addresses, reviews, issueReports, promotions, stats,
+  addresses, reviews, issueReports, promotions, productRequests, stats,
   pushSubs, searchLog, recurring, appConfig,
   hashPassword, verifyPassword, validatePasswordStrength,
   rateCheck, rateClear,

@@ -115,10 +115,17 @@ const CategoryPage = ({ selectedCategory, setSelectedCategory, onAdd, onView, se
         {/* Product grid */}
         <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2,1fr)' : 'repeat(auto-fill,minmax(190px,1fr))', gap: isMobile ? 12 : 18 }}>
           {filtered.length === 0 ? (
-            <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '60px 0', color: 'var(--warm-gray)' }}>
-              <div style={{ fontSize: 40 }}>🔍</div>
-              <div style={{ fontWeight: 700, marginTop: 12 }}>No products found</div>
-              <div style={{ fontSize: 13, marginTop: 6 }}>Try a different category or search term</div>
+            <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '50px 20px', color: 'var(--warm-gray)' }}>
+              <div style={{ fontSize: 40 }}>🤷‍♂️</div>
+              <div style={{ fontWeight: 700, marginTop: 12, fontSize: 16 }}>Nothing matches{searchQuery ? ` "${searchQuery}"` : ''}</div>
+              <div style={{ fontSize: 13, marginTop: 6, marginBottom: 20 }}>
+                {searchQuery ? "We don't stock this yet — but we love a challenge." : "Try a different category."}
+              </div>
+              {searchQuery && (
+                <RequestProductButton prefillProduct={searchQuery}
+                  label="📝 Ask us to find it"
+                  style={{ background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '12px 22px', fontWeight: 700, fontSize: 14, border: 'none' }} />
+              )}
             </div>
           ) : filtered.map(p => (
             <ProductCard key={p.id} product={p} onAdd={onAdd} onView={onView} />

@@ -226,7 +226,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   const tabs = [
     ['overview','📊 Overview'],['orders','📦 Orders'],['inventory','🏪 Inventory'],
     ['expiry','⏰ Expiry'],['routes','🗺 Routes'],['riders','🛵 Riders'],
-    ['promotions','⚡ Promotions'],['issues','🚨 Issues'],
+    ['promotions','⚡ Promotions'],['requests','🛒 Requests'],['issues','🚨 Issues'],
     ['analytics','🔎 Analytics'],['payments','💳 Payments'],['comms','📣 Comms'],['metrics','📈 Metrics'],
     ['security','🔐 Security'],
   ];
@@ -238,6 +238,19 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
     apiFetch('/api/admin/promotions').then(r => r.ok ? r.json() : []).then(setPromos).catch(() => {});
   }, []);
   React.useEffect(() => { if (adminTab === 'promotions') loadPromos(); }, [adminTab, loadPromos]);
+
+  // ── Product requests tab state ──
+  const [requests, setRequests] = React.useState([]);
+  const [reqFilter, setReqFilter] = React.useState('new');
+  const loadRequests = React.useCallback(() => {
+    const q = reqFilter === 'all' ? '' : `?status=${reqFilter}`;
+    apiFetch('/api/admin/product-requests' + q).then(r => r.ok ? r.json() : []).then(setRequests).catch(() => {});
+  }, [reqFilter]);
+  React.useEffect(() => { if (adminTab === 'requests') loadRequests(); }, [adminTab, loadRequests]);
+  const updateRequest = async (id, patch) => {
+    await apiFetch(`/api/admin/product-requests/${id}`, { method: 'PUT', body: JSON.stringify(patch) });
+    loadRequests();
+  };
 
   // ── Issues tab state ──
   const [issues, setIssues] = React.useState([]);
@@ -903,6 +916,73 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                 );
               })}
             </div>
+          </div>
+        )}
+
+        {/* REQUESTS — customers asking for items we don't stock */}
+        {adminTab === 'requests' && (
+          <div>
+            <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginBottom: 6 }}>Product Requests</h1>
+            <p style={{ color: 'var(--warm-gray)', fontSize: 14, marginBottom: 18 }}>Customers asking for things you don't stock yet. Tap WhatsApp to reach out, then mark the request as contacted / found / dismissed.</p>
+
+            <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+              {[['new','New'],['contacted','Contacted'],['found','Found'],['dismissed','Dismissed'],['all','All']].map(([k, l]) => (
+                <button key={k} onClick={() => setReqFilter(k)}
+                  style={{ fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 999, background: reqFilter === k ? 'var(--sage)' : 'var(--cream)', color: reqFilter === k ? '#fff' : 'var(--warm-gray)' }}>
+                  {l}
+                </button>
+              ))}
+            </div>
+
+            {requests.length === 0 ? (
+              <div style={{ background: 'var(--cream)', borderRadius: 10, padding: 30, textAlign: 'center', color: 'var(--warm-gray)', fontSize: 14 }}>
+                No requests in this filter.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {requests.map(r => {
+                  const wa = `https://wa.me/${String(r.phone || '').replace(/\D/g,'').replace(/^0/, '233')}?text=${encodeURIComponent(`Hi ${r.name}, this is SDGMart — about your request for "${r.productName}":`)}`;
+                  const statusColor = { new: '#C8923A', contacted: '#3879BF', found: 'var(--sage)', dismissed: '#888' }[r.status] || '#888';
+                  return (
+                    <div key={r.id} style={{ background: 'var(--white)', borderRadius: 10, padding: '14px 16px', boxShadow: 'var(--shadow)', opacity: r.status === 'dismissed' ? .6 : 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                        <strong style={{ fontSize: 14 }}>{r.productName}</strong>
+                        <span style={{ background: `${statusColor}22`, color: statusColor, borderRadius: 999, padding: '2px 10px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em' }}>
+                          {r.status}
+                        </span>
+                        <span style={{ fontSize: 11, color: 'var(--warm-gray)', marginLeft: 'auto' }}>{new Date(r.createdAt).toLocaleString()}</span>
+                      </div>
+                      <div style={{ marginTop: 6, fontSize: 13, color: 'var(--warm-gray)' }}>
+                        From <strong style={{ color: 'var(--warm-black)' }}>{r.name}</strong> · <a href={`tel:${r.phone}`} style={{ color: 'var(--sage-dark)', textDecoration: 'none' }}>{r.phone}</a>
+                        {r.userId && <span style={{ marginLeft: 6, fontSize: 11, opacity: .7 }}>(registered customer)</span>}
+                      </div>
+                      {r.notes && <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--cream)', borderRadius: 6, fontSize: 13, lineHeight: 1.5, fontStyle: 'italic' }}>{r.notes}</div>}
+                      <div style={{ marginTop: 12, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <a href={wa} target="_blank" rel="noreferrer"
+                          style={{ background: '#25D366', color: '#fff', fontSize: 12, fontWeight: 700, padding: '7px 14px', borderRadius: 6, textDecoration: 'none' }}>
+                          💬 WhatsApp
+                        </a>
+                        {r.status === 'new' && (
+                          <button onClick={() => updateRequest(r.id, { status: 'contacted' })} style={{ fontSize: 12, fontWeight: 700, padding: '7px 12px', borderRadius: 6, background: 'var(--cream)', color: 'var(--warm-gray)' }}>
+                            Mark contacted
+                          </button>
+                        )}
+                        {r.status !== 'found' && (
+                          <button onClick={() => updateRequest(r.id, { status: 'found' })} style={{ fontSize: 12, fontWeight: 700, padding: '7px 12px', borderRadius: 6, background: 'var(--cream)', color: 'var(--sage-dark)' }}>
+                            ✓ Found / fulfilled
+                          </button>
+                        )}
+                        {r.status !== 'dismissed' && (
+                          <button onClick={() => updateRequest(r.id, { status: 'dismissed' })} style={{ fontSize: 12, fontWeight: 700, padding: '7px 12px', borderRadius: 6, background: 'transparent', color: 'var(--accent-red)' }}>
+                            Dismiss
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 

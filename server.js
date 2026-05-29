@@ -863,6 +863,30 @@ app.post('/api/admin/promotions/:id/publish', requireAdmin, async (req, res) => 
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Product requests ─────────────────────────────────────────────────────
+app.post('/api/product-requests', async (req, res) => {
+  const { name, phone, productName, notes } = req.body || {};
+  if (!productName || !name || !phone) return res.status(400).json({ error: 'Name, phone and product required' });
+  try {
+    const r = await db.productRequests.create({
+      userId: req.user ? req.user.id : null,
+      name, phone, productName, notes,
+    });
+    res.json({ ok: true, id: r.id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/admin/product-requests', requireAdmin, async (req, res) => {
+  try { res.json(await db.productRequests.listAll({ status: req.query.status || null })); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/admin/product-requests/:id', requireAdmin, async (req, res) => {
+  try {
+    const patch = req.body || {};
+    if (patch.status === 'contacted') patch.contactedAt = new Date().toISOString();
+    res.json(await db.productRequests.update(req.params.id, patch));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Admin: upload product photo ──────────────────────────────────────────
 app.post('/api/admin/upload-image', requireAdmin, async (req, res) => {
   const { dataUrl } = req.body || {};

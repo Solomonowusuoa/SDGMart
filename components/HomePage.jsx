@@ -423,6 +423,20 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
             ))}
           </div>
         </section>
+
+        {/* Can't find what you want? — request a product */}
+        <section style={{ marginTop: 48, background: 'var(--cream)', borderRadius: 'var(--radius-lg)', padding: isMobile ? '24px 18px' : '32px 36px', textAlign: 'center' }}>
+          <div style={{ fontSize: 32 }}>🛒</div>
+          <h2 style={{ fontFamily: 'var(--font-head)', fontSize: isMobile ? 20 : 24, fontWeight: 700, marginTop: 8 }}>
+            Looking for something we don't have?
+          </h2>
+          <p style={{ fontSize: 14, color: 'var(--warm-gray)', maxWidth: 520, margin: '8px auto 18px', lineHeight: 1.6 }}>
+            Tell us what you need. If we can source it locally, we'll WhatsApp you with a price and timeline.
+          </p>
+          <RequestProductButton
+            label="📝 Request an item"
+            style={{ background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '12px 28px', fontWeight: 700, fontSize: 14, border: 'none' }} />
+        </section>
       </div>
 
       {/* Footer */}
