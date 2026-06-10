@@ -4,6 +4,9 @@ const CategoryPage = ({ selectedCategory, setSelectedCategory, onAdd, onView, se
   const [activeCategory, setActiveCategory] = React.useState(selectedCategory);
   const [showFilters, setShowFilters] = React.useState(false);
   const isMobile = useMobile();
+  const showFreshness = typeof window !== 'undefined' && window.SHOW_FRESHNESS === true;
+  const sortChips = [['default','Default'],['price-asc','↑ Price'],['price-desc','↓ Price'], ...(showFreshness ? [['expiry','Expiry']] : [])];
+  const sortOptions = [['default','Default'],['price-asc','Price: Low to High'],['price-desc','Price: High to Low'], ...(showFreshness ? [['expiry','Expiry: Soonest']] : [])];
 
   React.useEffect(() => { setActiveCategory(selectedCategory); }, [selectedCategory]);
 
@@ -69,7 +72,7 @@ const CategoryPage = ({ selectedCategory, setSelectedCategory, onAdd, onView, se
           </button>
           {showFilters && (
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
-              {[['default','Default'],['price-asc','↑ Price'],['price-desc','↓ Price'],['expiry','Expiry']].map(([val, label]) => (
+              {sortChips.map(([val, label]) => (
                 <button key={val} onClick={() => { setSortBy(val); setShowFilters(false); }}
                   style={{ padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: sortBy === val ? 700 : 500, background: sortBy === val ? 'var(--sage)' : 'var(--cream-dark)', color: sortBy === val ? '#fff' : 'var(--warm-black)', border: 'none' }}>
                   {label}
@@ -101,7 +104,7 @@ const CategoryPage = ({ selectedCategory, setSelectedCategory, onAdd, onView, se
 
               <div style={{ marginTop: 20, borderTop: '1px solid var(--cream-dark)', paddingTop: 16 }}>
                 <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.06em' }}>Sort By</div>
-                {[['default','Default'],['price-asc','Price: Low to High'],['price-desc','Price: High to Low'],['expiry','Expiry: Soonest']].map(([val, label]) => (
+                {sortOptions.map(([val, label]) => (
                   <button key={val} onClick={() => setSortBy(val)}
                     style={{ display: 'block', textAlign: 'left', width: '100%', padding: '7px 12px', borderRadius: 8, fontSize: 12, fontWeight: sortBy === val ? 700 : 400, background: sortBy === val ? 'var(--cream-dark)' : 'transparent', color: 'var(--warm-black)', marginBottom: 2 }}>
                     {label}

@@ -1,18 +1,16 @@
 // ProductCard component
 const ProductCard = ({ product, onAdd, onView, compact }) => {
-  const isExpiringSoon = () => {
-    const bb = new Date(product.bestBefore);
-    const now = new Date();
-    const days = Math.ceil((bb - now) / (1000*60*60*24));
-    return days <= 60;
-  };
+  // Freshness/expiry display is admin-controlled. When off, no BB dates,
+  // clearance badges, or auto-discounts are shown to customers.
+  const showFreshness = typeof window !== 'undefined' && window.SHOW_FRESHNESS === true;
   const daysLeft = () => {
+    if (!product.bestBefore) return Infinity;
     const bb = new Date(product.bestBefore);
     const now = new Date();
     return Math.ceil((bb - now) / (1000*60*60*24));
   };
-  const expiring = isExpiringSoon();
   const dl = daysLeft();
+  const expiring = showFreshness && dl <= 60;
 
   // Placeholder image using category colors
   const catColors = {
@@ -65,11 +63,13 @@ const ProductCard = ({ product, onAdd, onView, compact }) => {
         {(product.stock || 0) <= 0 && (
           <div style={{ position: 'absolute', inset: 0, background: 'rgba(255,255,255,.55)', pointerEvents: 'none' }} />
         )}
-        <div style={{ position: 'absolute', top: 8, right: 8 }}>
-          <span style={{ background: 'rgba(255,255,255,.9)', borderRadius: 20, padding: '2px 8px', fontSize: 10, fontWeight: 600, color: 'var(--warm-gray)' }}>
-            BB: {new Date(product.bestBefore).toLocaleDateString('en-GB',{month:'short',year:'numeric'})}
-          </span>
-        </div>
+        {showFreshness && product.bestBefore && (
+          <div style={{ position: 'absolute', top: 8, right: 8 }}>
+            <span style={{ background: 'rgba(255,255,255,.9)', borderRadius: 20, padding: '2px 8px', fontSize: 10, fontWeight: 600, color: 'var(--warm-gray)' }}>
+              BB: {new Date(product.bestBefore).toLocaleDateString('en-GB',{month:'short',year:'numeric'})}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Info */}
@@ -109,14 +109,19 @@ const ProductCard = ({ product, onAdd, onView, compact }) => {
 };
 
 // Trust badges
-const TrustBadges = () => (
+const TrustBadges = () => {
+  const showFreshness = typeof window !== 'undefined' && window.SHOW_FRESHNESS === true;
+  const badges = [
+    ['⚡','Same-Day Delivery','Order before 12pm, get it today in Tamale'],
+    ['🔒','MoMo Payments','Secure Mobile Money checkout'],
+    showFreshness
+      ? ['📅','Freshness Dates','Every product shows its Best Before date']
+      : ['🛵','In-House Delivery','Our own riders, tracked to your door'],
+  ];
+  return (
   <div style={{ background: 'linear-gradient(90deg, var(--sage-dark) 0%, var(--sage) 100%)', color: '#fff', padding: '18px 24px' }}>
     <div style={{ maxWidth: 1280, margin: '0 auto', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 20 }}>
-      {[
-        ['⚡','Same-Day Delivery','Order before 12pm, get it today in Tamale'],
-        ['🔒','MoMo Payments','Secure Mobile Money checkout'],
-        ['📅','Freshness Dates','Every product shows its Best Before date'],
-      ].map(([icon,title,sub]) => (
+      {badges.map(([icon,title,sub]) => (
         <div key={title} style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
           <span style={{ fontSize: 22, flexShrink: 0 }}>{icon}</span>
           <div>
@@ -127,7 +132,8 @@ const TrustBadges = () => (
       ))}
     </div>
   </div>
-);
+  );
+};
 
 // Essentials Card — soft sky-blue accent
 const EssentialsCard = ({ onAddAll, onView }) => {
@@ -409,24 +415,31 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
         {/* Predictive Pantry */}
         <PredictivePantry onAdd={onAdd} onView={onView} />
 
-        {/* Clearance Corner */}
-        <section style={{ marginTop: 48 }}>
-          <div style={{ background: 'var(--accent-red)', borderRadius: 'var(--radius-lg)', padding: '20px 24px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 16 }}>
-            <span style={{ fontSize: 28 }}>🏷️</span>
-            <div>
-              <div style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, color: '#fff' }}>Clearance Corner</div>
-              <div style={{ fontSize: 13, color: 'rgba(255,255,255,.85)' }}>Items expiring within 60 days — discounted automatically</div>
-            </div>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(auto-fill,minmax(190px,1fr))', gap: 16 }}>
-            {window.PRODUCTS.filter(p => {
-              const days = Math.ceil((new Date(p.bestBefore) - new Date()) / (1000*60*60*24));
-              return days <= 60 && days > 0;
-            }).slice(0,4).map(p => (
-              <ProductCard key={p.id} product={p} onAdd={onAdd} onView={onView} compact />
-            ))}
-          </div>
-        </section>
+        {/* Clearance Corner — only when freshness/expiry tracking is enabled */}
+        {window.SHOW_FRESHNESS === true && (() => {
+          const clearance = window.PRODUCTS.filter(p => {
+            if (!p.bestBefore) return false;
+            const days = Math.ceil((new Date(p.bestBefore) - new Date()) / (1000*60*60*24));
+            return days <= 60 && days > 0;
+          }).slice(0, 4);
+          if (clearance.length === 0) return null;
+          return (
+            <section style={{ marginTop: 48 }}>
+              <div style={{ background: 'var(--accent-red)', borderRadius: 'var(--radius-lg)', padding: '20px 24px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 16 }}>
+                <span style={{ fontSize: 28 }}>🏷️</span>
+                <div>
+                  <div style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, color: '#fff' }}>Clearance Corner</div>
+                  <div style={{ fontSize: 13, color: 'rgba(255,255,255,.85)' }}>Items expiring within 60 days — discounted automatically</div>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(auto-fill,minmax(190px,1fr))', gap: 16 }}>
+                {clearance.map(p => (
+                  <ProductCard key={p.id} product={p} onAdd={onAdd} onView={onView} compact />
+                ))}
+              </div>
+            </section>
+          );
+        })()}
 
         {/* Can't find what you want? — request a product */}
         <section style={{ marginTop: 48, background: 'var(--cream)', borderRadius: 'var(--radius-lg)', padding: isMobile ? '24px 18px' : '32px 36px', textAlign: 'center' }}>
@@ -460,7 +473,7 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
                 ['Cereals', () => goCat('Cereals')],
                 ['Dairy', () => goCat('Dairy')],
                 ['Detergents', () => goCat('Detergents')],
-                ['Clearance', () => { goHome(); setTimeout(() => { const el = [...document.querySelectorAll('h2,div')].find(n => /Clearance Corner/i.test(n.textContent)); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100); }],
+                ...(window.SHOW_FRESHNESS === true ? [['Clearance', () => { goHome(); setTimeout(() => { const el = [...document.querySelectorAll('h2,div')].find(n => /Clearance Corner/i.test(n.textContent)); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100); }]] : []),
               ]],
               ['Customer Care', [
                 ['WhatsApp Us', () => wa('')],

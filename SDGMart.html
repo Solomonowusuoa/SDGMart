@@ -22,6 +22,8 @@
 <!-- Leaflet (free OpenStreetMap-based maps, no API key) -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- jsPDF for designed PDF receipts (no server round-trip) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js"></script>
 <script src="data/products.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -105,6 +107,7 @@ img{display:block;max-width:100%}
 </style>
 <link rel="stylesheet" href="responsive.css">
 <script src="hooks.js"></script>
+<script src="components/receipt.js"></script>
 <script type="text/babel" src="components/Header.jsx" data-presets="react" data-filename="components/Header.jsx"></script>
 <script type="text/babel" src="components/HomePage.jsx" data-presets="react" data-filename="components/HomePage.jsx"></script>
 <script type="text/babel" src="components/CategoryPage.jsx" data-presets="react" data-filename="components/CategoryPage.jsx"></script>

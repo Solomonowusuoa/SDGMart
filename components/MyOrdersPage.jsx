@@ -57,6 +57,27 @@ const MyOrdersPage = ({ setPage, openTracking, setCart }) => {
     setPage('checkout');
   };
 
+  const downloadReceipt = (o) => {
+    if (!window.generateReceiptPDF) { alert('PDF engine still loading — try again in a moment.'); return; }
+    const items = Array.isArray(o.items) ? o.items : [];
+    window.generateReceiptPDF({
+      orderId: o.id,
+      date: o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-GB') : new Date().toLocaleDateString('en-GB'),
+      items: items.map(i => ({ name: i.name, qty: i.qty, price: i.price })),
+      subtotal: o.subtotal,
+      discount: o.discount,
+      loyaltyUsed: o.loyaltyUsed,
+      delivery: o.deliveryFee != null ? o.deliveryFee : o.delivery,
+      total: o.total,
+      neighborhood: o.neighborhood,
+      recipient: o.recipientName || o.customerName,
+      phone: o.recipientPhone || o.customerPhone,
+      location: (o.location && o.location.address) || o.address || '',
+      payMethod: o.paymentMethod,
+      surpriseExtra: o.surpriseExtra,
+    });
+  };
+
   const reportIssue = async () => {
     if (!issue.description.trim()) return;
     const r = await apiFetch(`/api/me/orders/${issueFor}/report-issue`, {
@@ -164,6 +185,10 @@ const MyOrdersPage = ({ setPage, openTracking, setCart }) => {
                 <button onClick={() => reorder(o)}
                   style={{ fontSize: 11, fontWeight: 700, padding: '6px 10px', borderRadius: 6, background: 'var(--cream)', color: 'var(--sage-dark)' }}>
                   🔁 Order again
+                </button>
+                <button onClick={() => downloadReceipt(o)}
+                  style={{ fontSize: 11, fontWeight: 700, padding: '6px 10px', borderRadius: 6, background: 'var(--cream)', color: 'var(--warm-black)' }}>
+                  📄 Receipt
                 </button>
                 {canCancel(o) && (
                   <button onClick={() => cancelOrder(o.id)}

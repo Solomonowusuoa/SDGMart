@@ -30,9 +30,11 @@ const ProductPage = ({ product, onAdd, setPage, setSelectedCategory }) => {
 
   if (!product) return null;
 
+  const showFreshness = typeof window !== 'undefined' && window.SHOW_FRESHNESS === true;
   const related = window.PRODUCTS.filter(p => p.category === product.category && p.id !== product.id).slice(0, 4);
-  const daysLeft = Math.ceil((new Date(product.bestBefore) - new Date()) / (1000 * 60 * 60 * 24));
-  const discount = daysLeft <= 30 ? 0.15 : daysLeft <= 60 ? 0.10 : 0;
+  const daysLeft = product.bestBefore ? Math.ceil((new Date(product.bestBefore) - new Date()) / (1000 * 60 * 60 * 24)) : Infinity;
+  // Auto-discount on near-expiry items only applies when freshness tracking is on.
+  const discount = showFreshness ? (daysLeft <= 30 ? 0.15 : daysLeft <= 60 ? 0.10 : 0) : 0;
   const finalPrice = product.price * (1 - discount);
 
   const catColors = {
@@ -73,7 +75,7 @@ const ProductPage = ({ product, onAdd, setPage, setSelectedCategory }) => {
               <span className="badge badge-green" style={{ fontSize: 13, padding: '4px 12px' }}>★ Bestseller</span>
             </div>
           )}
-          {discount > 0 && (
+          {showFreshness && discount > 0 && (
             <div style={{ position: 'absolute', top: 16, right: 16 }}>
               <span className="badge badge-sale" style={{ fontSize: 13, padding: '4px 12px' }}>-{Math.round(discount*100)}% OFF</span>
             </div>
@@ -97,15 +99,17 @@ const ProductPage = ({ product, onAdd, setPage, setSelectedCategory }) => {
             )}
           </div>
 
-          {/* Freshness */}
+          {/* Stock + (optionally) Best Before */}
           <div style={{ marginTop: 16, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <div style={{ background: daysLeft <= 30 ? 'rgba(192,57,43,.1)' : 'rgba(0,0,0,.06)', borderRadius: 8, padding: '10px 14px' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Best Before</div>
-              <div style={{ fontWeight: 700, fontSize: 15, color: daysLeft <= 30 ? 'var(--accent-red)' : 'var(--sage-dark)', marginTop: 2 }}>
-                {new Date(product.bestBefore).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+            {showFreshness && product.bestBefore && (
+              <div style={{ background: daysLeft <= 30 ? 'rgba(192,57,43,.1)' : 'rgba(0,0,0,.06)', borderRadius: 8, padding: '10px 14px' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Best Before</div>
+                <div style={{ fontWeight: 700, fontSize: 15, color: daysLeft <= 30 ? 'var(--accent-red)' : 'var(--sage-dark)', marginTop: 2 }}>
+                  {new Date(product.bestBefore).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--warm-gray)', marginTop: 2 }}>{daysLeft} days remaining</div>
               </div>
-              <div style={{ fontSize: 11, color: 'var(--warm-gray)', marginTop: 2 }}>{daysLeft} days remaining</div>
-            </div>
+            )}
             <div style={{ background: 'rgba(0,0,0,.06)', borderRadius: 8, padding: '10px 14px' }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>In Stock</div>
               <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--sage-dark)', marginTop: 2 }}>{product.stock} units</div>

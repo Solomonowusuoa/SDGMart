@@ -185,10 +185,36 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
 
   const buildWhatsAppMsg = () => encodeURIComponent(buildReceiptText(orderSnapshot));
 
+  // Map a checkout snapshot to the normalized shape the PDF generator wants.
+  const snapToReceipt = (snap) => {
+    const s = snap || orderSnapshot;
+    if (!s) return null;
+    return {
+      orderId,
+      date: new Date().toLocaleDateString('en-GB'),
+      items: s.items.map(i => ({ name: i.name, qty: i.qty, price: i.price })),
+      subtotal: s.subtotal,
+      discount: s.discount,
+      loyaltyUsed: s.loyaltyUsed || 0,
+      delivery: s.delivery,
+      total: s.total,
+      neighborhood: s.neighborhood,
+      recipient: s.familyMode ? s.form.recipientName : s.form.name,
+      phone: s.familyMode ? s.form.recipientPhone : s.form.phone,
+      location: s.form.mapsPin || s.form.address || '',
+      payMethod: s.form.payMethod,
+      giftMessage: s.familyMode ? s.form.giftMessage : '',
+    };
+  };
+
   const generateReceipt = (snap) => {
-    const text = buildReceiptText(snap || orderSnapshot)
-      // Strip WhatsApp markdown for the text file
-      .replace(/\*/g, '');
+    const data = snapToReceipt(snap);
+    if (data && window.generateReceiptPDF) {
+      window.generateReceiptPDF(data);
+      return;
+    }
+    // Fallback to plain text if jsPDF somehow didn't load
+    const text = buildReceiptText(snap || orderSnapshot).replace(/\*/g, '');
     const blob = new Blob([text], { type: 'text/plain' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -344,6 +370,10 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
           style={{ display: 'block', marginTop: 16, background: waValid ? '#25D366' : '#888', color: '#fff', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 15, textDecoration: 'none', cursor: waValid ? 'pointer' : 'not-allowed' }}>
           📱 Send Order to My WhatsApp
         </a>
+        <button onClick={() => generateReceipt(orderSnapshot)}
+          style={{ marginTop: 10, width: '100%', background: '#1A1A1A', color: '#fff', borderRadius: 10, padding: '12px', fontWeight: 700, fontSize: 14 }}>
+          📄 Download PDF Receipt
+        </button>
         {currentUser && currentUser.id && openTracking && (
           <button onClick={() => openTracking(orderId)}
             style={{ marginTop: 10, width: '100%', background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '12px', fontWeight: 700, fontSize: 14 }}>
@@ -672,8 +702,8 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                 <input type="checkbox" checked={downloadReceipt} onChange={e => setDownloadReceipt(e.target.checked)}
                   style={{ width: 18, height: 18, accentColor: 'var(--sage)', cursor: 'pointer' }} />
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: 14 }}>Download Receipt</div>
-                  <div style={{ fontSize: 12, color: 'var(--warm-gray)' }}>Get a text receipt of your order</div>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>Download PDF Receipt</div>
+                  <div style={{ fontSize: 12, color: 'var(--warm-gray)' }}>Get a printable PDF receipt of your order</div>
                 </div>
               </label>
 

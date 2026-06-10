@@ -219,18 +219,22 @@ app.get('/data/products.js', async (req, res) => {
     const categories = ["Cereals","Dairy","Detergents","Rice & Grains","Cooking Oil","Snacks","Canned Foods","Drinks","Desserts"];
     const essentials = [1, 5, 13, 17, 9, 29, 25, 22, 3];
     const neighborhoods = ["Tamale Central","Kalpohin","Lamashegu","Sagnarigu","Nyohini","Choggu","Kalpohini","Vittin","Tishigu","Gumbihini","Jisonayili"];
+    // Customer-facing freshness/expiry display is off by default; admin can flip it on.
+    const showFreshness = !!(await db.appConfig.get('show_freshness'));
     const js = `
 const PRODUCTS = ${JSON.stringify(productsList)};
 const CATEGORIES = ${JSON.stringify(categories)};
 const ESSENTIALS = ${JSON.stringify(essentials)};
 const NEIGHBORHOODS = ${JSON.stringify(neighborhoods)};
 const TOP_IDS_BY_ORDERS = ${JSON.stringify(TOP_IDS_BY_ORDERS)};
+const SHOW_FRESHNESS = ${showFreshness ? 'true' : 'false'};
 if (typeof window !== 'undefined') {
   window.PRODUCTS = PRODUCTS;
   window.CATEGORIES = CATEGORIES;
   window.ESSENTIALS = ESSENTIALS;
   window.NEIGHBORHOODS = NEIGHBORHOODS;
   window.TOP_IDS_BY_ORDERS = TOP_IDS_BY_ORDERS;
+  window.SHOW_FRESHNESS = SHOW_FRESHNESS;
 }`;
     res.setHeader('Content-Type', 'application/javascript');
     res.setHeader('Cache-Control', 'no-cache');
@@ -927,6 +931,24 @@ app.post('/api/admin/momo/numbers', requireAdmin, async (req, res) => {
     await db.appConfig.set('momo_numbers', {
       mtn: clean(mtn), telecel: clean(telecel), at: clean(at), name: clean(name),
     });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Store settings (admin-toggleable site behaviour) ─────────────────────
+app.get('/api/admin/settings', requireAdmin, async (req, res) => {
+  try {
+    res.json({
+      showFreshness: !!(await db.appConfig.get('show_freshness')),
+      storeName: (await db.appConfig.get('store_name')) || 'SDGMart',
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/admin/settings', requireAdmin, async (req, res) => {
+  const { showFreshness, storeName } = req.body || {};
+  try {
+    if (showFreshness != null) await db.appConfig.set('show_freshness', !!showFreshness);
+    if (storeName != null) await db.appConfig.set('store_name', String(storeName).slice(0, 60));
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

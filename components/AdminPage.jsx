@@ -18,6 +18,64 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   }, [currentUser]);
   const [pwForm, setPwForm] = React.useState({ current: '', next: '', confirm: '' });
   const [pwMsg, setPwMsg] = React.useState({ type: '', text: '' });
+
+  // ── CSV export (Excel-openable) ──
+  // Quotes every cell + escapes embedded quotes, prepends a UTF-8 BOM so
+  // Excel reads accents/symbols correctly. Triggers a file download.
+  const exportCSV = (filename, headers, rows) => {
+    const esc = (v) => {
+      const s = v == null ? '' : String(v);
+      return `"${s.replace(/"/g, '""')}"`;
+    };
+    const lines = [headers.map(esc).join(',')];
+    rows.forEach(r => lines.push(r.map(esc).join(',')));
+    const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+
+  const exportSales = () => {
+    const headers = ['Order ID','Date','Status','Customer','Phone','Neighborhood','Items','Item Count','Subtotal (GHS)','Discount (GHS)','Loyalty Used (GHS)','Delivery (GHS)','Total (GHS)','Payment','Priority'];
+    const rows = orders.map(o => {
+      const items = Array.isArray(o.items) ? o.items : [];
+      const itemStr = items.map(i => `${i.qty || 1}x ${i.name}`).join('; ');
+      return [
+        o.id,
+        o.createdAt ? new Date(o.createdAt).toLocaleString('en-GB') : '',
+        o.status || '',
+        o.customerName || o.customer || '',
+        o.customerPhone || o.phone || '',
+        o.neighborhood || '',
+        itemStr,
+        items.length,
+        Number(o.subtotal || 0).toFixed(2),
+        Number(o.discount || 0).toFixed(2),
+        Number(o.loyaltyUsed || 0).toFixed(2),
+        Number(o.deliveryFee != null ? o.deliveryFee : o.delivery || 0).toFixed(2),
+        Number(o.total || 0).toFixed(2),
+        o.paymentMethod || o.payMethod || '',
+        o.priority ? 'Yes' : 'No',
+      ];
+    });
+    exportCSV(`SDGMart-sales-${new Date().toISOString().slice(0,10)}.csv`, headers, rows);
+  };
+
+  const exportInventory = () => {
+    const headers = ['Product ID','Name','Category','Unit','Price (GHS)','Stock','Low-Stock Alert','Stock Value (GHS)','Best Before','Bestseller'];
+    const rows = products.map(p => [
+      p.id, p.name, p.category, p.unit || '',
+      Number(p.price || 0).toFixed(2),
+      p.stock != null ? p.stock : 0,
+      p.lowStockThreshold != null ? p.lowStockThreshold : 5,
+      (Number(p.price || 0) * Number(p.stock || 0)).toFixed(2),
+      p.bestBefore || '',
+      p.bestseller ? 'Yes' : 'No',
+    ]);
+    exportCSV(`SDGMart-inventory-${new Date().toISOString().slice(0,10)}.csv`, headers, rows);
+  };
   const submitPwChange = async () => {
     setPwMsg({ type: '', text: '' });
     if (pwForm.next !== pwForm.confirm) { setPwMsg({ type: 'err', text: 'Passwords do not match' }); return; }
@@ -228,8 +286,23 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
     ['expiry','⏰ Expiry'],['routes','🗺 Routes'],['riders','🛵 Riders'],
     ['promotions','⚡ Promotions'],['requests','🛒 Requests'],['issues','🚨 Issues'],
     ['analytics','🔎 Analytics'],['payments','💳 Payments'],['comms','📣 Comms'],['metrics','📈 Metrics'],
-    ['security','🔐 Security'],
+    ['settings','⚙️ Settings'],['security','🔐 Security'],
   ];
+
+  // ── Settings tab state ──
+  const [settings, setSettings] = React.useState({ showFreshness: false });
+  const [settingsSaved, setSettingsSaved] = React.useState('');
+  const loadSettings = React.useCallback(() => {
+    apiFetch('/api/admin/settings').then(r => r.ok ? r.json() : {}).then(s => setSettings({ showFreshness: !!s.showFreshness })).catch(() => {});
+  }, []);
+  React.useEffect(() => { if (adminTab === 'settings') loadSettings(); }, [adminTab, loadSettings]);
+  const saveSettings = async (patch) => {
+    const next = { ...settings, ...patch };
+    setSettings(next);
+    await apiFetch('/api/admin/settings', { method: 'POST', body: JSON.stringify(patch) });
+    setSettingsSaved('Saved — reload the storefront to see changes');
+    setTimeout(() => setSettingsSaved(''), 3000);
+  };
 
   // ── Promotions tab state ──
   const [promos, setPromos] = React.useState([]);
@@ -413,8 +486,14 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
           <div>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
               <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700 }}>Orders</h1>
-              <div style={{ fontSize: 13, color: 'var(--warm-gray)' }}>
-                Showing <strong>{filteredOrders.length}</strong> of {orders.length} total
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                <span style={{ fontSize: 13, color: 'var(--warm-gray)' }}>
+                  Showing <strong>{filteredOrders.length}</strong> of {orders.length} total
+                </span>
+                <button onClick={exportSales} disabled={orders.length === 0}
+                  style={{ fontSize: 12, fontWeight: 700, background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '8px 14px', opacity: orders.length === 0 ? .5 : 1 }}>
+                  ⬇ Export to Excel
+                </button>
               </div>
             </div>
 
@@ -620,7 +699,13 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
             <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
               <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--cream-dark)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontWeight: 700, fontSize: 15 }}>All Products ({products.length})</span>
-                <span style={{ fontSize: 13, color: 'var(--warm-gray)' }}>Total Stock Value: <strong>GHS {products.reduce((s,p)=>s+p.price*p.stock,0).toFixed(2)}</strong></span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <span style={{ fontSize: 13, color: 'var(--warm-gray)' }}>Total Stock Value: <strong>GHS {products.reduce((s,p)=>s+p.price*p.stock,0).toFixed(2)}</strong></span>
+                  <button onClick={exportInventory}
+                    style={{ fontSize: 12, fontWeight: 700, background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '7px 12px' }}>
+                    ⬇ Export to Excel
+                  </button>
+                </div>
               </div>
               <div style={{ maxHeight: 500, overflowY: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -1015,6 +1100,32 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* SETTINGS — site-wide toggles */}
+        {adminTab === 'settings' && (
+          <div>
+            <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginBottom: 6 }}>Store Settings</h1>
+            <p style={{ color: 'var(--warm-gray)', fontSize: 14, marginBottom: 24 }}>Site-wide options. Changes apply after customers reload the storefront.</p>
+
+            <div style={{ background: 'var(--white)', borderRadius: 12, padding: '20px 22px', boxShadow: 'var(--shadow)', maxWidth: 620 }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: 15 }}>Show freshness / Best-Before dates</div>
+                  <div style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 4, lineHeight: 1.5 }}>
+                    When ON, customers see each product's Best-Before date, a "Clearance Corner" for items nearing expiry,
+                    and automatic discounts on those items. Leave OFF until you're regularly stocking perishables — you can
+                    still record Best-Before dates per product in Inventory either way.
+                  </div>
+                </div>
+                <button onClick={() => saveSettings({ showFreshness: !settings.showFreshness })}
+                  style={{ flexShrink: 0, width: 52, height: 30, borderRadius: 999, background: settings.showFreshness ? 'var(--sage)' : 'var(--cream-dark)', position: 'relative', transition: 'background .2s', border: 'none', cursor: 'pointer' }}>
+                  <span style={{ position: 'absolute', top: 3, left: settings.showFreshness ? 25 : 3, width: 24, height: 24, borderRadius: '50%', background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.2)' }} />
+                </button>
+              </div>
+              {settingsSaved && <div style={{ marginTop: 16, fontSize: 13, color: 'var(--sage)' }}>✓ {settingsSaved}</div>}
+            </div>
           </div>
         )}
 
