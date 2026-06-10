@@ -62,6 +62,8 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
       location: a.location || null,
     }));
   };
+  // Map is optional — collapsed by default so Leaflet isn't loaded for everyone.
+  const [mapOpen, setMapOpen] = React.useState(false);
   // MoMo: customer's own number, admin's merchant numbers per telco, picked telco
   const [customerMomo, setCustomerMomo] = React.useState('');
   const [telco, setTelco] = React.useState('mtn');
@@ -138,6 +140,8 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     if (!form.name.trim()) { err('name','Required'); ok=false; }
     if (!form.phone.trim() || !/^\+?[\d\s]{9,}$/.test(form.phone)) { err('phone','Valid phone required'); ok=false; }
     if (!effectiveNeighborhood) { err('neighborhood', form.neighborhood === '__other__' ? 'Type your area' : 'Select a neighborhood'); ok=false; }
+    // Typed address/landmark is now compulsory (the map pin is optional).
+    if (!form.address.trim()) { err('address','Please describe your address or a nearby landmark'); ok=false; }
     if (familyMode) {
       if (!form.recipientName.trim()) { err('recipientName','Required'); ok=false; }
       if (!form.recipientPhone.trim()) { err('recipientPhone','Required'); ok=false; }
@@ -505,19 +509,43 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                   )}
                   {errors.neighborhood && <div style={{ fontSize: 11, color: 'var(--accent-red)', marginTop: 3 }}>{errors.neighborhood}</div>}
                 </div>
-                <CheckoutField {...fieldProps('address')} label="Street Address (Optional)" placeholder="House number and street" />
+                <CheckoutField {...fieldProps('address')} label="Delivery Address / Landmark *" placeholder="e.g. Blue gate opposite Lamashegu market" />
               </div>
 
-              {/* Pin exact delivery spot on the map */}
-              <div style={{ marginTop: 18 }}>
-                <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.05em' }}>
-                  Pin your exact location <span style={{ color: 'var(--accent-red)', fontWeight: 700 }}>*</span>
-                </label>
-                <MapPicker
-                  value={form.location || null}
-                  onChange={(loc) => set('location', loc)}
-                  height={260}
-                />
+              {/* Optional: pin exact spot on the map (lazy-loads the map) */}
+              <div style={{ marginTop: 16 }}>
+                {!mapOpen ? (
+                  <button type="button" onClick={() => setMapOpen(true)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', background: 'var(--cream)', border: '1.5px dashed var(--cream-dark)', borderRadius: 10, cursor: 'pointer', textAlign: 'left' }}>
+                    <span style={{ fontSize: 18 }}>📍</span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>
+                        Pin exact spot on map <span style={{ color: 'var(--warm-gray)', fontWeight: 500 }}>(optional)</span>
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--warm-gray)' }}>
+                        {form.location ? '✓ Location pinned — tap to adjust' : 'Helps the rider find you faster. Your address above is enough on its own.'}
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 13, color: 'var(--sage-dark)', fontWeight: 700 }}>{form.location ? 'Edit' : 'Open map'}</span>
+                  </button>
+                ) : (
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                        Pin your exact spot
+                      </label>
+                      <button type="button" onClick={() => setMapOpen(false)}
+                        style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', background: 'transparent' }}>
+                        ✕ Hide map
+                      </button>
+                    </div>
+                    <MapPicker
+                      value={form.location || null}
+                      onChange={(loc) => set('location', loc)}
+                      height={260}
+                    />
+                  </div>
+                )}
               </div>
 
               {familyMode && (

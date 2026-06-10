@@ -3,179 +3,185 @@
 //   { orderId, date, items:[{name,qty,price}], subtotal, discount, loyaltyUsed,
 //     delivery, total, neighborhood, recipient, phone, location, payMethod,
 //     giftMessage, surpriseExtra }
-//
-// STYLE: compact thermal-receipt (80mm wide, monospace, like a printed till
-// slip). The previous "editorial A5" design lives in git history — revert the
-// commit if you prefer it.
 (function () {
+  const BLACK = [17, 17, 17];
+  const GRAY = [120, 120, 120];
+  const LIGHT = [232, 232, 232];
+
+  // jsPDF is loaded on demand (kept out of the initial page load). The first
+  // receipt download injects the script, waits for it, then renders.
+  let _loadingPromise = null;
+  function ensureJsPDF() {
+    if (window.jspdf && window.jspdf.jsPDF) return Promise.resolve();
+    if (_loadingPromise) return _loadingPromise;
+    _loadingPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://unpkg.com/jspdf@2.5.2/dist/jspdf.umd.min.js';
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('Failed to load PDF engine'));
+      document.head.appendChild(s);
+    });
+    return _loadingPromise;
+  }
+
+  // Public entry: async-loads jsPDF if needed, then renders.
   function generateReceiptPDF(o, opts) {
+    if (window.jspdf && window.jspdf.jsPDF) return renderPDF(o, opts);
+    ensureJsPDF()
+      .then(() => renderPDF(o, opts))
+      .catch(() => alert('Could not load the PDF engine — please check your connection and try again.'));
+  }
+
+  function renderPDF(o, opts) {
     opts = opts || {};
-    if (!window.jspdf || !window.jspdf.jsPDF) {
-      alert('PDF engine still loading — please try again in a moment.');
-      return;
-    }
     const { jsPDF } = window.jspdf;
+    // A5 portrait — receipt-sized, prints cleanly
+    const doc = new jsPDF({ unit: 'mm', format: 'a5' });
+    const W = doc.internal.pageSize.getWidth();   // 148
+    const M = 14;                                  // margin
+    const contentW = W - M * 2;
+    let y = 0;
 
-    const PW = 80;        // paper width (mm) — standard thermal roll
-    const M = 5;          // side margin
-    const CW = PW - M * 2; // content width
-    const items = o.items || [];
-
-    // ── First pass: measure height ──
-    // We need to know how many wrapped lines each item name takes. Build a
-    // throwaway doc with the same font metrics to measure.
-    const probe = new jsPDF({ unit: 'mm', format: [PW, 200] });
-    probe.setFont('courier', 'normal');
-    probe.setFontSize(8);
-    const itemNameWidth = CW - 18; // leave room for the amount column
-    let itemLineCount = 0;
-    const itemWrapped = items.map(it => {
-      const label = `${it.qty || 1}x ${it.name}`;
-      const lines = probe.splitTextToSize(label, itemNameWidth);
-      itemLineCount += lines.length;
-      return lines;
-    });
-
-    // Height budget (mm)
-    let h = 0;
-    h += 6;                       // top pad
-    h += 7 + 5 + 4;               // logo + tagline + divider
-    h += 5 + 5;                   // order # + date
-    h += 4;                       // divider
-    h += 4 + 5 + 5 + 5;           // DELIVER TO header + 3 lines
-    h += 4;                       // divider
-    h += 4;                       // ITEMS header
-    h += itemLineCount * 4 + 2;   // item lines
-    h += 4;                       // divider
-    let totalRows = 2;            // subtotal + delivery
-    if (Number(o.discount) > 0) totalRows++;
-    if (Number(o.loyaltyUsed) > 0) totalRows++;
-    h += totalRows * 4.5;
-    h += 3 + 7 + 3;               // double divider + TOTAL + divider
-    h += 5;                       // payment line
-    if (o.surpriseExtra || o.giftMessage) h += 8;
-    h += 6 + 5 + 5 + 6;           // footer divider + thank you + contact + pad
-
-    const doc = new jsPDF({ unit: 'mm', format: [PW, Math.max(h, 90)] });
-    const center = PW / 2;
-    const right = PW - M;
-    let y = 8;
-
-    const dashed = (yy) => {
-      doc.setLineDashPattern([0.6, 0.6], 0);
-      doc.setDrawColor(120, 120, 120);
-      doc.setLineWidth(0.2);
-      doc.line(M, yy, PW - M, yy);
-      doc.setLineDashPattern([], 0);
-    };
-    const solid = (yy, w) => {
-      doc.setDrawColor(17, 17, 17);
-      doc.setLineWidth(w || 0.4);
-      doc.line(M, yy, PW - M, yy);
-    };
-
-    // ── Header ──
+    // ── Header band ──
+    doc.setFillColor(...BLACK);
+    doc.rect(0, 0, W, 30, 'F');
+    doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(18);
-    doc.setTextColor(17, 17, 17);
-    doc.text('SDGMart', center, y, { align: 'center' });
-    y += 5;
-    doc.setFont('courier', 'normal');
-    doc.setFontSize(7.5);
-    doc.setTextColor(90, 90, 90);
-    doc.text("Tamale's smart grocery service", center, y, { align: 'center' });
-    y += 4;
-    solid(y, 0.5); y += 5;
-
-    // ── Order + date ──
-    doc.setFont('courier', 'bold');
+    doc.setFontSize(22);
+    doc.text('SDGMart', M, 16);
+    doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
-    doc.setTextColor(17, 17, 17);
-    doc.text(`ORDER #${o.orderId}`, M, y);
+    doc.setTextColor(200, 200, 200);
+    doc.text('Order Receipt', M, 23);
+    // right side: tagline
+    doc.setFontSize(7.5);
+    doc.text("Tamale's smart grocery service", W - M, 23, { align: 'right' });
+
+    y = 40;
+
+    // ── Order # + date row ──
+    doc.setTextColor(...BLACK);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text(`Order #${o.orderId}`, M, y);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(...GRAY);
+    doc.text(o.date || new Date().toLocaleDateString('en-GB'), W - M, y, { align: 'right' });
+
+    y += 8;
+
+    // ── Deliver-to block ──
+    doc.setDrawColor(...LIGHT);
+    doc.setLineWidth(0.3);
+    doc.line(M, y, W - M, y);
+    y += 6;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(...GRAY);
+    doc.text('DELIVER TO', M, y);
     y += 5;
-    doc.setFont('courier', 'normal');
-    doc.setFontSize(8);
-    doc.setTextColor(90, 90, 90);
-    doc.text(o.date || new Date().toLocaleDateString('en-GB'), M, y);
-    y += 4;
-    dashed(y); y += 5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor(...BLACK);
+    const dt = [];
+    if (o.recipient) dt.push(o.recipient);
+    if (o.phone) dt.push(o.phone);
+    doc.text(dt.join('  ·  ') || '—', M, y);
+    y += 5;
+    doc.setTextColor(...GRAY);
+    doc.setFontSize(8.5);
+    const loc = [o.neighborhood, o.location].filter(Boolean).join(' — ');
+    const locLines = doc.splitTextToSize(loc || '—', contentW);
+    doc.text(locLines, M, y);
+    y += locLines.length * 4.5 + 4;
 
-    // ── Deliver to ──
-    doc.setFont('courier', 'bold');
+    // ── Items table header ──
+    doc.setFillColor(245, 243, 238);
+    doc.rect(M, y - 4, contentW, 7, 'F');
+    doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
-    doc.setTextColor(17, 17, 17);
-    doc.text('DELIVER TO', M, y); y += 5;
-    doc.setFont('courier', 'normal');
-    doc.setFontSize(8);
-    doc.text((o.recipient || '—').slice(0, 34), M, y); y += 4.5;
-    if (o.phone) { doc.text(String(o.phone), M, y); y += 4.5; }
-    const loc = [o.neighborhood, o.location].filter(Boolean).join(' - ');
-    if (loc) { doc.splitTextToSize(loc, CW).forEach(l => { doc.text(l, M, y); y += 4; }); }
-    y += 1; dashed(y); y += 5;
+    doc.setTextColor(...GRAY);
+    doc.text('ITEM', M + 2, y);
+    doc.text('QTY', W - M - 32, y, { align: 'right' });
+    doc.text('AMOUNT', W - M - 2, y, { align: 'right' });
+    y += 7;
 
-    // ── Items ──
-    doc.setFont('courier', 'bold');
-    doc.setFontSize(7.5);
-    doc.text('ITEMS', M, y); y += 5;
-    doc.setFont('courier', 'normal');
-    doc.setFontSize(8);
-    doc.setTextColor(17, 17, 17);
-    items.forEach((it, i) => {
+    // ── Items rows ──
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(...BLACK);
+    (o.items || []).forEach(it => {
       const lineTotal = (Number(it.price) || 0) * (Number(it.qty) || 1);
-      const lines = itemWrapped[i];
-      lines.forEach((ln, li) => {
-        doc.text(ln, M, y);
-        if (li === 0) doc.text(lineTotal.toFixed(2), right, y, { align: 'right' });
-        y += 4;
-      });
+      const nameLines = doc.splitTextToSize(it.name, contentW - 40);
+      doc.text(nameLines, M + 2, y);
+      doc.text(String(it.qty || 1), W - M - 32, y, { align: 'right' });
+      doc.text(`GHS ${lineTotal.toFixed(2)}`, W - M - 2, y, { align: 'right' });
+      y += Math.max(nameLines.length * 4.5, 5) + 1.5;
+      // page-break safety
+      if (y > 175) { doc.addPage(); y = 20; }
     });
-    y += 1; dashed(y); y += 4.5;
 
-    // ── Totals ──
-    const row = (label, val, opts2) => {
+    y += 2;
+    doc.setDrawColor(...LIGHT);
+    doc.line(M, y, W - M, y);
+    y += 6;
+
+    // ── Totals (right-aligned) ──
+    const totalRow = (label, val, opts2) => {
       opts2 = opts2 || {};
-      doc.setFont('courier', opts2.bold ? 'bold' : 'normal');
-      doc.setFontSize(opts2.bold ? 11 : 8);
-      doc.setTextColor(...(opts2.gray ? [90, 90, 90] : [17, 17, 17]));
-      doc.text(label, M, y);
-      doc.text(val, right, y, { align: 'right' });
-      y += opts2.bold ? 7 : 4.5;
+      doc.setFont('helvetica', opts2.bold ? 'bold' : 'normal');
+      doc.setFontSize(opts2.bold ? 12 : 9);
+      doc.setTextColor(...(opts2.color || (opts2.bold ? BLACK : GRAY)));
+      doc.text(label, W - M - 42, y, { align: 'right' });
+      doc.text(val, W - M - 2, y, { align: 'right' });
+      y += opts2.bold ? 8 : 5.5;
     };
-    row('Subtotal', `GHS ${Number(o.subtotal || 0).toFixed(2)}`, { gray: true });
-    if (Number(o.discount) > 0) row('Squad discount', `- ${Number(o.discount).toFixed(2)}`, { gray: true });
-    if (Number(o.loyaltyUsed) > 0) row('Loyalty credit', `- ${Number(o.loyaltyUsed).toFixed(2)}`, { gray: true });
-    row('Delivery', Number(o.delivery) === 0 ? 'FREE' : `GHS ${Number(o.delivery).toFixed(2)}`, { gray: true });
-    y += 1; solid(y, 0.4); y += 6;
-    row('TOTAL', `GHS ${Number(o.total || 0).toFixed(2)}`, { bold: true });
-    y += 1; solid(y, 0.4); y += 5;
+    totalRow('Subtotal', `GHS ${Number(o.subtotal || 0).toFixed(2)}`);
+    if (Number(o.discount) > 0) totalRow('Squad discount', `− GHS ${Number(o.discount).toFixed(2)}`, { color: [26, 26, 26] });
+    if (Number(o.loyaltyUsed) > 0) totalRow('Loyalty credit', `− GHS ${Number(o.loyaltyUsed).toFixed(2)}`, { color: [122, 90, 0] });
+    totalRow('Delivery', Number(o.delivery) === 0 ? 'FREE' : `GHS ${Number(o.delivery).toFixed(2)}`);
+    y += 1;
+    doc.setDrawColor(...BLACK);
+    doc.setLineWidth(0.4);
+    doc.line(W - M - 50, y, W - M, y);
+    y += 7;
+    totalRow('TOTAL', `GHS ${Number(o.total || 0).toFixed(2)}`, { bold: true });
 
+    y += 2;
     // ── Payment ──
-    doc.setFont('courier', 'normal');
-    doc.setFontSize(8);
-    doc.setTextColor(90, 90, 90);
-    doc.text(`Payment: ${o.payMethod === 'cash' ? 'Cash on Delivery' : 'Mobile Money'}`, M, y);
-    y += 5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(...GRAY);
+    doc.text(`Payment: ${o.payMethod === 'cash' ? 'Cash on Delivery' : 'Mobile Money (MoMo)'}`, M, y);
+    y += 7;
 
-    // ── Surprise / gift ──
+    // ── Surprise / gift callout ──
     if (o.surpriseExtra || o.giftMessage) {
-      const note = o.surpriseExtra ? `*** ${o.surpriseExtra} ***` : `Gift: ${o.giftMessage}`;
+      doc.setFillColor(252, 228, 240);
+      const note = o.surpriseExtra ? `Gift from SDGMart: ${o.surpriseExtra}` : `Gift message: ${o.giftMessage}`;
+      const noteLines = doc.splitTextToSize(note, contentW - 8);
+      const boxH = noteLines.length * 4.5 + 8;
+      doc.roundedRect(M, y - 2, contentW, boxH, 2, 2, 'F');
       doc.setTextColor(155, 45, 96);
-      doc.setFontSize(7.5);
-      doc.splitTextToSize(note, CW).forEach(l => { doc.text(l, center, y, { align: 'center' }); y += 4; });
-      y += 1;
+      doc.setFontSize(8.5);
+      doc.text(noteLines, M + 4, y + 4);
+      y += boxH + 4;
     }
 
     // ── Footer ──
-    y += 2; dashed(y); y += 5;
-    doc.setFont('courier', 'bold');
-    doc.setFontSize(8.5);
-    doc.setTextColor(17, 17, 17);
-    doc.text('Thank you for shopping!', center, y, { align: 'center' });
-    y += 5;
-    doc.setFont('courier', 'normal');
-    doc.setFontSize(7.5);
-    doc.setTextColor(90, 90, 90);
-    doc.text('WhatsApp: +233 50 408 2555', center, y, { align: 'center' });
+    const pageH = doc.internal.pageSize.getHeight();
+    doc.setDrawColor(...LIGHT);
+    doc.setLineWidth(0.3);
+    doc.line(M, pageH - 22, W - M, pageH - 22);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(...BLACK);
+    doc.text('Thank you for shopping with SDGMart!', M, pageH - 15);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(...GRAY);
+    doc.text('Questions? WhatsApp us: +233 50 408 2555', M, pageH - 10);
 
     if (opts.output === 'blob') return doc.output('blob');
     doc.save(`SDGMart-${o.orderId}.pdf`);

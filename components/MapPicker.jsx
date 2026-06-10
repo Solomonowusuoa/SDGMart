@@ -87,10 +87,30 @@ const MapPicker = ({ value, onChange, height = 240, allowGeolocate = true, defau
     onChange && onChange({ lat, lng, address });
   };
 
+  // Lazy-load Leaflet (CSS + JS) the first time a map is actually shown.
+  // Keeps it out of the initial page load for the ~majority who never open it.
+  const ensureLeaflet = () => {
+    if (window.L) return;
+    if (!document.getElementById('leaflet-css')) {
+      const link = document.createElement('link');
+      link.id = 'leaflet-css';
+      link.rel = 'stylesheet';
+      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      document.head.appendChild(link);
+    }
+    if (!document.getElementById('leaflet-js')) {
+      const s = document.createElement('script');
+      s.id = 'leaflet-js';
+      s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+      document.head.appendChild(s);
+    }
+  };
+
   // Init map once Leaflet is ready
   React.useEffect(() => {
     if (!containerRef.current) return;
     let cancelled = false;
+    ensureLeaflet();
     const init = () => {
       if (cancelled) return;
       if (!window.L) { setTimeout(init, 100); return; }

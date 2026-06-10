@@ -15,15 +15,13 @@
 <title>SDGMart — Tamale's Essentials Delivered</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Petit+Formal+Script&amp;family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&amp;family=Plus+Jakarta+Sans:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet">
-<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<!-- Production React builds — much faster + smaller than the dev builds -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<!-- Leaflet (free OpenStreetMap-based maps, no API key) -->
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<!-- jsPDF for designed PDF receipts (no server round-trip) -->
-<script src="https://unpkg.com/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
+<!-- Leaflet + jsPDF are loaded ON DEMAND (map picker / receipt download) to
+     keep the initial page light. See MapPicker.jsx and receipt.js. -->
 <script src="data/products.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -96,9 +94,9 @@ img{display:block;max-width:100%}
 </script>
 <style>
 /* Bag-filling loader. Pure CSS + SVG, GPU-accelerated via scaleY. */
-.sdg-fill{transform-origin:50% 100%;transform:scaleY(0);animation:sdg-bag-fill 2.4s cubic-bezier(.5,0,.4,1) infinite;will-change:transform}
-.sdg-bag-wrap{animation:sdg-bag-bob 2.4s ease-in-out infinite}
-@keyframes sdg-bag-fill{0%{transform:scaleY(0)}55%{transform:scaleY(1)}80%{transform:scaleY(1)}100%{transform:scaleY(0)}}
+.sdg-fill{transform-origin:50% 100%;transform:scaleY(0);animation:sdg-bag-fill 1.4s cubic-bezier(.5,0,.4,1) infinite;will-change:transform}
+.sdg-bag-wrap{animation:sdg-bag-bob 1.4s ease-in-out infinite}
+@keyframes sdg-bag-fill{0%{transform:scaleY(0)}60%{transform:scaleY(1)}82%{transform:scaleY(1)}100%{transform:scaleY(0)}}
 @keyframes sdg-bag-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
 @media (prefers-reduced-motion:reduce){.sdg-fill,.sdg-bag-wrap{animation:none}.sdg-fill{transform:scaleY(.6)}}
 /* Fallback loader (uncomment + remove the bag block above to revert):
