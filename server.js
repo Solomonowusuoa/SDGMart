@@ -235,7 +235,17 @@ const BUNDLE_FILES = [
 ];
 let _esbuild = null;
 let _bundleCache = null;
-const IS_PROD = process.env.NODE_ENV === 'production';
+let _bundleBuiltAt = 0;   // newest source mtime captured when we last built
+
+// Newest modification time across all bundle source files. Cheap (~20 stats).
+function newestSourceMtime() {
+  let newest = 0;
+  for (const rel of BUNDLE_FILES) {
+    try { const m = fs.statSync(path.join(__dirname, rel)).mtimeMs; if (m > newest) newest = m; }
+    catch (_) {}
+  }
+  return newest;
+}
 
 function buildAppBundle() {
   if (!_esbuild) _esbuild = require('esbuild');
@@ -262,15 +272,27 @@ function buildAppBundle() {
 
 app.get('/app.bundle.js', (req, res) => {
   try {
-    if (!_bundleCache || !IS_PROD) _bundleCache = buildAppBundle();
+    // Rebuild only when a source file changed since the last build. On Render
+    // (immutable after deploy) this always serves the cache; locally, editing a
+    // file bumps its mtime and triggers a fresh build on the next request.
+    const newest = newestSourceMtime();
+    if (!_bundleCache || newest > _bundleBuiltAt) {
+      _bundleCache = buildAppBundle();
+      _bundleBuiltAt = newest;
+    }
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-    res.setHeader('Cache-Control', IS_PROD ? 'public, max-age=3600' : 'no-cache');
+    // Short browser cache; the SW already network-firsts JS so updates land fast.
+    res.setHeader('Cache-Control', 'public, max-age=300');
     res.send(_bundleCache);
   } catch (e) {
     console.error('bundle build failed:', e.message);
     res.status(500).type('application/javascript').send(`console.error(${JSON.stringify('SDGMart bundle build error: ' + e.message)});`);
   }
 });
+
+// Build the bundle once at startup so the very first visitor doesn't pay for it.
+try { _bundleCache = buildAppBundle(); _bundleBuiltAt = newestSourceMtime(); console.log('📦 App bundle pre-built'); }
+catch (e) { console.warn('⚠️  initial bundle build failed (will retry on first request):', e.message); }
 
 // ── Dynamic products.js (served from DB) ─────────────────────────────────
 app.get('/data/products.js', async (req, res) => {
