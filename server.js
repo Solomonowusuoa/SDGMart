@@ -1,6 +1,8 @@
-// Load .env file in dev. In production (Render) env vars come from the
-// platform dashboard, so this is a no-op there.
-try { require('dotenv').config(); } catch (_) {}
+// Load .env from THIS file's directory (not the cwd), so the server works
+// regardless of where it's launched from (e.g. preview tools that run from a
+// different working directory). In production (Render) env vars come from the
+// platform dashboard, so a missing .env is a harmless no-op.
+try { require('dotenv').config({ path: require('path').join(__dirname, '.env') }); } catch (_) {}
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
