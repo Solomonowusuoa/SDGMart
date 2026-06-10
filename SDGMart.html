@@ -18,7 +18,6 @@
 <!-- Production React builds — much faster + smaller than the dev builds -->
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <!-- Leaflet + jsPDF are loaded ON DEMAND (map picker / receipt download) to
      keep the initial page light. See MapPicker.jsx and receipt.js. -->
@@ -104,26 +103,9 @@ img{display:block;max-width:100%}
 @keyframes sdg-pulse{0%,100%{opacity:.4;transform:scale(.985)}50%{opacity:1;transform:scale(1)}} */
 </style>
 <link rel="stylesheet" href="responsive.css">
-<script src="hooks.js"></script>
-<script src="components/receipt.js"></script>
-<script type="text/babel" src="components/Header.jsx" data-presets="react" data-filename="components/Header.jsx"></script>
-<script type="text/babel" src="components/HomePage.jsx" data-presets="react" data-filename="components/HomePage.jsx"></script>
-<script type="text/babel" src="components/CategoryPage.jsx" data-presets="react" data-filename="components/CategoryPage.jsx"></script>
-<script type="text/babel" src="components/ProductPage.jsx" data-presets="react" data-filename="components/ProductPage.jsx"></script>
-<script type="text/babel" src="components/CartDrawer.jsx" data-presets="react" data-filename="components/CartDrawer.jsx"></script>
-<script type="text/babel" src="components/CheckoutPage.jsx" data-presets="react" data-filename="components/CheckoutPage.jsx"></script>
-<script type="text/babel" src="components/SquadPage.jsx" data-presets="react" data-filename="components/SquadPage.jsx"></script>
-<script type="text/babel" src="components/AdminPage.jsx" data-presets="react" data-filename="components/AdminPage.jsx"></script>
-<script type="text/babel" src="components/LoginPage.jsx" data-presets="react" data-filename="components/LoginPage.jsx"></script>
-<script type="text/babel" src="components/MapPicker.jsx" data-presets="react" data-filename="components/MapPicker.jsx"></script>
-<script type="text/babel" src="components/RiderPage.jsx" data-presets="react" data-filename="components/RiderPage.jsx"></script>
-<script type="text/babel" src="components/MyOrdersPage.jsx" data-presets="react" data-filename="components/MyOrdersPage.jsx"></script>
-<script type="text/babel" src="components/AccountPage.jsx" data-presets="react" data-filename="components/AccountPage.jsx"></script>
-<script type="text/babel" src="components/ReviewPromptModal.jsx" data-presets="react" data-filename="components/ReviewPromptModal.jsx"></script>
-<script type="text/babel" src="components/RequestProductButton.jsx" data-presets="react" data-filename="components/RequestProductButton.jsx"></script>
-<script type="text/babel" src="components/OrderTrackingPage.jsx" data-presets="react" data-filename="components/OrderTrackingPage.jsx"></script>
-<script type="text/babel" src="tweaks-panel.jsx" data-presets="react" data-filename="tweaks-panel.jsx"></script>
-<script type="text/babel" src="App.jsx" data-presets="react" data-filename="App.jsx"></script>
+<!-- Single pre-bundled, minified app (esbuild on the server). Replaces the old
+     in-browser Babel + 22 separate script tags for a much faster first load. -->
+<script src="/app.bundle.js"></script>
 
 
 

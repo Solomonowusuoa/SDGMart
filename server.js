@@ -206,6 +206,72 @@ function ensureIcons() {
 }
 ensureIcons();
 
+// ── Pre-bundled app (esbuild) ────────────────────────────────────────────
+// Replaces in-browser Babel: we concatenate all source files in load order
+// and transform JSX → JS once (minified) on the server. The browser then runs
+// a single fast bundle instead of compiling 22 files on every visit.
+// In dev we rebuild on each request; in production we build once and cache.
+const BUNDLE_FILES = [
+  'hooks.js',
+  'components/receipt.js',
+  'components/Header.jsx',
+  'components/HomePage.jsx',
+  'components/CategoryPage.jsx',
+  'components/ProductPage.jsx',
+  'components/CartDrawer.jsx',
+  'components/CheckoutPage.jsx',
+  'components/SquadPage.jsx',
+  'components/AdminPage.jsx',
+  'components/LoginPage.jsx',
+  'components/MapPicker.jsx',
+  'components/RiderPage.jsx',
+  'components/MyOrdersPage.jsx',
+  'components/AccountPage.jsx',
+  'components/ReviewPromptModal.jsx',
+  'components/RequestProductButton.jsx',
+  'components/OrderTrackingPage.jsx',
+  'tweaks-panel.jsx',
+  'App.jsx',
+];
+let _esbuild = null;
+let _bundleCache = null;
+const IS_PROD = process.env.NODE_ENV === 'production';
+
+function buildAppBundle() {
+  if (!_esbuild) _esbuild = require('esbuild');
+  // Concatenate sources with a banner per file (helps stack traces).
+  const parts = BUNDLE_FILES.map(rel => {
+    const full = path.join(__dirname, rel);
+    const src = fs.readFileSync(full, 'utf8');
+    return `\n/* ==== ${rel} ==== */\n${src}\n`;
+  });
+  const combined = parts.join('\n');
+  const result = _esbuild.transformSync(combined, {
+    loader: 'jsx',
+    jsx: 'transform',          // classic React.createElement (React is global)
+    jsxFactory: 'React.createElement',
+    jsxFragment: 'React.Fragment',
+    minifyWhitespace: true,
+    minifySyntax: true,
+    minifyIdentifiers: false,  // keep top-level names so window-global pattern is safe
+    target: 'es2018',
+    legalComments: 'none',
+  });
+  return result.code;
+}
+
+app.get('/app.bundle.js', (req, res) => {
+  try {
+    if (!_bundleCache || !IS_PROD) _bundleCache = buildAppBundle();
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', IS_PROD ? 'public, max-age=3600' : 'no-cache');
+    res.send(_bundleCache);
+  } catch (e) {
+    console.error('bundle build failed:', e.message);
+    res.status(500).type('application/javascript').send(`console.error(${JSON.stringify('SDGMart bundle build error: ' + e.message)});`);
+  }
+});
+
 // ── Dynamic products.js (served from DB) ─────────────────────────────────
 app.get('/data/products.js', async (req, res) => {
   try {
