@@ -903,6 +903,44 @@ app.post('/api/me/orders/:id/cancel', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Health check (for UptimeRobot / load balancers) ──────────────────────
+// Lightweight: no DB hit, returns instantly so pings are cheap.
+app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now() }));
+
+// ── Admin: operational metrics dashboard ─────────────────────────────────
+app.get('/api/admin/metrics', requireAdmin, async (req, res) => {
+  try {
+    const days = Math.max(7, Math.min(90, parseInt(req.query.days) || 30));
+    res.json(await db.metrics.overview({ days }));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Referral leaderboard ─────────────────────────────────────────────────
+app.get('/api/admin/leaderboard', requireAdmin, async (req, res) => {
+  try { res.json(await db.leaderboard.topReferrers(parseInt(req.query.limit) || 10)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Public version (first names only) for the squad page gamification
+app.get('/api/leaderboard', async (req, res) => {
+  try {
+    const list = await db.leaderboard.topReferrers(10);
+    res.json(list.map(u => ({
+      name: (u.name || 'A friend').split(' ')[0],
+      referralCount: u.referralCount,
+    })));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Admin: error logs ────────────────────────────────────────────────────
+app.get('/api/admin/errors', requireAdmin, async (req, res) => {
+  try { res.json(await db.errorLog.list(parseInt(req.query.limit) || 100)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/admin/errors', requireAdmin, async (req, res) => {
+  try { await db.errorLog.clear(); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Live counter ─────────────────────────────────────────────────────────
 app.get('/api/stats/delivered-count', async (req, res) => {
   try {
@@ -1066,6 +1104,30 @@ app.delete('/api/me/recurring/:id', requireAuth, async (req, res) => {
 // ── Static files ─────────────────────────────────────────────────────────
 app.use('/icons', express.static(path.join(__dirname, 'icons')));
 app.use(express.static(__dirname, { index: 'SDGMart.html' }));
+
+// ── Global error handler (must be last) ──────────────────────────────────
+// Logs any unhandled route error to the error_logs table + console, then
+// returns a clean 500. Optionally forwards to Sentry if SENTRY_DSN is set.
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err && err.stack ? err.stack : err);
+  db.errorLog.record({
+    message: err && err.message ? err.message : String(err),
+    stack: err && err.stack ? err.stack : '',
+    path: req.originalUrl, method: req.method, status: 500,
+    userId: req.user ? req.user.id : null,
+  });
+  if (!res.headersSent) res.status(500).json({ error: 'Something went wrong on our end.' });
+});
+
+// Process-level safety nets — log crashes instead of dying silently.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+  db.errorLog.record({ message: 'unhandledRejection: ' + (reason && reason.message ? reason.message : String(reason)), stack: reason && reason.stack ? reason.stack : '' });
+});
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+  db.errorLog.record({ message: 'uncaughtException: ' + err.message, stack: err.stack });
+});
 
 // ── Startup ──────────────────────────────────────────────────────────────
 async function start() {

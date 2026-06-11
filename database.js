@@ -164,7 +164,10 @@ const users = {
     if (referrer) {
       try {
         const newBalance = Number(referrer.loyaltyBalance || 0) + 5;
-        await sb.from('users').update({ loyalty_balance: newBalance }).eq('id', referrer.id);
+        await sb.from('users').update({
+          loyalty_balance: newBalance,
+          referral_count: Number(referrer.referralCount || 0) + 1,
+        }).eq('id', referrer.id);
       } catch (_) { /* don't fail the signup over a credit issue */ }
     }
     return rowOut(data);
@@ -820,6 +823,116 @@ const stats = {
   invalidateDelivered() { _statsCache.at = 0; },
 };
 
+// ── Operational metrics (admin dashboard) ───────────────────────────────
+const metrics = {
+  async overview({ days = 30 } = {}) {
+    const since = new Date(Date.now() - days * 86400000);
+    const { data: allOrders } = await sb.from('orders').select('*').gte('created_at', since.toISOString());
+    const orders = rowsOut(allOrders || []);
+    const nonCancelled = orders.filter(o => o.status !== 'cancelled');
+    const delivered = orders.filter(o => o.status === 'delivered');
+
+    // Per-day buckets (oldest → newest)
+    const dayKey = (d) => new Date(d).toISOString().slice(0, 10);
+    const buckets = {};
+    for (let i = days - 1; i >= 0; i--) {
+      const k = dayKey(Date.now() - i * 86400000);
+      buckets[k] = { date: k, orders: 0, revenue: 0 };
+    }
+    nonCancelled.forEach(o => {
+      const k = dayKey(o.createdAt);
+      if (buckets[k]) buckets[k].orders += 1;
+    });
+    delivered.forEach(o => {
+      const k = dayKey(o.createdAt);
+      if (buckets[k]) buckets[k].revenue += Number(o.total || 0);
+    });
+    const series = Object.values(buckets);
+
+    // Status breakdown
+    const statusBreakdown = {};
+    orders.forEach(o => { const s = o.status || 'queued'; statusBreakdown[s] = (statusBreakdown[s] || 0) + 1; });
+
+    // Top products + categories by quantity
+    const prodQty = {}, catQty = {};
+    nonCancelled.forEach(o => {
+      const items = Array.isArray(o.items) ? o.items : [];
+      items.forEach(it => {
+        const q = Number(it.qty || 1);
+        prodQty[it.name] = (prodQty[it.name] || 0) + q;
+        if (it.category) catQty[it.category] = (catQty[it.category] || 0) + q;
+      });
+    });
+    const topProducts = Object.entries(prodQty).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([name, qty]) => ({ name, qty }));
+    const topCategories = Object.entries(catQty).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([name, qty]) => ({ name, qty }));
+
+    const totalRevenue = delivered.reduce((s, o) => s + Number(o.total || 0), 0);
+    const aov = nonCancelled.length ? (nonCancelled.reduce((s, o) => s + Number(o.total || 0), 0) / nonCancelled.length) : 0;
+
+    // Lifetime customer + recurring counts
+    const [{ count: customerCount }, { count: recurringCount }] = await Promise.all([
+      sb.from('users').select('*', { count: 'exact', head: true }).eq('role', 'customer'),
+      sb.from('recurring_orders').select('*', { count: 'exact', head: true }).eq('active', true),
+    ]);
+
+    return {
+      days,
+      series,
+      statusBreakdown,
+      topProducts,
+      topCategories,
+      totals: {
+        orders: nonCancelled.length,
+        delivered: delivered.length,
+        revenue: totalRevenue,
+        aov,
+        customers: customerCount || 0,
+        activeRecurring: recurringCount || 0,
+      },
+    };
+  },
+};
+
+// ── Referral leaderboard ─────────────────────────────────────────────────
+const leaderboard = {
+  async topReferrers(limit = 10) {
+    // Degrade gracefully if the referral_count column hasn't been added yet
+    // (i.e. supabase-schema-ops.sql not run) — return an empty board instead
+    // of 500-ing the squad page.
+    const { data, error } = await sb.from('users')
+      .select('id, name, referral_count, loyalty_balance')
+      .gt('referral_count', 0)
+      .order('referral_count', { ascending: false })
+      .limit(limit);
+    if (error) { console.warn('leaderboard query failed (run schema-ops.sql?):', error.message); return []; }
+    return rowsOut(data);
+  },
+};
+
+// ── Error logging (in-house monitoring) ──────────────────────────────────
+const errorLog = {
+  async record({ message, stack, path: p, method, status, userId }) {
+    try {
+      await sb.from('error_logs').insert({
+        message: String(message || '').slice(0, 500),
+        stack: String(stack || '').slice(0, 4000),
+        path: p ? String(p).slice(0, 200) : null,
+        method: method || null,
+        status: status || null,
+        user_id: userId || null,
+      });
+    } catch (_) { /* never let logging throw */ }
+  },
+  async list(limit = 100) {
+    const { data, error } = await sb.from('error_logs').select('*').order('created_at', { ascending: false }).limit(limit);
+    if (error) throw error;
+    return rowsOut(data);
+  },
+  async clear() {
+    await sb.from('error_logs').delete().neq('id', 0);
+  },
+};
+
 // ── Photo upload to Supabase Storage ─────────────────────────────────────
 async function ensurePhotoBucket() {
   try {
@@ -861,6 +974,7 @@ module.exports = {
   sb,
   users, squads, sessions, riders, orders, products,
   addresses, reviews, issueReports, promotions, productRequests, stats,
+  metrics, leaderboard, errorLog,
   pushSubs, searchLog, recurring, appConfig,
   hashPassword, verifyPassword, validatePasswordStrength,
   rateCheck, rateClear,

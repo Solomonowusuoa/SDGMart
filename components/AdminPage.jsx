@@ -1,3 +1,54 @@
+// ── Tiny dependency-free charts (inline SVG) ─────────────────────────────
+// Bars chart: array of { date|name, value }. Highlights the max bar.
+const MiniBars = ({ data, height = 120, color = '#1A1A1A', valueFmt }) => {
+  if (!data || !data.length) return <div style={{ fontSize: 13, color: 'var(--warm-gray)', padding: 20 }}>No data yet.</div>;
+  const max = Math.max(1, ...data.map(d => d.value));
+  const W = 100, barGap = 1.5;
+  const bw = (W - barGap * (data.length - 1)) / data.length;
+  return (
+    <svg viewBox={`0 0 ${W} ${height / 3}`} preserveAspectRatio="none" style={{ width: '100%', height, display: 'block' }}>
+      {data.map((d, i) => {
+        const h = (d.value / max) * (height / 3);
+        const x = i * (bw + barGap);
+        return <rect key={i} x={x} y={(height / 3) - h} width={bw} height={h} rx={0.6}
+          fill={d.value === max ? color : '#C9C4BA'}>
+          <title>{(d.date || d.name) + ': ' + (valueFmt ? valueFmt(d.value) : d.value)}</title>
+        </rect>;
+      })}
+    </svg>
+  );
+};
+
+// Horizontal ranked list with proportional bars
+const RankBars = ({ data, color = '#1A1A1A', valueFmt }) => {
+  if (!data || !data.length) return <div style={{ fontSize: 13, color: 'var(--warm-gray)' }}>No data yet.</div>;
+  const max = Math.max(1, ...data.map(d => d.qty != null ? d.qty : d.value));
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {data.map((d, i) => {
+        const v = d.qty != null ? d.qty : d.value;
+        return (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 130, fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</div>
+            <div style={{ flex: 1, background: 'var(--cream-dark)', borderRadius: 4, height: 18, position: 'relative', overflow: 'hidden' }}>
+              <div style={{ width: `${(v / max) * 100}%`, background: color, height: '100%', borderRadius: 4 }} />
+            </div>
+            <div style={{ width: 46, textAlign: 'right', fontSize: 12, fontWeight: 700 }}>{valueFmt ? valueFmt(v) : v}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const StatCard = ({ label, value, sub, accent }) => (
+  <div style={{ background: 'var(--white)', borderRadius: 12, padding: '16px 18px', boxShadow: 'var(--shadow)', borderTop: `3px solid ${accent || '#1A1A1A'}` }}>
+    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{label}</div>
+    <div style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>{value}</div>
+    {sub && <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 2 }}>{sub}</div>}
+  </div>
+);
+
 // AdminPage — full admin dashboard. Auth is now handled at the LoginPage; we
 // only get here if the signed-in user has role === 'admin'.
 const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
@@ -282,12 +333,34 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   const setEditField = (k, v) => setEditDraft(d => ({ ...d, [k]: v }));
 
   const tabs = [
-    ['overview','📊 Overview'],['orders','📦 Orders'],['inventory','🏪 Inventory'],
+    ['overview','📊 Overview'],['dashboard','📈 Dashboard'],['orders','📦 Orders'],['inventory','🏪 Inventory'],
     ['expiry','⏰ Expiry'],['routes','🗺 Routes'],['riders','🛵 Riders'],
     ['promotions','⚡ Promotions'],['requests','🛒 Requests'],['issues','🚨 Issues'],
-    ['analytics','🔎 Analytics'],['payments','💳 Payments'],['comms','📣 Comms'],['metrics','📈 Metrics'],
-    ['settings','⚙️ Settings'],['security','🔐 Security'],
+    ['analytics','🔎 Analytics'],['leaderboard','🏆 Leaderboard'],['payments','💳 Payments'],['comms','📣 Comms'],
+    ['errors','🐞 Errors'],['settings','⚙️ Settings'],['security','🔐 Security'],
   ];
+
+  // ── Dashboard / metrics state ──
+  const [metrics, setMetrics] = React.useState(null);
+  const [metricsDays, setMetricsDays] = React.useState(30);
+  const loadMetrics = React.useCallback(() => {
+    apiFetch(`/api/admin/metrics?days=${metricsDays}`).then(r => r.ok ? r.json() : null).then(setMetrics).catch(() => {});
+  }, [metricsDays]);
+  React.useEffect(() => { if (adminTab === 'dashboard') loadMetrics(); }, [adminTab, loadMetrics]);
+
+  // ── Leaderboard state ──
+  const [leaders, setLeaders] = React.useState([]);
+  const loadLeaders = React.useCallback(() => {
+    apiFetch('/api/admin/leaderboard?limit=15').then(r => r.ok ? r.json() : []).then(setLeaders).catch(() => {});
+  }, []);
+  React.useEffect(() => { if (adminTab === 'leaderboard') loadLeaders(); }, [adminTab, loadLeaders]);
+
+  // ── Errors state ──
+  const [errorLogs, setErrorLogs] = React.useState([]);
+  const loadErrors = React.useCallback(() => {
+    apiFetch('/api/admin/errors').then(r => r.ok ? r.json() : []).then(setErrorLogs).catch(() => {});
+  }, []);
+  React.useEffect(() => { if (adminTab === 'errors') loadErrors(); }, [adminTab, loadErrors]);
 
   // ── Settings tab state ──
   const [settings, setSettings] = React.useState({ showFreshness: false });
@@ -1096,6 +1169,133 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                         Mark resolved
                       </button>
                     )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* DASHBOARD — operational metrics + charts */}
+        {adminTab === 'dashboard' && (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 18 }}>
+              <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700 }}>Dashboard</h1>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {[7, 30, 90].map(d => (
+                  <button key={d} onClick={() => setMetricsDays(d)}
+                    style={{ fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 8, background: metricsDays === d ? 'var(--sage)' : 'var(--cream)', color: metricsDays === d ? '#fff' : 'var(--warm-gray)' }}>
+                    {d}d
+                  </button>
+                ))}
+                <button onClick={loadMetrics} style={{ fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 8, background: 'var(--cream)', color: 'var(--warm-gray)' }}>↻</button>
+              </div>
+            </div>
+
+            {!metrics ? (
+              <div style={{ color: 'var(--warm-gray)', fontSize: 14 }}>Loading metrics…</div>
+            ) : (
+              <>
+                {/* KPI cards */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14, marginBottom: 24 }}>
+                  <StatCard label="Revenue (delivered)" value={`GHS ${metrics.totals.revenue.toFixed(0)}`} sub={`${metrics.totals.delivered} delivered`} accent="#1A1A1A" />
+                  <StatCard label="Orders" value={metrics.totals.orders} sub={`last ${metrics.days} days`} accent="#3879BF" />
+                  <StatCard label="Avg order value" value={`GHS ${metrics.totals.aov.toFixed(2)}`} accent="#C8923A" />
+                  <StatCard label="Customers" value={metrics.totals.customers} sub="registered" accent="#27AE60" />
+                  <StatCard label="Active auto-reorders" value={metrics.totals.activeRecurring} accent="#9B2D60" />
+                </div>
+
+                {/* Orders + revenue per day */}
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18, marginBottom: 24 }}>
+                  <div style={{ background: 'var(--white)', borderRadius: 12, padding: 18, boxShadow: 'var(--shadow)' }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Orders per day</div>
+                    <MiniBars data={metrics.series.map(s => ({ date: s.date, value: s.orders }))} color="#3879BF" />
+                  </div>
+                  <div style={{ background: 'var(--white)', borderRadius: 12, padding: 18, boxShadow: 'var(--shadow)' }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Revenue per day (GHS)</div>
+                    <MiniBars data={metrics.series.map(s => ({ date: s.date, value: Math.round(s.revenue) }))} color="#1A1A1A" valueFmt={v => 'GHS ' + v} />
+                  </div>
+                </div>
+
+                {/* Top products + categories + status */}
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18 }}>
+                  <div style={{ background: 'var(--white)', borderRadius: 12, padding: 18, boxShadow: 'var(--shadow)' }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Top products (by qty sold)</div>
+                    <RankBars data={metrics.topProducts} color="#3879BF" />
+                  </div>
+                  <div style={{ background: 'var(--white)', borderRadius: 12, padding: 18, boxShadow: 'var(--shadow)' }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Top categories</div>
+                    <RankBars data={metrics.topCategories} color="#C8923A" />
+                  </div>
+                </div>
+
+                {/* Status breakdown */}
+                <div style={{ background: 'var(--white)', borderRadius: 12, padding: 18, boxShadow: 'var(--shadow)', marginTop: 18 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Order status breakdown</div>
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                    {Object.entries(metrics.statusBreakdown).map(([s, n]) => (
+                      <div key={s} style={{ background: 'var(--cream)', borderRadius: 999, padding: '6px 14px', fontSize: 13 }}>
+                        <strong>{n}</strong> <span style={{ color: 'var(--warm-gray)' }}>{s}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* LEADERBOARD — top referrers */}
+        {adminTab === 'leaderboard' && (
+          <div>
+            <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginBottom: 6 }}>Referral Leaderboard</h1>
+            <p style={{ color: 'var(--warm-gray)', fontSize: 14, marginBottom: 20 }}>Your best recruiters — customers who've brought the most new sign-ups via their referral code.</p>
+            {leaders.length === 0 ? (
+              <div style={{ background: 'var(--cream)', borderRadius: 10, padding: 30, textAlign: 'center', color: 'var(--warm-gray)', fontSize: 14 }}>
+                No referrals yet. Share the squad feature to get the ball rolling!
+              </div>
+            ) : (
+              <div style={{ background: 'var(--white)', borderRadius: 12, boxShadow: 'var(--shadow)', overflow: 'hidden', maxWidth: 560 }}>
+                {leaders.map((u, i) => (
+                  <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 18px', borderTop: i === 0 ? 'none' : '1px solid var(--cream-dark)' }}>
+                    <div style={{ width: 28, fontSize: 18, textAlign: 'center' }}>{['🥇','🥈','🥉'][i] || <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--warm-gray)' }}>{i + 1}</span>}</div>
+                    <div style={{ flex: 1, fontWeight: 700, fontSize: 14 }}>{u.name}</div>
+                    <div style={{ fontSize: 12, color: 'var(--warm-gray)' }}>GHS {Number(u.loyaltyBalance || 0).toFixed(0)} credit</div>
+                    <div style={{ background: 'var(--sage)', color: '#fff', borderRadius: 999, padding: '3px 12px', fontSize: 13, fontWeight: 700 }}>{u.referralCount} refs</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ERRORS — in-house monitoring */}
+        {adminTab === 'errors' && (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 14 }}>
+              <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700 }}>Error Log</h1>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={loadErrors} style={{ fontSize: 12, fontWeight: 700, padding: '7px 14px', borderRadius: 8, background: 'var(--cream)', color: 'var(--warm-gray)' }}>↻ Refresh</button>
+                {errorLogs.length > 0 && (
+                  <button onClick={async () => { if (window.confirm('Clear all logged errors?')) { await apiFetch('/api/admin/errors', { method: 'DELETE' }); loadErrors(); } }}
+                    style={{ fontSize: 12, fontWeight: 700, padding: '7px 14px', borderRadius: 8, background: 'rgba(192,57,43,.08)', color: 'var(--accent-red)' }}>Clear all</button>
+                )}
+              </div>
+            </div>
+            {errorLogs.length === 0 ? (
+              <div style={{ background: 'var(--cream)', borderRadius: 10, padding: 30, textAlign: 'center', color: 'var(--warm-gray)', fontSize: 14 }}>
+                ✨ No errors logged. Smooth sailing.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {errorLogs.map(e => (
+                  <div key={e.id} style={{ background: 'var(--white)', borderRadius: 8, padding: '12px 14px', boxShadow: 'var(--shadow)', borderLeft: '3px solid var(--accent-red)' }}>
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--accent-red)' }}>{e.message}</span>
+                      <span style={{ fontSize: 11, color: 'var(--warm-gray)', marginLeft: 'auto' }}>{new Date(e.createdAt).toLocaleString()}</span>
+                    </div>
+                    {(e.method || e.path) && <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 4 }}>{e.method} {e.path}</div>}
+                    {e.stack && <details style={{ marginTop: 6 }}><summary style={{ fontSize: 11, color: 'var(--warm-gray)', cursor: 'pointer' }}>Stack trace</summary><pre style={{ fontSize: 10, color: 'var(--warm-gray)', whiteSpace: 'pre-wrap', marginTop: 6, maxHeight: 200, overflow: 'auto' }}>{e.stack}</pre></details>}
                   </div>
                 ))}
               </div>

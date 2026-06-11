@@ -177,6 +177,9 @@ const SquadPage = ({ setPage, currentUser }) => {
         </button>
       </div>
 
+      {/* Top recruiters leaderboard */}
+      <TopRecruiters />
+
       <button onClick={() => setPage('home')} style={{ marginTop: 20, color: 'var(--warm-gray)', fontSize: 13, fontWeight: 600 }}>
         ← Back to Shopping
       </button>
@@ -184,4 +187,28 @@ const SquadPage = ({ setPage, currentUser }) => {
   );
 };
 
-Object.assign(window, { SquadPage });
+// Public top-recruiters leaderboard (first names only)
+const TopRecruiters = () => {
+  const [leaders, setLeaders] = React.useState(null);
+  React.useEffect(() => {
+    fetch('/api/leaderboard').then(r => r.ok ? r.json() : []).then(setLeaders).catch(() => setLeaders([]));
+  }, []);
+  if (!leaders || leaders.length === 0) return null;
+  return (
+    <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', padding: '20px 24px', boxShadow: 'var(--shadow)', marginTop: 20 }}>
+      <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 18, fontWeight: 700, marginBottom: 4 }}>🏆 Top Recruiters</h2>
+      <p style={{ fontSize: 12, color: 'var(--warm-gray)', marginBottom: 14 }}>The people bringing the most friends to SDGMart. Could be you next month!</p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {leaders.slice(0, 5).map((u, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: i === 0 ? 'none' : '1px solid var(--cream-dark)' }}>
+            <span style={{ width: 24, textAlign: 'center', fontSize: 16 }}>{['🥇','🥈','🥉'][i] || <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)' }}>{i + 1}</span>}</span>
+            <span style={{ flex: 1, fontWeight: 600, fontSize: 14 }}>{u.name}</span>
+            <span style={{ fontSize: 12, color: 'var(--warm-gray)', fontWeight: 700 }}>{u.referralCount} friend{u.referralCount === 1 ? '' : 's'}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+Object.assign(window, { SquadPage, TopRecruiters });
