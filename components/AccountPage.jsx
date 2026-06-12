@@ -29,15 +29,21 @@ const AccountPage = ({ setPage, currentUser, setCurrentUser }) => {
 
   const saveAddress = async () => {
     setErr('');
-    if (!draft.label || !draft.neighborhood) { setErr('Label and neighborhood required'); return; }
+    // Resolve a custom-typed neighborhood when "Other" is selected
+    const effectiveNeighborhood = draft.neighborhood === '__other__'
+      ? (draft.customNeighborhood || '').trim()
+      : draft.neighborhood;
+    if (!draft.label || !effectiveNeighborhood) { setErr('Label and neighborhood are required'); return; }
+    const payload = { ...draft, neighborhood: effectiveNeighborhood };
+    delete payload.customNeighborhood;
     try {
       if (editingId) {
-        await apiFetch(`/api/me/addresses/${editingId}`, { method: 'PUT', body: JSON.stringify(draft) });
+        await apiFetch(`/api/me/addresses/${editingId}`, { method: 'PUT', body: JSON.stringify(payload) });
       } else {
-        await apiFetch('/api/me/addresses', { method: 'POST', body: JSON.stringify(draft) });
+        await apiFetch('/api/me/addresses', { method: 'POST', body: JSON.stringify(payload) });
       }
       setAdding(false); setEditingId(null);
-      setDraft({ label: 'Home', neighborhood: '', address: '', location: null, isDefault: false });
+      setDraft({ label: 'Home', neighborhood: '', customNeighborhood: '', address: '', location: null, isDefault: false });
       load();
     } catch (_) { setErr('Could not save'); }
   };
@@ -50,9 +56,18 @@ const AccountPage = ({ setPage, currentUser, setCurrentUser }) => {
 
   const startEdit = (a) => {
     setEditingId(a.id);
-    setDraft({ label: a.label, neighborhood: a.neighborhood || '', address: a.address || '', location: a.location || null, isDefault: !!a.isDefault });
+    // If the saved neighborhood isn't one of the presets, treat it as "Other"
+    const known = (window.NEIGHBORHOODS || []).includes(a.neighborhood);
+    setDraft({
+      label: a.label,
+      neighborhood: known ? a.neighborhood : (a.neighborhood ? '__other__' : ''),
+      customNeighborhood: known ? '' : (a.neighborhood || ''),
+      address: a.address || '', location: a.location || null, isDefault: !!a.isDefault,
+    });
     setAdding(true);
   };
+  // Which of the label presets is active (Home/Work), else custom
+  const labelIsPreset = draft.label === 'Home' || draft.label === 'Work';
 
   const inputS = { width: '100%', padding: '10px 12px', borderRadius: 8, border: '1.5px solid var(--cream-dark)', fontSize: 14, outline: 'none', background: 'var(--white)', marginBottom: 10 };
 
@@ -88,7 +103,7 @@ const AccountPage = ({ setPage, currentUser, setCurrentUser }) => {
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 14 }}>
           <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 18, fontWeight: 700 }}>Saved Addresses</h2>
           {!adding && (
-            <button onClick={() => { setAdding(true); setEditingId(null); setDraft({ label: 'Home', neighborhood: '', address: '', location: null, isDefault: false }); }}
+            <button onClick={() => { setAdding(true); setEditingId(null); setDraft({ label: 'Home', neighborhood: '', customNeighborhood: '', address: '', location: null, isDefault: false }); }}
               style={{ fontSize: 12, color: 'var(--sage-dark)', fontWeight: 700, background: 'var(--cream)', borderRadius: 6, padding: '6px 12px' }}>
               + Add address
             </button>
@@ -123,24 +138,46 @@ const AccountPage = ({ setPage, currentUser, setCurrentUser }) => {
 
         {adding && (
           <div style={{ marginTop: 16, padding: 16, background: 'var(--cream)', borderRadius: 10 }}>
+            {/* Label picker */}
             <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-              {['Home', 'Work', 'Other'].map(l => (
+              {['Home', 'Work'].map(l => (
                 <button key={l} onClick={() => setDraft(d => ({ ...d, label: l }))}
                   style={{ fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 999, background: draft.label === l ? 'var(--sage)' : 'var(--white)', color: draft.label === l ? '#fff' : 'var(--warm-gray)', border: '1px solid var(--cream-dark)' }}>
                   {l}
                 </button>
               ))}
+              <button onClick={() => setDraft(d => ({ ...d, label: labelIsPreset ? '' : d.label }))}
+                style={{ fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 999, background: !labelIsPreset ? 'var(--sage)' : 'var(--white)', color: !labelIsPreset ? '#fff' : 'var(--warm-gray)', border: '1px solid var(--cream-dark)' }}>
+                Other
+              </button>
             </div>
-            {draft.label === 'Other' && (
-              <input value={draft.label === 'Other' ? '' : draft.label} onChange={e => setDraft(d => ({ ...d, label: e.target.value }))}
+            {!labelIsPreset && (
+              <input value={draft.label} onChange={e => setDraft(d => ({ ...d, label: e.target.value }))}
                 placeholder="Custom label (e.g. Mom's place)" style={inputS} />
             )}
+
+            {/* Neighborhood with custom option */}
             <select value={draft.neighborhood} onChange={e => setDraft(d => ({ ...d, neighborhood: e.target.value }))} style={inputS}>
               <option value="">Select neighborhood…</option>
               {(window.NEIGHBORHOODS || []).map(n => <option key={n} value={n}>{n}</option>)}
+              <option value="__other__">Other (type my own)…</option>
             </select>
+            {draft.neighborhood === '__other__' && (
+              <input value={draft.customNeighborhood || ''} onChange={e => setDraft(d => ({ ...d, customNeighborhood: e.target.value }))}
+                placeholder="Type your neighborhood / area" style={inputS} />
+            )}
+
             <input value={draft.address} onChange={e => setDraft(d => ({ ...d, address: e.target.value }))}
               placeholder="Address or landmark (optional)" style={inputS} />
+
+            {/* Map pin */}
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', display: 'block', marginBottom: 6 }}>
+                Pin the exact spot (optional)
+              </label>
+              <MapPicker value={draft.location || null} onChange={(loc) => setDraft(d => ({ ...d, location: loc }))} height={220} />
+            </div>
+
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4, fontSize: 13 }}>
               <input type="checkbox" checked={draft.isDefault} onChange={e => setDraft(d => ({ ...d, isDefault: e.target.checked }))}
                 style={{ accentColor: 'var(--sage)' }} />

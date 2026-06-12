@@ -33,9 +33,11 @@ const ProductPage = ({ product, onAdd, setPage, setSelectedCategory }) => {
   const showFreshness = typeof window !== 'undefined' && window.SHOW_FRESHNESS === true;
   const related = window.PRODUCTS.filter(p => p.category === product.category && p.id !== product.id).slice(0, 4);
   const daysLeft = product.bestBefore ? Math.ceil((new Date(product.bestBefore) - new Date()) / (1000 * 60 * 60 * 24)) : Infinity;
-  // Auto-discount on near-expiry items only applies when freshness tracking is on.
-  const discount = showFreshness ? (daysLeft <= 30 ? 0.15 : daysLeft <= 60 ? 0.10 : 0) : 0;
-  const finalPrice = product.price * (1 - discount);
+  // Active promotion takes priority; else near-expiry auto-discount (if freshness on).
+  const promoPct = (typeof window !== 'undefined' && window.PROMO_MAP) ? window.PROMO_MAP[product.id] : 0;
+  const freshDiscount = showFreshness ? (daysLeft <= 30 ? 0.15 : daysLeft <= 60 ? 0.10 : 0) : 0;
+  const discount = promoPct ? promoPct / 100 : freshDiscount;
+  const finalPrice = +(product.price * (1 - discount)).toFixed(2);
 
   const catColors = {
     'Cereals': ['#FDEBD0','#C0622A'], 'Dairy': ['#DBEEFF','#2A6FAF'],
@@ -75,9 +77,9 @@ const ProductPage = ({ product, onAdd, setPage, setSelectedCategory }) => {
               <span className="badge badge-green" style={{ fontSize: 13, padding: '4px 12px' }}>★ Bestseller</span>
             </div>
           )}
-          {showFreshness && discount > 0 && (
+          {discount > 0 && (
             <div style={{ position: 'absolute', top: 16, right: 16 }}>
-              <span className="badge badge-sale" style={{ fontSize: 13, padding: '4px 12px' }}>-{Math.round(discount*100)}% OFF</span>
+              <span className="badge badge-sale" style={{ fontSize: 13, padding: '4px 12px' }}>{promoPct ? '⚡ ' : ''}-{Math.round(discount*100)}% OFF</span>
             </div>
           )}
         </div>

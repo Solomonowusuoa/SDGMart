@@ -200,4 +200,45 @@ const MapPicker = ({ value, onChange, height = 240, allowGeolocate = true, defau
   );
 };
 
-Object.assign(window, { MapPicker });
+// DestinationMap — read-only mini map with a single pin. Used by riders to see
+// where a delivery is. Lazy-loads Leaflet like MapPicker.
+const DestinationMap = ({ location, height = 180 }) => {
+  const ref = React.useRef(null);
+  const mapRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!ref.current || !location || location.lat == null) return;
+    let cancelled = false;
+    // Reuse MapPicker's Leaflet loader by triggering the same CDN injection
+    const ensure = () => {
+      if (window.L) return;
+      if (!document.getElementById('leaflet-css')) {
+        const link = document.createElement('link');
+        link.id = 'leaflet-css'; link.rel = 'stylesheet';
+        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+        document.head.appendChild(link);
+      }
+      if (!document.getElementById('leaflet-js')) {
+        const s = document.createElement('script');
+        s.id = 'leaflet-js'; s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+        document.head.appendChild(s);
+      }
+    };
+    ensure();
+    const init = () => {
+      if (cancelled) return;
+      if (!window.L) { setTimeout(init, 100); return; }
+      if (mapRef.current) return;
+      mapRef.current = window.L.map(ref.current, { zoomControl: true, attributionControl: false })
+        .setView([location.lat, location.lng], 16);
+      window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(mapRef.current);
+      window.L.marker([location.lat, location.lng]).addTo(mapRef.current);
+      setTimeout(() => mapRef.current && mapRef.current.invalidateSize(), 200);
+    };
+    init();
+    return () => { cancelled = true; if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; } };
+  }, [location && location.lat, location && location.lng]);
+  if (!location || location.lat == null) return null;
+  return <div ref={ref} style={{ height, width: '100%', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--cream-dark)' }} />;
+};
+
+Object.assign(window, { MapPicker, DestinationMap });

@@ -440,6 +440,13 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
     apiFetch('/api/admin/riders').then(r => r.ok ? r.json() : []).then(setRiders).catch(() => {});
   }, []);
   React.useEffect(() => { if (adminTab === 'riders') { loadRiders(); const t = setInterval(loadRiders, 10000); return () => clearInterval(t); } }, [adminTab, loadRiders]);
+  // Riders are also needed in the Orders tab for manual assignment
+  React.useEffect(() => { if (adminTab === 'orders') loadRiders(); }, [adminTab, loadRiders]);
+
+  const assignOrderToRider = async (orderId, riderId) => {
+    await apiFetch(`/api/admin/orders/${orderId}/assign`, { method: 'POST', body: JSON.stringify({ riderId: riderId || null }) });
+    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, riderId: riderId || null, status: riderId ? 'assigned' : 'queued' } : o));
+  };
   const createRider = async () => {
     setRiderErr('');
     if (!newRider.name || !newRider.email || !newRider.password) { setRiderErr('Name, email and password required'); return; }
@@ -626,6 +633,15 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                           </div>
                         </div>
                         <div style={{ fontWeight: 700, fontSize: 14, minWidth: 100, textAlign: 'right' }}>GHS {Number(o.total || 0).toFixed(2)}</div>
+                        {/* Rider assignment — only meaningful before delivery/cancel */}
+                        {!['delivered','cancelled'].includes(statusKey) && (
+                          <select value={o.riderId || ''} onChange={e => assignOrderToRider(o.id, e.target.value ? parseInt(e.target.value) : null)}
+                            title="Assign a rider"
+                            style={{ fontSize: 11, fontWeight: 700, borderRadius: 8, padding: '6px 10px', border: `1px solid ${o.riderId ? 'var(--sage)' : '#C8923A'}`, background: o.riderId ? 'rgba(0,0,0,.03)' : '#FFF8E8' }}>
+                            <option value="">🛵 Unassigned</option>
+                            {riders.map(r => <option key={r.id} value={r.id}>{r.name}{r.online ? ' 🟢' : ''}</option>)}
+                          </select>
+                        )}
                         <select value={statusKey} onChange={e => updateOrderStatus(o.id, e.target.value)}
                           style={{ fontSize: 11, fontWeight: 700, borderRadius: 8, padding: '6px 10px', border: '1px solid var(--cream-dark)', background: 'var(--white)' }}>
                           {STATUS_OPTIONS.map(s => <option key={s} value={s}>{statusLabel[s] || s}</option>)}
@@ -1052,7 +1068,15 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                       <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 4 }}>
                         {Array.isArray(p.productIds) ? p.productIds.length : 0} product{(p.productIds || []).length === 1 ? '' : 's'} · {new Date(p.startsAt).toLocaleString()} → {new Date(p.endsAt).toLocaleString()}
                       </div>
-                      {p.pushSent && <div style={{ fontSize: 11, color: 'var(--sage)', marginTop: 2 }}>✓ Push notification sent</div>}
+                      {Array.isArray(p.productIds) && p.productIds.length > 0 && (
+                        <div style={{ fontSize: 12, color: 'var(--warm-black)', marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {p.productIds.map(pid => {
+                            const prod = products.find(x => x.id === pid);
+                            return <span key={pid} style={{ background: 'var(--cream)', borderRadius: 6, padding: '2px 8px', fontSize: 11 }}>{prod ? prod.name : '#' + pid}</span>;
+                          })}
+                        </div>
+                      )}
+                      {p.pushSent && <div style={{ fontSize: 11, color: 'var(--sage)', marginTop: 4 }}>✓ Push notification sent</div>}
                     </div>
                     {!p.published && (
                       <button onClick={async () => {
@@ -1099,7 +1123,8 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {requests.map(r => {
-                  const wa = `https://wa.me/${String(r.phone || '').replace(/\D/g,'').replace(/^0/, '233')}?text=${encodeURIComponent(`Hi ${r.name}, this is SDGMart — about your request for "${r.productName}":`)}`;
+                  const waNum = String(r.whatsappNumber || '').replace(/\D/g,'').replace(/^0/, '233');
+                  const wa = `https://wa.me/${waNum}?text=${encodeURIComponent(`Hi ${r.name}, this is SDGMart — about your request for "${r.productName}":`)}`;
                   const statusColor = { new: '#C8923A', contacted: '#3879BF', found: 'var(--sage)', dismissed: '#888' }[r.status] || '#888';
                   return (
                     <div key={r.id} style={{ background: 'var(--white)', borderRadius: 10, padding: '14px 16px', boxShadow: 'var(--shadow)', opacity: r.status === 'dismissed' ? .6 : 1 }}>
@@ -1111,15 +1136,24 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                         <span style={{ fontSize: 11, color: 'var(--warm-gray)', marginLeft: 'auto' }}>{new Date(r.createdAt).toLocaleString()}</span>
                       </div>
                       <div style={{ marginTop: 6, fontSize: 13, color: 'var(--warm-gray)' }}>
-                        From <strong style={{ color: 'var(--warm-black)' }}>{r.name}</strong> · <a href={`tel:${r.phone}`} style={{ color: 'var(--sage-dark)', textDecoration: 'none' }}>{r.phone}</a>
+                        From <strong style={{ color: 'var(--warm-black)' }}>{r.name}</strong>
                         {r.userId && <span style={{ marginLeft: 6, fontSize: 11, opacity: .7 }}>(registered customer)</span>}
+                      </div>
+                      <div style={{ marginTop: 4, fontSize: 12, color: 'var(--warm-gray)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                        {r.whatsappNumber && <span>💬 {r.whatsappNumber}{r.contactWhatsapp ? ' ✓' : ''}</span>}
+                        {r.callNumber && <span>📞 {r.callNumber}{r.contactCall ? ' ✓' : ''}</span>}
+                        <span style={{ opacity: .7 }}>prefers: {[r.contactWhatsapp && 'WhatsApp', r.contactCall && 'call'].filter(Boolean).join(' & ') || 'either'}</span>
                       </div>
                       {r.notes && <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--cream)', borderRadius: 6, fontSize: 13, lineHeight: 1.5, fontStyle: 'italic' }}>{r.notes}</div>}
                       <div style={{ marginTop: 12, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        <a href={wa} target="_blank" rel="noreferrer"
+                        {r.whatsappNumber && <a href={wa} target="_blank" rel="noreferrer"
                           style={{ background: '#25D366', color: '#fff', fontSize: 12, fontWeight: 700, padding: '7px 14px', borderRadius: 6, textDecoration: 'none' }}>
                           💬 WhatsApp
-                        </a>
+                        </a>}
+                        {r.callNumber && <a href={`tel:${r.callNumber}`}
+                          style={{ background: 'var(--sage)', color: '#fff', fontSize: 12, fontWeight: 700, padding: '7px 14px', borderRadius: 6, textDecoration: 'none' }}>
+                          📞 Call
+                        </a>}
                         {r.status === 'new' && (
                           <button onClick={() => updateRequest(r.id, { status: 'contacted' })} style={{ fontSize: 12, fontWeight: 700, padding: '7px 12px', borderRadius: 6, background: 'var(--cream)', color: 'var(--warm-gray)' }}>
                             Mark contacted

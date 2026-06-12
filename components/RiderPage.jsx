@@ -8,6 +8,7 @@ const RiderPage = ({ currentUser, onLogout }) => {
   const [orders, setOrders] = React.useState([]);
   const [loc, setLoc] = React.useState(null);
   const [err, setErr] = React.useState('');
+  const [mapOpen, setMapOpen] = React.useState({});
   const watchIdRef = React.useRef(null);
   const pingTimerRef = React.useRef(null);
 
@@ -141,15 +142,28 @@ const RiderPage = ({ currentUser, onLogout }) => {
                     </div>
                     <span style={{ fontSize: 11, color: 'var(--warm-gray)', textTransform: 'uppercase', fontWeight: 600 }}>{o.status}</span>
                   </div>
-                  <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginBottom: 4 }}>{o.customer} · {o.phone}</div>
-                  {o.location && (
-                    <div style={{ fontSize: 12, marginBottom: 8 }}>
-                      📍 {o.location.address || `${o.location.lat?.toFixed(5)}, ${o.location.lng?.toFixed(5)}`}
+                  <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginBottom: 4 }}>{o.customer || o.customerName} · {o.phone || o.customerPhone}</div>
+                  {o.location && o.location.lat != null ? (
+                    <div style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 12, marginBottom: 6 }}>
+                        📍 {o.location.address || `${o.location.lat.toFixed(5)}, ${o.location.lng.toFixed(5)}`}
+                      </div>
+                      {/* Map auto-shows for the NEXT order; others have a toggle to keep things light */}
+                      {(i === 0 || mapOpen[o.id]) ? (
+                        <DestinationMap location={o.location} height={180} />
+                      ) : (
+                        <button onClick={() => setMapOpen(m => ({ ...m, [o.id]: true }))}
+                          style={{ fontSize: 12, fontWeight: 700, color: 'var(--sage-dark)', background: 'var(--cream)', borderRadius: 6, padding: '6px 12px' }}>
+                          🗺 Show map
+                        </button>
+                      )}
                       <a target="_blank" rel="noopener" href={`https://www.google.com/maps/dir/?api=1&destination=${o.location.lat},${o.location.lng}`}
-                        style={{ marginLeft: 8, color: 'var(--sage)', fontWeight: 600 }}>
-                        Open in Maps →
+                        style={{ display: 'inline-block', marginTop: 8, background: '#1A73E8', color: '#fff', borderRadius: 8, padding: '8px 14px', fontWeight: 700, fontSize: 12, textDecoration: 'none' }}>
+                        🧭 Navigate with Google Maps
                       </a>
                     </div>
+                  ) : (
+                    <div style={{ fontSize: 12, color: 'var(--accent-red)', marginBottom: 8 }}>⚠ No map pin — call the customer for directions.</div>
                   )}
                   <div style={{ fontSize: 13, fontWeight: 700 }}>GHS {Number(o.total || 0).toFixed(2)}</div>
                   <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>

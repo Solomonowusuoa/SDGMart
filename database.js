@@ -411,6 +411,14 @@ const orders = {
     if (riderId != null) patch.rider_id = riderId;
     return await orders.update(id, patch);
   },
+  // Admin manually assigns (or reassigns) an order to a specific rider.
+  // Pass riderId=null to unassign and send the order back to the queue.
+  async assignToRider(orderId, riderId) {
+    const patch = riderId
+      ? { rider_id: riderId, status: 'assigned' }
+      : { rider_id: null, status: 'queued' };
+    return await orders.update(orderId, patch);
+  },
   async forRider(riderId) {
     const { data, error } = await sb.from('orders').select('*').eq('rider_id', riderId).in('status', ['assigned','in_transit']).order('created_at');
     if (error) throw error;
@@ -572,11 +580,14 @@ const recurring = {
 
 // ── Product requests (customer-submitted "do you sell X?") ───────────────
 const productRequests = {
-  async create({ userId, name, phone, productName, notes }) {
+  async create({ userId, name, whatsappNumber, callNumber, contactWhatsapp, contactCall, productName, notes }) {
     const { data, error } = await sb.from('product_requests').insert({
       user_id: userId || null,
       name: String(name || '').slice(0, 100),
-      phone: String(phone || '').slice(0, 30),
+      whatsapp_number: whatsappNumber ? String(whatsappNumber).slice(0, 30) : null,
+      call_number: callNumber ? String(callNumber).slice(0, 30) : null,
+      contact_whatsapp: !!contactWhatsapp,
+      contact_call: !!contactCall,
       product_name: String(productName || '').slice(0, 200),
       notes: String(notes || '').slice(0, 600),
     }).select().single();

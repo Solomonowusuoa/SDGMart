@@ -11,6 +11,7 @@ const LoginPage = ({ onAuth, onGuest }) => {
   const [err, setErr] = React.useState('');
   const [info, setInfo] = React.useState('');
   const [loading, setLoading] = React.useState(false);
+  const [showPw, setShowPw] = React.useState(false);
   const [googleClientId, setGoogleClientId] = React.useState('');
   const googleBtnRef = React.useRef(null);
   const refCodeRef = React.useRef('');
@@ -119,7 +120,7 @@ const LoginPage = ({ onAuth, onGuest }) => {
       // Stash the session token alongside the user so apiFetch can find it.
       onAuth({ ...data.user, token: data.token });
     } catch (e) {
-      setErr('Network error — is the server running?');
+      setErr('Could not connect. Please check your internet and try again.');
     } finally {
       setLoading(false);
     }
@@ -178,6 +179,10 @@ const LoginPage = ({ onAuth, onGuest }) => {
     width: '100%', padding: '12px 14px', borderRadius: 10,
     border: '1.5px solid var(--cream-dark)', fontSize: 14, outline: 'none',
     background: 'var(--white)', marginBottom: 10,
+  };
+  const lbl = {
+    display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)',
+    textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 5,
   };
 
   // Same image used by the homepage hero. Drop the file at icons/hero.jpg.
@@ -252,32 +257,60 @@ const LoginPage = ({ onAuth, onGuest }) => {
           </div>
         )}
 
-        {/* Form — different fields per mode */}
+        {/* Form — different fields per mode. Labels above each field for clarity. */}
         {mode === 'signup' && (
-          <input placeholder="Full Name" value={form.name} onChange={e => set('name', e.target.value)} style={inputS} />
+          <>
+            <label style={lbl}>Your name</label>
+            <input placeholder="e.g. Ama Mensah" value={form.name} onChange={e => set('name', e.target.value)} style={inputS} />
+          </>
         )}
         {(mode === 'signin' || mode === 'signup' || mode === 'forgot') && (
-          <input placeholder="Email" type="email" value={form.email}
-            onChange={e => set('email', e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && submit()} style={inputS} />
+          <>
+            <label style={lbl}>Email</label>
+            <input placeholder="you@example.com" type="email" autoComplete="email" value={form.email}
+              onChange={e => set('email', e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && submit()} style={inputS} />
+          </>
         )}
         {mode === 'signup' && (
-          <input placeholder="Phone (optional)" value={form.phone} onChange={e => set('phone', e.target.value)} style={inputS} />
+          <>
+            <label style={lbl}>Phone <span style={{ fontWeight: 400, textTransform: 'none', color: 'var(--warm-gray)' }}>(optional)</span></label>
+            <input placeholder="e.g. 024 123 4567" type="tel" value={form.phone} onChange={e => set('phone', e.target.value)} style={inputS} />
+          </>
         )}
         {(mode === 'signin' || mode === 'signup') && (
-          <input placeholder="Password" type="password" value={form.password}
-            onChange={e => set('password', e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && submit()} style={inputS} />
+          <>
+            <label style={lbl}>Password</label>
+            <div style={{ position: 'relative', marginBottom: mode === 'signup' ? 4 : 10 }}>
+              <input placeholder={mode === 'signup' ? 'Create a password' : 'Your password'} type={showPw ? 'text' : 'password'}
+                autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                value={form.password}
+                onChange={e => set('password', e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && submit()} style={{ ...inputS, marginBottom: 0, paddingRight: 60 }} />
+              <button type="button" onClick={() => setShowPw(s => !s)}
+                style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 12, fontWeight: 700, color: 'var(--sage-dark)', background: 'transparent', padding: 4 }}>
+                {showPw ? 'Hide' : 'Show'}
+              </button>
+            </div>
+            {mode === 'signup' && (
+              <div style={{ fontSize: 11, color: 'var(--warm-gray)', marginBottom: 10 }}>At least 8 characters, with a letter and a number.</div>
+            )}
+          </>
         )}
         {mode === 'signup' && (
-          <input placeholder="Referral Code (optional)" value={form.refCode}
-            onChange={e => set('refCode', e.target.value.toUpperCase())} style={inputS} />
+          <>
+            <label style={lbl}>Referral code <span style={{ fontWeight: 400, textTransform: 'none', color: 'var(--warm-gray)' }}>(optional)</span></label>
+            <input placeholder="From a friend? Enter it here" value={form.refCode}
+              onChange={e => set('refCode', e.target.value.toUpperCase())} style={inputS} />
+          </>
         )}
         {mode === 'reset' && (
           <>
-            <input placeholder="New password" type="password" value={form.newPassword}
+            <label style={lbl}>New password</label>
+            <input placeholder="At least 8 characters" type={showPw ? 'text' : 'password'} value={form.newPassword}
               onChange={e => set('newPassword', e.target.value)} style={inputS} />
-            <input placeholder="Confirm new password" type="password" value={form.confirmPassword}
+            <label style={lbl}>Confirm new password</label>
+            <input placeholder="Re-enter your new password" type={showPw ? 'text' : 'password'} value={form.confirmPassword}
               onChange={e => set('confirmPassword', e.target.value)}
               onKeyDown={e => e.key === 'Enter' && submit()} style={inputS} />
           </>

@@ -478,6 +478,24 @@ app.delete('/api/orders/:id', requireAdmin, async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Admin: manually assign (or reassign / unassign) an order to a rider
+app.post('/api/admin/orders/:id/assign', requireAdmin, async (req, res) => {
+  const { riderId } = req.body || {};
+  try {
+    const o = await db.orders.assignToRider(req.params.id, riderId || null);
+    if (!o) return res.status(404).json({ error: 'Order not found' });
+    // Notify the customer their order has a rider
+    if (riderId && o.userId) {
+      pushToUser(o.userId, {
+        title: '🛵 Rider assigned',
+        body: 'A rider has been assigned to your order and will be on the way soon.',
+        url: `/?track=${o.id}`, tag: `order-${o.id}`,
+      });
+    }
+    res.json(o);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Auth: signup / login / logout / me ───────────────────────────────────
 function publicUser(u) {
   if (!u) return null;
@@ -997,12 +1015,13 @@ app.post('/api/admin/promotions/:id/publish', requireAdmin, async (req, res) => 
 
 // ── Product requests ─────────────────────────────────────────────────────
 app.post('/api/product-requests', async (req, res) => {
-  const { name, phone, productName, notes } = req.body || {};
-  if (!productName || !name || !phone) return res.status(400).json({ error: 'Name, phone and product required' });
+  const { name, whatsappNumber, callNumber, contactWhatsapp, contactCall, productName, notes } = req.body || {};
+  if (!productName || !name) return res.status(400).json({ error: 'Your name and the item are required' });
+  if (!whatsappNumber && !callNumber) return res.status(400).json({ error: 'Please give us at least one number to reach you' });
   try {
     const r = await db.productRequests.create({
       userId: req.user ? req.user.id : null,
-      name, phone, productName, notes,
+      name, whatsappNumber, callNumber, contactWhatsapp, contactCall, productName, notes,
     });
     res.json({ ok: true, id: r.id });
   } catch (e) { res.status(500).json({ error: e.message }); }

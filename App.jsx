@@ -76,11 +76,36 @@ const App = () => {
     }
   }, [theme]);
 
+  // ── Active promotions → productId:percent map (drives sale badges + pricing)
+  const [promoMap, setPromoMap] = React.useState({});
+  React.useEffect(() => {
+    fetch('/api/promotions/active').then(r => r.ok ? r.json() : []).then(promos => {
+      const map = {};
+      (promos || []).forEach(p => {
+        (p.productIds || []).forEach(id => {
+          // If a product is in multiple promos, keep the biggest discount
+          if (!map[id] || p.discountPercent > map[id]) map[id] = p.discountPercent;
+        });
+      });
+      setPromoMap(map);
+      window.PROMO_MAP = map;          // ProductCard / ProductPage read this
+      window.dispatchEvent(new Event('sdgmart:promos'));
+    }).catch(() => {});
+  }, []);
+
+  // Effective unit price after any active promo
+  const promoPrice = (product) => {
+    const pct = promoMap[product.id];
+    if (!pct) return { price: product.price };
+    return { price: +(product.price * (1 - pct / 100)).toFixed(2), originalPrice: product.price, promoPercent: pct };
+  };
+
   const addToCart = (product) => {
+    const pp = promoPrice(product);
     setCart(prev => {
       const existing = prev.find(i => i.id === product.id);
       if (existing) return prev.map(i => i.id === product.id ? { ...i, qty: i.qty + 1 } : i);
-      return [...prev, { ...product, qty: 1 }];
+      return [...prev, { ...product, ...pp, qty: 1 }];
     });
   };
 

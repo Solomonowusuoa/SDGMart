@@ -11,7 +11,10 @@ const RequestProductButton = ({ label, style, prefillProduct, currentUser }) => 
   const [open, setOpen] = React.useState(false);
   const [form, setForm] = React.useState({
     name: (currentUser && currentUser.name) || '',
-    phone: (currentUser && currentUser.phone) || '',
+    whatsappNumber: (currentUser && currentUser.phone) || '',
+    callNumber: '',
+    contactWhatsapp: true,
+    contactCall: false,
     productName: prefillProduct || '',
     notes: '',
   });
@@ -25,8 +28,11 @@ const RequestProductButton = ({ label, style, prefillProduct, currentUser }) => 
 
   const submit = async () => {
     setErr('');
-    if (!form.name.trim() || !form.phone.trim() || !form.productName.trim()) {
-      setErr('Name, phone and item are required'); return;
+    if (!form.name.trim() || !form.productName.trim()) {
+      setErr('Your name and the item are required'); return;
+    }
+    if (!form.whatsappNumber.trim() && !form.callNumber.trim()) {
+      setErr('Please give us at least one number to reach you'); return;
     }
     setSubmitting(true);
     try {
@@ -48,7 +54,8 @@ const RequestProductButton = ({ label, style, prefillProduct, currentUser }) => 
     setErr('');
     setForm({
       name: (currentUser && currentUser.name) || '',
-      phone: (currentUser && currentUser.phone) || '',
+      whatsappNumber: (currentUser && currentUser.phone) || '',
+      callNumber: '', contactWhatsapp: true, contactCall: false,
       productName: '', notes: '',
     });
   };
@@ -73,7 +80,7 @@ const RequestProductButton = ({ label, style, prefillProduct, currentUser }) => 
                   <div style={{ fontSize: 48 }}>📬</div>
                   <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, marginTop: 8, marginBottom: 10 }}>Request received!</h2>
                   <p style={{ fontSize: 13, color: 'var(--warm-gray)', lineHeight: 1.55 }}>
-                    We'll source <strong style={{ color: 'var(--warm-black)' }}>{form.productName}</strong> and get back to you on WhatsApp at <strong style={{ color: 'var(--warm-black)' }}>{form.phone}</strong> if we can find it. Thanks for letting us know what you need!
+                    We'll source <strong style={{ color: 'var(--warm-black)' }}>{form.productName}</strong> and reach out on your preferred contact if we can find it. Thanks for letting us know what you need!
                   </p>
                 </div>
                 <button onClick={reset} style={{ width: '100%', background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '10px', fontWeight: 700, fontSize: 13 }}>
@@ -95,8 +102,23 @@ const RequestProductButton = ({ label, style, prefillProduct, currentUser }) => 
                   style={{ ...inputS, resize: 'vertical', fontFamily: 'inherit' }} />
                 <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Your name *</label>
                 <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} style={inputS} />
-                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>WhatsApp number *</label>
-                <input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="+233 24 123 4567" style={inputS} />
+
+                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>WhatsApp number</label>
+                <input value={form.whatsappNumber} onChange={e => setForm(f => ({ ...f, whatsappNumber: e.target.value }))} placeholder="e.g. 024 123 4567" type="tel" style={inputS} />
+                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Call number</label>
+                <input value={form.callNumber} onChange={e => setForm(f => ({ ...f, callNumber: e.target.value }))} placeholder="e.g. 020 765 4321" type="tel" style={inputS} />
+
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>How should we reach you?</div>
+                <div style={{ display: 'flex', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={form.contactWhatsapp} onChange={e => setForm(f => ({ ...f, contactWhatsapp: e.target.checked }))} style={{ accentColor: '#25D366', width: 16, height: 16 }} />
+                    💬 WhatsApp
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={form.contactCall} onChange={e => setForm(f => ({ ...f, contactCall: e.target.checked }))} style={{ accentColor: 'var(--sage)', width: 16, height: 16 }} />
+                    📞 Phone call
+                  </label>
+                </div>
                 {err && <div style={{ color: 'var(--accent-red)', fontSize: 12, marginBottom: 10 }}>{err}</div>}
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button onClick={submit} disabled={submitting}
