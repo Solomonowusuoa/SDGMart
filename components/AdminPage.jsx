@@ -261,18 +261,48 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
     setNewProduct({ name:'', category: window.CATEGORIES[0], price:'', unit:'', bestBefore:'', stock:'', description:'', img:'' });
   };
 
-  // Shared photo-upload helper: reads file → base64 → POST to /api/admin/upload-image → returns URL
+  // Downscale + re-encode an image in the browser before upload. Caps the
+  // longest edge at maxEdge px and re-encodes as JPEG, shrinking a typical
+  // phone photo (2-5 MB) to ~80-150 KB. Saves Supabase storage + egress.
+  const compressImage = (file, maxEdge = 900, quality = 0.82) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxEdge || height > maxEdge) {
+          if (width >= height) { height = Math.round(height * maxEdge / width); width = maxEdge; }
+          else { width = Math.round(width * maxEdge / height); height = maxEdge; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        // White backdrop so transparent PNGs don't turn black as JPEG
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  // Shared photo-upload helper: compress in-browser → POST → returns URL
   const uploadPhoto = async (file) => {
     if (!file) return null;
-    if (file.size > 1.5 * 1024 * 1024) { alert('Image too large (max 1.5 MB). Try a smaller photo.'); return null; }
+    if (!/^image\//.test(file.type)) { alert('Please choose an image file.'); return null; }
     setUploadingPhoto(true);
     try {
-      const dataUrl = await new Promise((res, rej) => {
-        const reader = new FileReader();
-        reader.onload = () => res(reader.result);
-        reader.onerror = rej;
-        reader.readAsDataURL(file);
-      });
+      let dataUrl;
+      try {
+        dataUrl = await compressImage(file);
+      } catch (_) {
+        // Fallback: send the original if canvas compression fails, with a size guard
+        if (file.size > 1.5 * 1024 * 1024) { alert('Image too large and could not be compressed. Try a smaller photo.'); return null; }
+        dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+      }
       const r = await apiFetch('/api/admin/upload-image', { method: 'POST', body: JSON.stringify({ dataUrl }) });
       const d = await r.json();
       if (!r.ok) { alert(d.error || 'Upload failed'); return null; }
