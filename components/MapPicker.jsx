@@ -1,6 +1,36 @@
-// MapPicker — Leaflet/OpenStreetMap location picker.
+// ── Map provider helpers ─────────────────────────────────────────────────
+// Uses LocationIQ when window.LOCATIONIQ_KEY is set (more generous limits,
+// OSM-based data so results stay familiar), otherwise falls back to the free
+// public OpenStreetMap tiles + Nominatim. This makes the switch a no-op until
+// a key is added — no breakage if it's missing.
+function sdgMapTileLayer(L) {
+  const key = (typeof window !== 'undefined' && window.LOCATIONIQ_KEY) || '';
+  if (key) {
+    return L.tileLayer(`https://tiles.locationiq.com/v3/streets/r/{z}/{x}/{y}.png?key=${key}`, {
+      maxZoom: 19, attribution: '© LocationIQ © OpenStreetMap',
+    });
+  }
+  return L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© OpenStreetMap contributors',
+  });
+}
+// Returns { reverse(lat,lng), search(q, paramStr) } URL builders for the active provider
+function sdgGeocoder() {
+  const key = (typeof window !== 'undefined' && window.LOCATIONIQ_KEY) || '';
+  if (key) {
+    return {
+      reverse: (lat, lng) => `https://us1.locationiq.com/v1/reverse?key=${key}&lat=${lat}&lon=${lng}&format=json`,
+      search: (q, params) => `https://us1.locationiq.com/v1/search?key=${key}&q=${encodeURIComponent(q)}&format=json&${params}`,
+    };
+  }
+  return {
+    reverse: (lat, lng) => `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&zoom=18`,
+    search: (q, params) => `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&${params}`,
+  };
+}
+
+// MapPicker — Leaflet location picker (LocationIQ or OpenStreetMap).
 // Props: value={lat,lng}|null, onChange({lat,lng,address}), height=240, allowGeolocate=true
-// Uses OpenStreetMap tiles (free, no API key) and Nominatim for reverse geocoding.
 const MapPicker = ({ value, onChange, height = 240, allowGeolocate = true, defaultCenter }) => {
   const containerRef = React.useRef(null);
   const mapRef = React.useRef(null);
@@ -28,14 +58,15 @@ const MapPicker = ({ value, onChange, height = 240, allowGeolocate = true, defau
     searchTimerRef.current = setTimeout(async () => {
       setSearching(true);
       try {
-        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(search)}&limit=8&countrycodes=gh&viewbox=${TAMALE_VIEWBOX}&bounded=1&addressdetails=1`;
-        const r = await fetch(url);
+        const geo = sdgGeocoder();
+        const r = await fetch(geo.search(search, `limit=8&countrycodes=gh&viewbox=${TAMALE_VIEWBOX}&bounded=1&addressdetails=1`));
         const d = await r.json();
         // If Tamale-only returns nothing, fall back to all-Ghana so common landmarks still resolve
         let list = Array.isArray(d) ? d : [];
         if (list.length === 0) {
-          const r2 = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(search + ' Tamale')}&limit=8&countrycodes=gh&addressdetails=1`);
-          list = await r2.json();
+          const r2 = await fetch(geo.search(search + ' Tamale', `limit=8&countrycodes=gh&addressdetails=1`));
+          const d2 = await r2.json();
+          list = Array.isArray(d2) ? d2 : [];
         }
         setResults(list);
         setShowResults(true);
@@ -59,11 +90,10 @@ const MapPicker = ({ value, onChange, height = 240, allowGeolocate = true, defau
     onChange && onChange({ lat, lng, address: r.display_name });
   };
 
-  // Reverse geocode lat/lng → human address (Nominatim is free, no key, but
-  // please respect their fair-use policy — we only call on user action).
+  // Reverse geocode lat/lng → human address via the active provider.
   const reverseGeocode = async (lat, lng) => {
     try {
-      const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&zoom=18`);
+      const r = await fetch(sdgGeocoder().reverse(lat, lng));
       const d = await r.json();
       return d.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
     } catch (_) {
@@ -116,10 +146,7 @@ const MapPicker = ({ value, onChange, height = 240, allowGeolocate = true, defau
       if (!window.L) { setTimeout(init, 100); return; }
       if (mapRef.current) return;
       mapRef.current = window.L.map(containerRef.current).setView([center.lat, center.lng], value ? 16 : 13);
-      window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap contributors',
-        maxZoom: 19,
-      }).addTo(mapRef.current);
+      sdgMapTileLayer(window.L).addTo(mapRef.current);
       mapRef.current.on('click', e => setLocation(e.latlng.lat, e.latlng.lng));
       if (value) {
         markerRef.current = window.L.marker([value.lat, value.lng], { draggable: true }).addTo(mapRef.current);
@@ -230,7 +257,7 @@ const DestinationMap = ({ location, height = 180 }) => {
       if (mapRef.current) return;
       mapRef.current = window.L.map(ref.current, { zoomControl: true, attributionControl: false })
         .setView([location.lat, location.lng], 16);
-      window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(mapRef.current);
+      sdgMapTileLayer(window.L).addTo(mapRef.current);
       window.L.marker([location.lat, location.lng]).addTo(mapRef.current);
       setTimeout(() => mapRef.current && mapRef.current.invalidateSize(), 200);
     };

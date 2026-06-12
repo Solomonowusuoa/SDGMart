@@ -311,6 +311,9 @@ app.get('/data/products.js', async (req, res) => {
     const neighborhoods = ["Tamale Central","Kalpohin","Lamashegu","Sagnarigu","Nyohini","Choggu","Kalpohini","Vittin","Tishigu","Gumbihini","Jisonayili"];
     // Customer-facing freshness/expiry display is off by default; admin can flip it on.
     const showFreshness = !!(await db.appConfig.get('show_freshness'));
+    // LocationIQ publishable key for maps + geocoding (falls back to OSM when blank).
+    // Safe to expose client-side; restrict it by domain in the LocationIQ dashboard.
+    const locationiqKey = process.env.LOCATIONIQ_KEY || '';
     const js = `
 const PRODUCTS = ${JSON.stringify(productsList)};
 const CATEGORIES = ${JSON.stringify(categories)};
@@ -325,6 +328,7 @@ if (typeof window !== 'undefined') {
   window.NEIGHBORHOODS = NEIGHBORHOODS;
   window.TOP_IDS_BY_ORDERS = TOP_IDS_BY_ORDERS;
   window.SHOW_FRESHNESS = SHOW_FRESHNESS;
+  window.LOCATIONIQ_KEY = ${JSON.stringify(locationiqKey)};
 }`;
     res.setHeader('Content-Type', 'application/javascript');
     res.setHeader('Cache-Control', 'no-cache');
