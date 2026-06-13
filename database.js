@@ -396,6 +396,11 @@ const orders = {
     if (error) throw error;
     return rowOut(data);
   },
+  async findByPaystackRef(ref) {
+    if (!ref) return null;
+    const { data } = await sb.from('orders').select('*').eq('paystack_ref', ref).maybeSingle();
+    return rowOut(data);
+  },
   async create(payload) {
     const { data, error } = await sb.from('orders').insert(rowIn(payload)).select().single();
     if (error) throw error;
@@ -904,6 +909,20 @@ const metrics = {
   },
 };
 
+// ── Pending Paystack payments (draft stash) ──────────────────────────────
+const pendingPayments = {
+  async create(reference, userId, draft, amount) {
+    await sb.from('pending_payments').insert({ reference, user_id: userId || null, draft, amount });
+  },
+  async get(reference) {
+    const { data } = await sb.from('pending_payments').select('*').eq('reference', reference).maybeSingle();
+    return data ? { reference: data.reference, userId: data.user_id, draft: data.draft, amount: data.amount } : null;
+  },
+  async delete(reference) {
+    await sb.from('pending_payments').delete().eq('reference', reference);
+  },
+};
+
 // ── Referral leaderboard ─────────────────────────────────────────────────
 const leaderboard = {
   async topReferrers(limit = 10) {
@@ -985,7 +1004,7 @@ module.exports = {
   sb,
   users, squads, sessions, riders, orders, products,
   addresses, reviews, issueReports, promotions, productRequests, stats,
-  metrics, leaderboard, errorLog,
+  metrics, leaderboard, errorLog, pendingPayments,
   pushSubs, searchLog, recurring, appConfig,
   hashPassword, verifyPassword, validatePasswordStrength,
   rateCheck, rateClear,

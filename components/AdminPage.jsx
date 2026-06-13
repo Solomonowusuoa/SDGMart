@@ -699,7 +699,12 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                             </div>
                             <div>
                               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>Payment</div>
-                              <div style={{ fontSize: 13 }}>{o.paymentMethod || o.payMethod || 'momo'}{o.momoNumber ? ` · ${o.momoNumber}` : ''}</div>
+                              <div style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                <span>{o.paymentMethod || o.payMethod || 'cash'}</span>
+                                {o.paid
+                                  ? <span style={{ background: '#1A1A1A', color: '#fff', borderRadius: 999, padding: '2px 10px', fontSize: 10, fontWeight: 700 }}>✓ PAID</span>
+                                  : <span style={{ background: '#FFF4E0', color: '#7A5A00', borderRadius: 999, padding: '2px 10px', fontSize: 10, fontWeight: 700 }}>COLLECT ON DELIVERY</span>}
+                              </div>
                             </div>
                             <div>
                               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>Breakdown</div>

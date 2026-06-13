@@ -64,32 +64,22 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   };
   // Map is optional — collapsed by default so Leaflet isn't loaded for everyone.
   const [mapOpen, setMapOpen] = React.useState(false);
-  // MoMo: customer's own number, admin's merchant numbers per telco, picked telco
-  const [customerMomo, setCustomerMomo] = React.useState('');
-  const [telco, setTelco] = React.useState('mtn');
-  const [merchantNumbers, setMerchantNumbers] = React.useState({ mtn: '', telecel: '', at: '', name: '' });
-  const [copyState, setCopyState] = React.useState('');
+  // Online payment (Paystack) availability + in-flight state
+  const [paystackEnabled, setPaystackEnabled] = React.useState(false);
+  const [paying, setPaying] = React.useState(false);
 
   React.useEffect(() => {
-    fetch('/api/momo/numbers').then(r => r.ok ? r.json() : {}).then(setMerchantNumbers).catch(() => {});
+    fetch('/api/paystack/config').then(r => r.ok ? r.json() : {}).then(cfg => {
+      if (cfg && cfg.enabled) { setPaystackEnabled(true); setForm(f => ({ ...f, payMethod: 'paystack' })); }
+    }).catch(() => {});
   }, []);
 
-  const copyMerchant = () => {
-    const n = merchantNumbers[telco] || '';
-    if (!n) return;
-    try {
-      navigator.clipboard.writeText(n).then(() => {
-        setCopyState('✓ Copied');
-        setTimeout(() => setCopyState(''), 1500);
-      });
-    } catch (_) {}
-  };
   const [form, setForm] = React.useState({
     name: (currentUser && currentUser.name && currentUser.role !== 'guest') ? currentUser.name : '',
     phone: (currentUser && currentUser.phone) || '',
     neighborhood: '', customNeighborhood: '', address: '',
     recipientName: '', recipientPhone: '', recipientAddress: '', mapsPin: '',
-    giftMessage: '', payMethod: 'momo',
+    giftMessage: '', payMethod: 'cash',
   });
   const [errors, setErrors] = React.useState({});
   const [orderPlaced, setOrderPlaced] = React.useState(false);
@@ -182,7 +172,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     lines.push(`Neighborhood: ${snap.neighborhood}`);
     lines.push(`Recipient: ${recipient}`);
     lines.push(`Location: ${location}`);
-    lines.push(`Payment: ${snap.form.payMethod === 'momo' ? 'Mobile Money (MoMo)' : 'Cash on Delivery'}`);
+    lines.push(`Payment: ${snap.form.payMethod === 'cash' ? 'Cash on Delivery' : 'Paid online (Card / MoMo)'}`);
     if (snap.familyMode && snap.form.giftMessage) lines.push(`Gift Message: ${snap.form.giftMessage}`);
     return lines.join('\n');
   };
@@ -226,88 +216,119 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     a.click();
   };
 
-  const placeOrder = async () => {
-    // Snapshot everything that the success screen + receipts need BEFORE we
-    // clear the cart. This is what fixes the "WhatsApp message had no items
-    // and the total looked like just delivery" bug.
+  // Snapshot the cart + form before we clear it (used by success screen + receipts).
+  const takeSnapshot = () => {
     const snap = {
       items: cart.map(i => ({ ...i })),
-      subtotal,
-      discount,
-      delivery,
-      total,
+      subtotal, discount, delivery, total,
       neighborhood: effectiveNeighborhood,
       familyMode,
       form: { ...form, neighborhood: effectiveNeighborhood },
     };
     setOrderSnapshot(snap);
+    return snap;
+  };
+
+  // The order payload sent to the server (same shape for COD + Paystack).
+  const buildDraft = (snap) => ({
+    id: orderId,
+    customer: snap.familyMode ? snap.form.recipientName : snap.form.name,
+    phone: snap.familyMode ? snap.form.recipientPhone : snap.form.phone,
+    neighborhood: snap.neighborhood,
+    address: snap.form.address,
+    items: snap.items,
+    subtotal: snap.subtotal,
+    total: snap.total,
+    delivery: snap.delivery,
+    familyMode: snap.familyMode,
+    recipientName: snap.form.recipientName,
+    recipientPhone: snap.form.recipientPhone,
+    recipientAddress: snap.form.recipientAddress,
+    giftMessage: snap.form.giftMessage,
+    payMethod: snap.form.payMethod,
+    mapsPin: snap.form.mapsPin,
+    location: snap.form.location || null,
+    discountApplied: canUseDiscount,
+    loyaltyUsed,
+  });
+
+  // After an order is created (paid or COD): set up recurring, refresh the
+  // user, show the success screen, clear the cart.
+  const finishOrder = async (snap) => {
     if (downloadReceipt) generateReceipt(snap);
-
-    // Persist order to backend (fire-and-forget; WhatsApp bridge remains primary).
-    // apiFetch automatically attaches the Bearer token; the server derives the
-    // userId from the session and ignores any client-supplied value.
-    try {
-      await apiFetch('/api/orders', {
-        method: 'POST',
-        body: JSON.stringify({
-          id: orderId,
-          customer: snap.familyMode ? snap.form.recipientName : snap.form.name,
-          phone: snap.familyMode ? snap.form.recipientPhone : snap.form.phone,
-          neighborhood: snap.neighborhood,
-          address: snap.form.address,
-          items: snap.items,
-          subtotal: snap.subtotal,
-          total: snap.total,
-          delivery: snap.delivery,
-          familyMode: snap.familyMode,
-          recipientName: snap.form.recipientName,
-          recipientPhone: snap.form.recipientPhone,
-          recipientAddress: snap.form.recipientAddress,
-          giftMessage: snap.form.giftMessage,
-          payMethod: snap.form.payMethod,
-          momoNumber: snap.form.payMethod === 'momo' ? customerMomo : '',
-          momoTelco: snap.form.payMethod === 'momo' ? telco : '',
-          mapsPin: snap.form.mapsPin,
-          location: snap.form.location || null,
-          discountApplied: canUseDiscount,
-          loyaltyUsed,
-        }),
-      });
-      // Set up a recurring order if the user opted in (signed-in users only)
-      if (autoReorder && currentUser && currentUser.id && currentUser.role !== 'guest') {
-        try {
-          const next = new Date(); next.setDate(next.getDate() + Number(reorderCadence || 14));
-          await apiFetch('/api/me/recurring', {
-            method: 'POST',
-            body: JSON.stringify({
-              items: snap.items,
-              cadenceDays: Number(reorderCadence) || 14,
-              nextRunAt: next.toISOString().slice(0, 10),
-              deliveryInfo: {
-                neighborhood: snap.neighborhood, address: snap.form.address,
-                location: snap.form.location || null, payMethod: snap.form.payMethod,
-              },
-            }),
-          });
-        } catch (_) {}
-      }
-
-      // Refresh local user (clear consumed discount; sync new totalSpent)
-      if (currentUser && currentUser.id && setCurrentUser) {
-        try {
-          const ures = await apiFetch('/api/auth/me');
-          if (ures.ok) {
-            const updated = await ures.json();
-            setCurrentUser(prev => ({ ...prev, ...updated }));
-          }
-        } catch (_) {}
-      }
-    } catch (_) {
-      // Proceed even if backend is unreachable
+    if (autoReorder && currentUser && currentUser.id && currentUser.role !== 'guest') {
+      try {
+        const next = new Date(); next.setDate(next.getDate() + Number(reorderCadence || 14));
+        await apiFetch('/api/me/recurring', {
+          method: 'POST',
+          body: JSON.stringify({
+            items: snap.items, cadenceDays: Number(reorderCadence) || 14,
+            nextRunAt: next.toISOString().slice(0, 10),
+            deliveryInfo: { neighborhood: snap.neighborhood, address: snap.form.address, location: snap.form.location || null, payMethod: snap.form.payMethod },
+          }),
+        });
+      } catch (_) {}
     }
-
+    if (currentUser && currentUser.id && setCurrentUser) {
+      try {
+        const ures = await apiFetch('/api/auth/me');
+        if (ures.ok) { const updated = await ures.json(); setCurrentUser(prev => ({ ...prev, ...updated })); }
+      } catch (_) {}
+    }
     setOrderPlaced(true);
     setCart([]);
+  };
+
+  // Cash on Delivery — create the order directly.
+  const placeOrder = async () => {
+    const snap = takeSnapshot();
+    try {
+      await apiFetch('/api/orders', { method: 'POST', body: JSON.stringify(buildDraft(snap)) });
+    } catch (_) { /* proceed even if backend is unreachable */ }
+    await finishOrder(snap);
+  };
+
+  // Load the Paystack inline popup script on demand.
+  const loadPaystack = () => new Promise((resolve, reject) => {
+    if (window.PaystackPop) return resolve();
+    const s = document.createElement('script');
+    s.src = 'https://js.paystack.co/v2/inline.js';
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('Failed to load payment popup'));
+    document.head.appendChild(s);
+  });
+
+  // Pay online (card / mobile money) via Paystack, then create the order.
+  const payWithPaystack = async () => {
+    const snap = takeSnapshot();
+    const draft = buildDraft(snap);
+    setPaying(true);
+    try {
+      const initRes = await apiFetch('/api/paystack/init', {
+        method: 'POST',
+        body: JSON.stringify({ email: (currentUser && currentUser.email) || '', amount: snap.total, draft }),
+      });
+      const initData = await initRes.json();
+      if (!initRes.ok) { alert(initData.error || 'Could not start payment'); setPaying(false); return; }
+      await loadPaystack();
+      const popup = new window.PaystackPop();
+      popup.resumeTransaction(initData.accessCode, {
+        onSuccess: async () => {
+          try {
+            const vr = await apiFetch('/api/paystack/verify', { method: 'POST', body: JSON.stringify({ reference: initData.reference, draft }) });
+            const vd = await vr.json();
+            if (!vr.ok) { alert(vd.error || 'We could not confirm your payment. If you were charged, contact us on WhatsApp.'); setPaying(false); return; }
+            await finishOrder(snap);
+          } catch (_) { alert('Payment confirmed but the order could not be saved — please contact us on WhatsApp.'); }
+          finally { setPaying(false); }
+        },
+        onCancel: () => { setPaying(false); },
+        onError: () => { alert('Payment error — please try again.'); setPaying(false); },
+      });
+    } catch (e) {
+      alert('Could not open the payment window. Check your connection and try again.');
+      setPaying(false);
+    }
   };
 
   const inputStyle = (k) => ({
@@ -645,85 +666,22 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
               {/* Payment method */}
               <div style={{ marginBottom: 24 }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 12 }}>Payment Method</div>
-                <div style={{ display: 'flex', gap: 10 }}>
-                  {[['momo','📱 Mobile Money'],['cash','💵 Cash on Delivery']].map(([val, label]) => (
-                    <button key={val} onClick={() => set('payMethod', val)}
-                      style={{ flex: 1, padding: '14px 10px', borderRadius: 10, border: `2px solid ${form.payMethod === val ? 'var(--sage)' : 'var(--cream-dark)'}`, background: form.payMethod === val ? 'rgba(0,0,0,.06)' : 'var(--white)', fontWeight: 700, fontSize: 13, transition: 'all .15s', color: 'var(--warm-black)' }}>
-                      {label}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {paystackEnabled && (
+                    <button onClick={() => set('payMethod', 'paystack')}
+                      style={{ textAlign: 'left', padding: '14px 16px', borderRadius: 10, border: `2px solid ${form.payMethod === 'paystack' ? 'var(--sage)' : 'var(--cream-dark)'}`, background: form.payMethod === 'paystack' ? 'rgba(0,0,0,.06)' : 'var(--white)', transition: 'all .15s' }}>
+                      <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--warm-black)' }}>💳 Pay Now — Card or Mobile Money</div>
+                      <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 2 }}>Secure checkout via Paystack. Enter your MoMo number, approve with your PIN, done.</div>
                     </button>
-                  ))}
+                  )}
+                  <button onClick={() => set('payMethod', 'cash')}
+                    style={{ textAlign: 'left', padding: '14px 16px', borderRadius: 10, border: `2px solid ${form.payMethod === 'cash' ? 'var(--sage)' : 'var(--cream-dark)'}`, background: form.payMethod === 'cash' ? 'rgba(0,0,0,.06)' : 'var(--white)', transition: 'all .15s' }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--warm-black)' }}>💵 Cash on Delivery</div>
+                    <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 2 }}>Pay the rider in cash when your order arrives.</div>
+                  </button>
                 </div>
               </div>
 
-              {/* MoMo telco picker — only shown when MoMo selected */}
-              {form.payMethod === 'momo' && (
-                <div style={{ marginBottom: 24, padding: '16px', background: 'var(--cream)', borderRadius: 12, border: '1px solid var(--cream-dark)' }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>Choose your network</div>
-                  <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-                    {[
-                      ['mtn',     'MTN MoMo',     '#FFCC08', '#000'],
-                      ['telecel', 'Telecel Cash', '#E60012', '#fff'],
-                      ['at',      'AT Money',     '#1A1A1A', '#fff'],
-                    ].map(([key, label, bg, fg]) => {
-                      const active = telco === key;
-                      return (
-                        <button key={key} onClick={() => setTelco(key)}
-                          style={{
-                            flex: 1, padding: '12px 6px', borderRadius: 10,
-                            border: active ? `2.5px solid ${bg}` : '2px solid var(--cream-dark)',
-                            background: active ? bg : 'var(--white)',
-                            color: active ? fg : 'var(--warm-black)',
-                            fontWeight: 700, fontSize: 12, transition: 'all .15s',
-                          }}>
-                          {label}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  {/* Customer's MoMo number */}
-                  <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.04em', display: 'block', marginBottom: 6 }}>
-                    Your {telco === 'mtn' ? 'MTN' : telco === 'telecel' ? 'Telecel' : 'AT'} number
-                  </label>
-                  <input value={customerMomo} onChange={e => setCustomerMomo(e.target.value)}
-                    placeholder="e.g. 024 123 4567" type="tel" inputMode="tel"
-                    style={{ width: '100%', padding: '12px 14px', borderRadius: 10, border: '1.5px solid var(--cream-dark)', fontSize: 14, outline: 'none', background: 'var(--white)', marginBottom: 14 }} />
-
-                  {/* Merchant payout details */}
-                  {merchantNumbers[telco] ? (
-                    <div style={{ background: 'var(--white)', borderRadius: 10, padding: '14px 16px', border: '1.5px dashed var(--sage)' }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Send GHS {total.toFixed(2)} to</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                        <div style={{ flex: 1, minWidth: 180 }}>
-                          <div style={{ fontFamily: 'monospace', fontSize: 20, fontWeight: 700, color: 'var(--sage-dark)', letterSpacing: '.04em' }}>
-                            {merchantNumbers[telco]}
-                          </div>
-                          {merchantNumbers.name && (
-                            <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 2 }}>Account name: <strong>{merchantNumbers.name}</strong></div>
-                          )}
-                        </div>
-                        <button onClick={copyMerchant} type="button"
-                          style={{ background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '8px 16px', fontWeight: 700, fontSize: 12 }}>
-                          {copyState || '📋 Copy'}
-                        </button>
-                      </div>
-                      <div style={{ marginTop: 12, fontSize: 12, color: 'var(--warm-gray)', lineHeight: 1.55 }}>
-                        Dial <strong style={{ color: 'var(--warm-black)' }}>
-                          {telco === 'mtn' ? '*170#' : telco === 'telecel' ? '*110#' : '*100#'}
-                        </strong> on the number above → choose <em>Transfer Money</em> → MoMo to MoMo → paste the number above → enter <strong>GHS {total.toFixed(2)}</strong> → confirm with your PIN.
-                      </div>
-                      <a href={`tel:${telco === 'mtn' ? '*170' : telco === 'telecel' ? '*110' : '*100'}%23`}
-                        style={{ marginTop: 10, display: 'inline-block', fontSize: 12, fontWeight: 700, color: 'var(--sage-dark)' }}>
-                        📞 Open dialer with {telco === 'mtn' ? '*170#' : telco === 'telecel' ? '*110#' : '*100#'}
-                      </a>
-                    </div>
-                  ) : (
-                    <div style={{ background: '#FFF4E0', border: '1px solid #F0C674', borderRadius: 10, padding: '12px 14px', fontSize: 12, color: '#7A5A00' }}>
-                      ⚠ The shop hasn't configured a {telco === 'mtn' ? 'MTN' : telco === 'telecel' ? 'Telecel' : 'AT'} number yet. Please pick another network, or choose Cash on Delivery.
-                    </div>
-                  )}
-                </div>
-              )}
 
               {/* Download receipt checkbox */}
               <label style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '14px 16px', background: 'var(--cream)', borderRadius: 10, cursor: 'pointer', marginBottom: 24 }}>
@@ -747,10 +705,18 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
               </div>
 
               <div style={{ display: 'flex', gap: 10 }}>
-                <button onClick={() => setStep(2)} style={{ flex: 1, background: 'var(--cream)', color: 'var(--warm-gray)', borderRadius: 10, padding: '12px', fontWeight: 600, fontSize: 14 }}>← Back</button>
-                <button onClick={() => { setWaNumber(form.phone || ''); placeOrder(); }} style={{ flex: 2, background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 15 }}>
-                  Place Order →
-                </button>
+                <button onClick={() => setStep(2)} disabled={paying} style={{ flex: 1, background: 'var(--cream)', color: 'var(--warm-gray)', borderRadius: 10, padding: '12px', fontWeight: 600, fontSize: 14 }}>← Back</button>
+                {form.payMethod === 'paystack' ? (
+                  <button onClick={() => { setWaNumber(form.phone || ''); payWithPaystack(); }} disabled={paying}
+                    style={{ flex: 2, background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 15, opacity: paying ? .6 : 1, cursor: paying ? 'wait' : 'pointer' }}>
+                    {paying ? 'Opening payment…' : `Pay GHS ${total.toFixed(2)} →`}
+                  </button>
+                ) : (
+                  <button onClick={() => { setWaNumber(form.phone || ''); placeOrder(); }} disabled={paying}
+                    style={{ flex: 2, background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 15 }}>
+                    Place Order →
+                  </button>
+                )}
               </div>
             </>
           )}

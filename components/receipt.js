@@ -153,7 +153,7 @@
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
     doc.setTextColor(...GRAY);
-    doc.text(`Payment: ${o.payMethod === 'cash' ? 'Cash on Delivery' : 'Mobile Money (MoMo)'}`, M, y);
+    doc.text(`Payment: ${o.payMethod === 'cash' ? 'Cash on Delivery' : 'Paid online (Card / MoMo)'}`, M, y);
     y += 7;
 
     // ── Surprise / gift callout ──

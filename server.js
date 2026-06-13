@@ -15,6 +15,18 @@ const db = require('./database');
 // RESEND_FROM_EMAIL = sender address (default: onboarding@resend.dev for
 //   immediate use without a custom domain. Once you verify your own domain
 //   in Resend, set this to e.g. 'noreply@sdgmart.com').
+// ── Paystack (online card + mobile money) ────────────────────────────────
+const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || '';
+const PAYSTACK_PUBLIC_KEY = process.env.PAYSTACK_PUBLIC_KEY || '';
+async function paystackApi(path, method = 'GET', body) {
+  const r = await fetch('https://api.paystack.co' + path, {
+    method,
+    headers: { Authorization: 'Bearer ' + PAYSTACK_SECRET_KEY, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return r.json();
+}
+
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'SDGMart <onboarding@resend.dev>';
 let _resend = null;
@@ -74,7 +86,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 app.set('trust proxy', 1);
 app.use(cors());
-app.use(express.json({ limit: '3mb' })); // allow base64 product photos (~1.5MB raw)
+// Capture the raw body so we can verify the Paystack webhook signature.
+app.use(express.json({ limit: '3mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 
 // ── Session-based auth middleware ────────────────────────────────────────
 async function authMiddleware(req, res, next) {
@@ -329,6 +342,7 @@ if (typeof window !== 'undefined') {
   window.TOP_IDS_BY_ORDERS = TOP_IDS_BY_ORDERS;
   window.SHOW_FRESHNESS = SHOW_FRESHNESS;
   window.LOCATIONIQ_KEY = ${JSON.stringify(locationiqKey)};
+  window.PAYSTACK_PUBLIC_KEY = ${JSON.stringify(PAYSTACK_PUBLIC_KEY)};
 }`;
     res.setHeader('Content-Type', 'application/javascript');
     res.setHeader('Cache-Control', 'no-cache');
@@ -408,58 +422,63 @@ app.get('/api/orders', requireAdmin, async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Shared order-creation logic. Used by Cash-on-Delivery (/api/orders) and the
+// Paystack verify/webhook paths. `reqUser` may be null (guest). `extra` carries
+// payment status (paid, paystackRef).
+async function createOrderFromBody(reqUser, body, extra = {}) {
+  const {
+    customer, phone, neighborhood, address,
+    items, total, delivery,
+    recipientName, recipientPhone, recipientAddress, payMethod, momoNumber,
+    subtotal, discountApplied, loyaltyUsed, location,
+  } = body || {};
+  const userId = reqUser ? reqUser.id : null;
+  const now = new Date();
+  const afterCutoff = now.getHours() >= 12;
+  const deliveryDate = new Date(now);
+  if (afterCutoff) deliveryDate.setDate(deliveryDate.getDate() + 1);
+  const deliveryDateStr = deliveryDate.toISOString().slice(0, 10);
+  const loc = location && typeof location.lat === 'number' ? location : null;
+
+  const created = await db.orders.create({
+    userId,
+    customerName: customer || '', customerPhone: phone || '',
+    recipientName: recipientName || '', recipientPhone: recipientPhone || '',
+    address: address || recipientAddress || '', neighborhood: neighborhood || '',
+    items: items || [], subtotal: Number(subtotal || 0), deliveryFee: Number(delivery || 0),
+    discount: Number(discountApplied ? (subtotal * 0.05) : 0),
+    loyaltyUsed: Number(loyaltyUsed || 0),
+    total: Number(total || 0),
+    paymentMethod: payMethod || (extra.paid ? 'paystack' : 'cash'),
+    momoNumber: momoNumber || '',
+    paid: !!extra.paid, paystackRef: extra.paystackRef || null,
+    status: 'queued', location: loc, deliveryDate: deliveryDateStr, priority: afterCutoff,
+  });
+
+  let squadInfo = null;
+  if (userId) {
+    if (discountApplied) await db.squads.consumeDiscount(userId);
+    if (loyaltyUsed) await db.squads.consumeLoyalty(userId, loyaltyUsed);
+    squadInfo = await db.squads.recordSpend(userId, Number(subtotal || total || 0));
+    if (!reqUser.firstOrderDone) await db.sb.from('users').update({ first_order_done: true }).eq('id', userId);
+    if (loc) await db.addresses.markLastUsed(userId, loc, neighborhood);
+  }
+  db.stats.invalidateDelivered();
+  return {
+    ok: true, id: created.id,
+    deliveryDate: deliveryDateStr, priority: afterCutoff,
+    loyaltyEarned: squadInfo ? squadInfo.loyaltyEarned : 0,
+    squadGoalHit: !!(squadInfo && squadInfo.squadGoalHit),
+  };
+}
+
 app.post('/api/orders', async (req, res) => {
   if (req.user && req.user.role !== 'rider' && req.user.emailVerified === false) {
     return res.status(403).json({ error: 'Please verify your email before placing an order.' });
   }
   try {
-    const {
-      customer, phone, neighborhood, address,
-      items, total, delivery,
-      recipientName, recipientPhone, recipientAddress, payMethod, momoNumber,
-      subtotal, discountApplied, loyaltyUsed, location,
-    } = req.body;
-    const userId = req.user ? req.user.id : null;
-    const now = new Date();
-    const afterCutoff = now.getHours() >= 12;
-    const deliveryDate = new Date(now);
-    if (afterCutoff) deliveryDate.setDate(deliveryDate.getDate() + 1);
-    const deliveryDateStr = deliveryDate.toISOString().slice(0, 10);
-    const loc = location && typeof location.lat === 'number' ? location : null;
-
-    const created = await db.orders.create({
-      userId,
-      customerName: customer || '', customerPhone: phone || '',
-      recipientName: recipientName || '', recipientPhone: recipientPhone || '',
-      address: address || recipientAddress || '', neighborhood: neighborhood || '',
-      items: items || [], subtotal: Number(subtotal || 0), deliveryFee: Number(delivery || 0),
-      discount: Number(discountApplied ? (subtotal * 0.05) : 0),
-      loyaltyUsed: Number(loyaltyUsed || 0),
-      total: Number(total || 0),
-      paymentMethod: payMethod || 'momo', momoNumber: momoNumber || '',
-      status: 'queued', location: loc, deliveryDate: deliveryDateStr, priority: afterCutoff,
-    });
-
-    let squadInfo = null;
-    if (userId) {
-      if (discountApplied) await db.squads.consumeDiscount(userId);
-      if (loyaltyUsed) await db.squads.consumeLoyalty(userId, loyaltyUsed);
-      squadInfo = await db.squads.recordSpend(userId, Number(subtotal || total || 0));
-      // Mark first order done so future orders don't get the free-delivery benefit
-      if (!req.user.firstOrderDone) {
-        await db.sb.from('users').update({ first_order_done: true }).eq('id', userId);
-      }
-      // Remember this location as the user's last-used pickup so checkout pre-selects it next time
-      if (loc) await db.addresses.markLastUsed(userId, loc, neighborhood);
-    }
-    // Invalidate the cached delivered-count so ticker increments quickly
-    db.stats.invalidateDelivered();
-    res.status(201).json({
-      ok: true, id: created.id,
-      deliveryDate: deliveryDateStr, priority: afterCutoff,
-      loyaltyEarned: squadInfo ? squadInfo.loyaltyEarned : 0,
-      squadGoalHit: !!(squadInfo && squadInfo.squadGoalHit),
-    });
+    const result = await createOrderFromBody(req.user, req.body, { paid: false });
+    res.status(201).json(result);
   } catch (e) { console.error('order create failed:', e); res.status(500).json({ error: e.message }); }
 });
 
@@ -480,6 +499,88 @@ app.get('/api/orders/:id', requireAdmin, async (req, res) => {
 app.delete('/api/orders/:id', requireAdmin, async (req, res) => {
   try { await db.sb.from('orders').delete().eq('id', req.params.id); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Paystack: online payment (card + mobile money) ───────────────────────
+// Whether online payment is available (used by the client to show/hide it).
+app.get('/api/paystack/config', (req, res) => {
+  res.json({ enabled: !!(PAYSTACK_SECRET_KEY && PAYSTACK_PUBLIC_KEY), publicKey: PAYSTACK_PUBLIC_KEY || null });
+});
+
+// 1) Initialize a transaction. Server sets the amount + reference (locked in
+//    Paystack) and stashes the order draft so the order is only created after
+//    payment is confirmed.
+app.post('/api/paystack/init', async (req, res) => {
+  if (!PAYSTACK_SECRET_KEY) return res.status(503).json({ error: 'Online payment is not configured' });
+  const { email, amount, draft } = req.body || {};
+  const ghs = Number(amount);
+  if (!(ghs > 0)) return res.status(400).json({ error: 'Invalid amount' });
+  if (!draft || !Array.isArray(draft.items) || !draft.items.length) return res.status(400).json({ error: 'Empty order' });
+  const customerEmail = (email && /\S+@\S+\.\S+/.test(email)) ? email
+    : (req.user && req.user.email) ? req.user.email
+    : `guest_${Date.now()}@guest.sdgmart.app`;
+  const reference = 'SDG_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  try {
+    const init = await paystackApi('/transaction/initialize', 'POST', {
+      email: customerEmail,
+      amount: Math.round(ghs * 100), // pesewas
+      currency: 'GHS',
+      reference,
+      channels: ['mobile_money', 'card'],
+      metadata: { order_for: draft.customer || '', phone: draft.phone || '' },
+    });
+    if (!init || !init.status || !init.data) return res.status(502).json({ error: (init && init.message) || 'Could not start payment' });
+    await db.pendingPayments.create(reference, req.user ? req.user.id : null, draft, ghs);
+    res.json({ reference, accessCode: init.data.access_code, publicKey: PAYSTACK_PUBLIC_KEY });
+  } catch (e) { console.error('paystack init failed:', e.message); res.status(500).json({ error: 'Payment init failed' }); }
+});
+
+// 2) Verify a transaction and create the order (idempotent).
+app.post('/api/paystack/verify', async (req, res) => {
+  const { reference } = req.body || {};
+  if (!reference) return res.status(400).json({ error: 'Missing reference' });
+  try {
+    // Already created (e.g. webhook beat us to it)? Return it.
+    const existing = await db.orders.findByPaystackRef(reference);
+    if (existing) return res.json({ ok: true, id: existing.id, already: true });
+
+    const ver = await paystackApi('/transaction/verify/' + encodeURIComponent(reference));
+    if (!ver || !ver.status || !ver.data || ver.data.status !== 'success') {
+      return res.status(400).json({ error: 'Payment was not completed' });
+    }
+    const pending = await db.pendingPayments.get(reference);
+    const draft = (pending && pending.draft) || req.body.draft;
+    if (!draft) return res.status(400).json({ error: 'Order details not found' });
+    const reqUser = pending && pending.userId ? await db.users.get(pending.userId) : req.user;
+    const result = await createOrderFromBody(reqUser, draft, { paid: true, paystackRef: reference });
+    await db.pendingPayments.delete(reference);
+    res.json(result);
+  } catch (e) { console.error('paystack verify failed:', e.message); res.status(500).json({ error: e.message }); }
+});
+
+// 3) Webhook safety net — if the customer paid but never hit verify (closed
+//    tab / lost connection), Paystack still notifies us and we create the order.
+app.post('/api/paystack/webhook', async (req, res) => {
+  try {
+    const crypto = require('crypto');
+    const signature = req.headers['x-paystack-signature'];
+    const hash = crypto.createHmac('sha512', PAYSTACK_SECRET_KEY).update(req.rawBody || Buffer.from('')).digest('hex');
+    if (!signature || hash !== signature) return res.sendStatus(401);
+    const event = req.body;
+    if (event && event.event === 'charge.success' && event.data && event.data.reference) {
+      const ref = event.data.reference;
+      const existing = await db.orders.findByPaystackRef(ref);
+      if (!existing) {
+        const pending = await db.pendingPayments.get(ref);
+        if (pending && pending.draft) {
+          const reqUser = pending.userId ? await db.users.get(pending.userId) : null;
+          await createOrderFromBody(reqUser, pending.draft, { paid: true, paystackRef: ref });
+          await db.pendingPayments.delete(ref);
+        }
+      }
+    }
+    res.sendStatus(200);
+  } catch (e) { console.error('paystack webhook error:', e.message); res.sendStatus(200); }
 });
 
 // Admin: manually assign (or reassign / unassign) an order to a rider
