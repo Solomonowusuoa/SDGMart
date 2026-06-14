@@ -154,22 +154,11 @@ const users = {
     const insert = {
       name, email: String(email).toLowerCase().trim(), phone, password_hash: passwordHash, role,
       ref_code: myRefCode, squad_code: squadCode, owns_squad: ownsSquad,
+      // Record who referred them — credited only AFTER their first purchase.
+      referred_by: referrer ? referrer.id : null,
     };
     const { data, error } = await sb.from('users').insert(insert).select().single();
     if (error) throw error;
-
-    // Referral bonus: GHS 5 credit to the referrer for each new sign-up using
-    // their code. Stacks if not yet used. Stored on loyalty_balance so the
-    // existing checkout loyalty-toggle UI auto-picks it up.
-    if (referrer) {
-      try {
-        const newBalance = Number(referrer.loyaltyBalance || 0) + 5;
-        await sb.from('users').update({
-          loyalty_balance: newBalance,
-          referral_count: Number(referrer.referralCount || 0) + 1,
-        }).eq('id', referrer.id);
-      } catch (_) { /* don't fail the signup over a credit issue */ }
-    }
     return rowOut(data);
   },
   async verifyCredentials(email, password) {
@@ -923,19 +912,66 @@ const pendingPayments = {
   },
 };
 
-// ── Referral leaderboard ─────────────────────────────────────────────────
+// ── Referrals: credit the referrer after the referee's FIRST purchase ─────
+const referrals = {
+  // Called once when a user completes their first order. If they were referred,
+  // credit the referrer GHS 5 + log the referral under the current month.
+  async creditFirstPurchase(refereeUser) {
+    if (!refereeUser || !refereeUser.referredBy || refereeUser.referralCredited) return;
+    try {
+      const referrerId = refereeUser.referredBy;
+      const referrer = await users.get(referrerId);
+      if (!referrer) return;
+      const month = new Date().toISOString().slice(0, 7); // YYYY-MM
+      await sb.from('referrals').insert({ referrer_id: referrerId, referee_id: refereeUser.id, month });
+      await sb.from('users').update({
+        loyalty_balance: Number(referrer.loyaltyBalance || 0) + 5,
+        referral_count: Number(referrer.referralCount || 0) + 1,
+      }).eq('id', referrerId);
+      await sb.from('users').update({ referral_credited: true }).eq('id', refereeUser.id);
+    } catch (e) { console.warn('referral credit failed (run schema-referrals.sql?):', e.message); }
+  },
+};
+
+// ── Monthly referral leaderboard (+ auto-award last month's winner) ───────
 const leaderboard = {
   async topReferrers(limit = 10) {
-    // Degrade gracefully if the referral_count column hasn't been added yet
-    // (i.e. supabase-schema-ops.sql not run) — return an empty board instead
-    // of 500-ing the squad page.
-    const { data, error } = await sb.from('users')
-      .select('id, name, referral_count, loyalty_balance')
-      .gt('referral_count', 0)
-      .order('referral_count', { ascending: false })
-      .limit(limit);
-    if (error) { console.warn('leaderboard query failed (run schema-ops.sql?):', error.message); return []; }
-    return rowsOut(data);
+    try {
+      const month = new Date().toISOString().slice(0, 7);
+      const { data, error } = await sb.from('referrals').select('referrer_id').eq('month', month);
+      if (error) { console.warn('leaderboard query failed (run schema-referrals.sql?):', error.message); return []; }
+      const counts = {};
+      (data || []).forEach(r => { counts[r.referrer_id] = (counts[r.referrer_id] || 0) + 1; });
+      const ranked = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, limit);
+      const out = [];
+      for (const [rid, count] of ranked) {
+        const u = await users.get(rid);
+        out.push({ id: rid, name: (u && u.name) || 'A friend', referralCount: count, loyaltyBalance: u ? u.loyaltyBalance : 0 });
+      }
+      return out;
+    } catch (e) { console.warn('leaderboard failed:', e.message); return []; }
+  },
+  // Award last month's top referrer GHS 15 (once). Cron-less: runs on demand,
+  // idempotent via an app_config marker.
+  async awardLastMonthWinner() {
+    try {
+      const now = new Date();
+      const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const lastMonth = lastMonthDate.toISOString().slice(0, 7);
+      const marker = await appConfig.get('leaderboard_awarded_month');
+      if (marker === lastMonth) return null; // already awarded
+      const { data } = await sb.from('referrals').select('referrer_id').eq('month', lastMonth);
+      if (!data || !data.length) { await appConfig.set('leaderboard_awarded_month', lastMonth); return null; }
+      const counts = {};
+      data.forEach(r => { counts[r.referrer_id] = (counts[r.referrer_id] || 0) + 1; });
+      const winnerId = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+      const winner = await users.get(winnerId);
+      if (winner) {
+        await sb.from('users').update({ loyalty_balance: Number(winner.loyaltyBalance || 0) + 15 }).eq('id', winnerId);
+      }
+      await appConfig.set('leaderboard_awarded_month', lastMonth);
+      return { winnerId, month: lastMonth };
+    } catch (e) { console.warn('award winner failed:', e.message); return null; }
   },
 };
 
@@ -1004,7 +1040,7 @@ module.exports = {
   sb,
   users, squads, sessions, riders, orders, products,
   addresses, reviews, issueReports, promotions, productRequests, stats,
-  metrics, leaderboard, errorLog, pendingPayments,
+  metrics, leaderboard, referrals, errorLog, pendingPayments,
   pushSubs, searchLog, recurring, appConfig,
   hashPassword, verifyPassword, validatePasswordStrength,
   rateCheck, rateClear,

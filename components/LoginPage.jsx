@@ -103,21 +103,7 @@ const LoginPage = ({ onAuth, onGuest }) => {
       });
       const data = await res.json();
       if (!res.ok) { setErr(data.error || 'Login failed'); setLoading(false); return; }
-      // For signup, surface the verification link so the user can confirm
-      // their email even when no real SMTP is configured.
-      if (mode === 'signup') {
-        if (data.emailSent) {
-          // Real email landed — friendly toast, no popup
-          setInfo(`Account created — check ${form.email} for your verification link.`);
-        } else if (data.verificationLink) {
-          // Dev fallback when no email provider is configured
-          const proceed = window.confirm(
-            `Account created!\n\nA verification link has been generated:\n${data.verificationLink}\n\nClick OK to open it now (also logged to server console).`
-          );
-          if (proceed) window.open(data.verificationLink, '_blank', 'noopener');
-        }
-      }
-      // Stash the session token alongside the user so apiFetch can find it.
+      // Email verification is disabled — accounts are usable immediately.
       onAuth({ ...data.user, token: data.token });
     } catch (e) {
       setErr('Could not connect. Please check your internet and try again.');

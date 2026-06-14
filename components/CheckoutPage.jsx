@@ -83,7 +83,11 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   });
   const [errors, setErrors] = React.useState({});
   const [orderPlaced, setOrderPlaced] = React.useState(false);
-  const [orderId] = React.useState(() => 'SDG-' + Math.random().toString(36).substring(2,8).toUpperCase());
+  // orderId is a placeholder code for the pre-placement preview; after the
+  // order is created it's replaced with the real SDG-<id> code. placedOrderId
+  // holds the numeric DB id used for tracking.
+  const [orderId, setOrderId] = React.useState(() => 'SDG-' + Math.random().toString(36).substring(2,8).toUpperCase());
+  const [placedOrderId, setPlacedOrderId] = React.useState(null);
   const [waNumber, setWaNumber] = React.useState('');
   // Snapshot taken at place-order time so the WhatsApp + text receipts still
   // have the full order details after the cart has been cleared.
@@ -130,8 +134,9 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     if (!form.name.trim()) { err('name','Required'); ok=false; }
     if (!form.phone.trim() || !/^\+?[\d\s]{9,}$/.test(form.phone)) { err('phone','Valid phone required'); ok=false; }
     if (!effectiveNeighborhood) { err('neighborhood', form.neighborhood === '__other__' ? 'Type your area' : 'Select a neighborhood'); ok=false; }
-    // Typed address/landmark is now compulsory (the map pin is optional).
-    if (!form.address.trim()) { err('address','Please describe your address or a nearby landmark'); ok=false; }
+    // Need EITHER a typed address/landmark OR a pinned map location — not both.
+    const hasPin = !!(form.location && typeof form.location.lat === 'number');
+    if (!form.address.trim() && !hasPin) { err('address','Add a landmark OR pin your location on the map'); ok=false; }
     if (familyMode) {
       if (!form.recipientName.trim()) { err('recipientName','Required'); ok=false; }
       if (!form.recipientPhone.trim()) { err('recipientPhone','Required'); ok=false; }
@@ -180,11 +185,11 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   const buildWhatsAppMsg = () => encodeURIComponent(buildReceiptText(orderSnapshot));
 
   // Map a checkout snapshot to the normalized shape the PDF generator wants.
-  const snapToReceipt = (snap) => {
+  const snapToReceipt = (snap, code) => {
     const s = snap || orderSnapshot;
     if (!s) return null;
     return {
-      orderId,
+      orderId: code || orderId,
       date: new Date().toLocaleDateString('en-GB'),
       items: s.items.map(i => ({ name: i.name, qty: i.qty, price: i.price })),
       subtotal: s.subtotal,
@@ -201,8 +206,8 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     };
   };
 
-  const generateReceipt = (snap) => {
-    const data = snapToReceipt(snap);
+  const generateReceipt = (snap, code) => {
+    const data = snapToReceipt(snap, code);
     if (data && window.generateReceiptPDF) {
       window.generateReceiptPDF(data);
       return;
@@ -253,9 +258,11 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   });
 
   // After an order is created (paid or COD): set up recurring, refresh the
-  // user, show the success screen, clear the cart.
-  const finishOrder = async (snap) => {
-    if (downloadReceipt) generateReceipt(snap);
+  // user, show the success screen, clear the cart. `serverId` is the real DB
+  // order id used for the display code + tracking.
+  const finishOrder = async (snap, serverId) => {
+    if (serverId != null) { setPlacedOrderId(serverId); setOrderId(window.orderCode(serverId)); }
+    if (downloadReceipt) generateReceipt(snap, serverId != null ? window.orderCode(serverId) : orderId);
     if (autoReorder && currentUser && currentUser.id && currentUser.role !== 'guest') {
       try {
         const next = new Date(); next.setDate(next.getDate() + Number(reorderCadence || 14));
@@ -282,10 +289,13 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // Cash on Delivery — create the order directly.
   const placeOrder = async () => {
     const snap = takeSnapshot();
+    let serverId = null;
     try {
-      await apiFetch('/api/orders', { method: 'POST', body: JSON.stringify(buildDraft(snap)) });
+      const r = await apiFetch('/api/orders', { method: 'POST', body: JSON.stringify(buildDraft(snap)) });
+      const d = await r.json();
+      if (d && d.id != null) serverId = d.id;
     } catch (_) { /* proceed even if backend is unreachable */ }
-    await finishOrder(snap);
+    await finishOrder(snap, serverId);
   };
 
   // Load the Paystack inline popup script on demand.
@@ -318,7 +328,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
             const vr = await apiFetch('/api/paystack/verify', { method: 'POST', body: JSON.stringify({ reference: initData.reference, draft }) });
             const vd = await vr.json();
             if (!vr.ok) { alert(vd.error || 'We could not confirm your payment. If you were charged, contact us on WhatsApp.'); setPaying(false); return; }
-            await finishOrder(snap);
+            await finishOrder(snap, vd && vd.id != null ? vd.id : null);
           } catch (_) { alert('Payment confirmed but the order could not be saved — please contact us on WhatsApp.'); }
           finally { setPaying(false); }
         },
@@ -395,12 +405,12 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
           style={{ display: 'block', marginTop: 16, background: waValid ? '#25D366' : '#888', color: '#fff', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 15, textDecoration: 'none', cursor: waValid ? 'pointer' : 'not-allowed' }}>
           📱 Send Order to My WhatsApp
         </a>
-        <button onClick={() => generateReceipt(orderSnapshot)}
+        <button onClick={() => generateReceipt(orderSnapshot, orderId)}
           style={{ marginTop: 10, width: '100%', background: '#1A1A1A', color: '#fff', borderRadius: 10, padding: '12px', fontWeight: 700, fontSize: 14 }}>
           📄 Download PDF Receipt
         </button>
-        {currentUser && currentUser.id && openTracking && (
-          <button onClick={() => openTracking(orderId)}
+        {currentUser && currentUser.id && openTracking && placedOrderId != null && (
+          <button onClick={() => openTracking(placedOrderId)}
             style={{ marginTop: 10, width: '100%', background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '12px', fontWeight: 700, fontSize: 14 }}>
             🛵 Track this order
           </button>
@@ -510,7 +520,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
 
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14 }}>
                 <CheckoutField {...fieldProps('name')} label="Your Name" placeholder="Kwame Asante" />
-                <CheckoutField {...fieldProps('phone')} label="Your Phone (MoMo)" placeholder="+233 50 123 4567" />
+                <CheckoutField {...fieldProps('phone')} label="Your phone (Call)" placeholder="+233 50 123 4567" />
                 <div style={{ flex: '1 1 100%' }}>
                   <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '.05em' }}>Neighborhood</label>
                   <select value={form.neighborhood} onChange={e => { set('neighborhood', e.target.value); clearErr('neighborhood'); if (e.target.value !== '__other__') set('customNeighborhood', ''); }}
@@ -530,21 +540,24 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                   )}
                   {errors.neighborhood && <div style={{ fontSize: 11, color: 'var(--accent-red)', marginTop: 3 }}>{errors.neighborhood}</div>}
                 </div>
-                <CheckoutField {...fieldProps('address')} label="Delivery Address / Landmark *" placeholder="e.g. Blue gate opposite Lamashegu market" />
+                <CheckoutField {...fieldProps('address')} label="Delivery Address / Landmark" placeholder="e.g. Blue gate opposite Lamashegu market" />
+                {errors.address && <div style={{ fontSize: 11, color: 'var(--accent-red)', marginTop: -6, marginBottom: 8 }}>{errors.address}</div>}
               </div>
 
-              {/* Optional: pin exact spot on the map (lazy-loads the map) */}
-              <div style={{ marginTop: 16 }}>
+              <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--warm-gray)', margin: '6px 0', fontWeight: 600 }}>
+                — type a landmark above, <em>or</em> pin your spot on the map below —
+              </div>
+
+              {/* Pin exact spot on the map (lazy-loads the map) */}
+              <div style={{ marginTop: 4 }}>
                 {!mapOpen ? (
                   <button type="button" onClick={() => setMapOpen(true)}
                     style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', background: 'var(--cream)', border: '1.5px dashed var(--cream-dark)', borderRadius: 10, cursor: 'pointer', textAlign: 'left' }}>
                     <span style={{ fontSize: 18 }}>📍</span>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 700, fontSize: 13 }}>
-                        Pin exact spot on map <span style={{ color: 'var(--warm-gray)', fontWeight: 500 }}>(optional)</span>
-                      </div>
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>Pin exact spot on map</div>
                       <div style={{ fontSize: 12, color: 'var(--warm-gray)' }}>
-                        {form.location ? '✓ Location pinned — tap to adjust' : 'Helps the rider find you faster. Your address above is enough on its own.'}
+                        {form.location ? '✓ Location pinned — tap to adjust' : 'Search a landmark or drop a pin. Skip this if you typed an address above.'}
                       </div>
                     </div>
                     <span style={{ fontSize: 13, color: 'var(--sage-dark)', fontWeight: 700 }}>{form.location ? 'Edit' : 'Open map'}</span>

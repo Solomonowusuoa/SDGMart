@@ -138,11 +138,34 @@ const RiderPage = ({ currentUser, onLogout }) => {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
                     <div style={{ fontWeight: 700, fontSize: 14 }}>
                       {i === 0 && <span style={{ background: 'var(--sage)', color: '#fff', borderRadius: 4, padding: '2px 6px', fontSize: 10, marginRight: 6 }}>NEXT</span>}
-                      Order #{String(o.id).slice(-6)}
+                      {window.orderCode(o.id)}
                     </div>
                     <span style={{ fontSize: 11, color: 'var(--warm-gray)', textTransform: 'uppercase', fontWeight: 600 }}>{o.status}</span>
                   </div>
-                  <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginBottom: 4 }}>{o.customer || o.customerName} · {o.phone || o.customerPhone}</div>
+                  {/* Customer + contact (tap to call) */}
+                  <div style={{ fontSize: 13, marginBottom: 4 }}>
+                    <strong>{o.customer || o.customerName || 'Customer'}</strong>
+                    {(o.phone || o.customerPhone) && <> · <a href={`tel:${o.phone || o.customerPhone}`} style={{ color: 'var(--sage-dark)', fontWeight: 700, textDecoration: 'none' }}>📞 {o.phone || o.customerPhone}</a></>}
+                  </div>
+                  {o.neighborhood && <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginBottom: 4 }}>🏘 {o.neighborhood}{o.address ? ` · ${o.address}` : ''}</div>}
+                  {/* Itemised list so the rider knows what to deliver */}
+                  {Array.isArray(o.items) && o.items.length > 0 && (
+                    <div style={{ background: 'var(--cream)', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 4 }}>{o.items.length} item{o.items.length === 1 ? '' : 's'}</div>
+                      {o.items.map((it, idx) => (
+                        <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '1px 0' }}>
+                          <span>{it.qty || 1}× {it.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {/* Payment status — what to collect */}
+                  <div style={{ marginBottom: 6 }}>
+                    {o.paid
+                      ? <span style={{ background: '#1A1A1A', color: '#fff', borderRadius: 999, padding: '2px 10px', fontSize: 10, fontWeight: 700 }}>✓ PAID ONLINE — collect nothing</span>
+                      : <span style={{ background: '#FFF4E0', color: '#7A5A00', borderRadius: 999, padding: '2px 10px', fontSize: 10, fontWeight: 700 }}>💵 COLLECT GHS {Number(o.total || 0).toFixed(2)} CASH</span>}
+                  </div>
+                  {o.surpriseExtra && <div style={{ fontSize: 12, color: '#9B2D60', marginBottom: 6 }}>🎁 Include: {o.surpriseExtra}</div>}
                   {o.location && o.location.lat != null ? (
                     <div style={{ marginBottom: 8 }}>
                       <div style={{ fontSize: 12, marginBottom: 6 }}>

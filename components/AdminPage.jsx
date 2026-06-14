@@ -209,7 +209,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   };
 
   const deleteOrder = async (id) => {
-    if (!window.confirm(`Permanently delete order #${String(id).slice(-6)}? This cannot be undone.`)) return;
+    if (!window.confirm(`Permanently delete order ${window.orderCode(id)}? This cannot be undone.`)) return;
     try {
       await apiFetch(`/api/orders/${id}`, { method: 'DELETE' });
       setOrders(prev => prev.filter(o => o.id !== id));
@@ -366,7 +366,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
     ['overview','📊 Overview'],['dashboard','📈 Dashboard'],['orders','📦 Orders'],['inventory','🏪 Inventory'],
     ['expiry','⏰ Expiry'],['routes','🗺 Routes'],['riders','🛵 Riders'],
     ['promotions','⚡ Promotions'],['requests','🛒 Requests'],['issues','🚨 Issues'],
-    ['analytics','🔎 Analytics'],['leaderboard','🏆 Leaderboard'],['payments','💳 Payments'],['comms','📣 Comms'],
+    ['analytics','🔎 Analytics'],['leaderboard','🏆 Leaderboard'],['comms','📣 Comms'],
     ['errors','🐞 Errors'],['settings','⚙️ Settings'],['security','🔐 Security'],
   ];
 
@@ -647,7 +647,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px', flexWrap: 'wrap' }}>
                         <div style={{ flex: 1, minWidth: 200 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                            <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--sage-dark)' }}>#{String(o.id).slice(-6)}</span>
+                            <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--sage-dark)' }}>{window.orderCode(o.id)}</span>
                             <span style={{ background: `${statusColor[statusKey] || 'var(--warm-gray)'}22`, color: statusColor[statusKey] || 'var(--warm-gray)', borderRadius: 999, padding: '2px 10px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em' }}>
                               {statusLabel[statusKey] || o.status}
                             </span>
@@ -680,7 +680,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                           style={{ fontSize: 11, fontWeight: 700, color: 'var(--sage-dark)', background: 'var(--cream)', borderRadius: 8, padding: '6px 10px' }}>
                           {expanded ? 'Hide ▴' : 'Details ▾'}
                         </button>
-                        <a href={`https://wa.me/${String(o.customerPhone || o.phone || '233504082555').replace(/\D/g,'').replace(/^0/, '233')}?text=${encodeURIComponent(`Hi ${o.customerName || o.customer || ''}, regarding your SDGMart order #${String(o.id).slice(-6)} —`)}`}
+                        <a href={`https://wa.me/${String(o.customerPhone || o.phone || '233504082555').replace(/\D/g,'').replace(/^0/, '233')}?text=${encodeURIComponent(`Hi ${o.customerName || o.customer || ''}, regarding your SDGMart order ${window.orderCode(o.id)} —`)}`}
                           target="_blank" rel="noreferrer"
                           style={{ fontSize: 11, fontWeight: 700, color: '#25D366', padding: '6px 4px' }}>WhatsApp</a>
                         <button onClick={() => deleteOrder(o.id)} title="Delete order"
@@ -1226,7 +1226,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                 {issues.map(i => (
                   <div key={i.id} style={{ background: 'var(--white)', borderRadius: 10, padding: '14px 16px', boxShadow: 'var(--shadow)', opacity: i.resolved ? .6 : 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                      <strong style={{ fontSize: 13 }}>Order #{String(i.orderId).slice(-6)}</strong>
+                      <strong style={{ fontSize: 13 }}>Order {window.orderCode(i.orderId)}</strong>
                       <span style={{ background: 'rgba(192,57,43,.1)', color: 'var(--accent-red)', borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>{i.issueType}</span>
                       {i.resolved && <span style={{ background: 'var(--sage)', color: '#fff', borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>RESOLVED</span>}
                       <span style={{ fontSize: 11, color: 'var(--warm-gray)', marginLeft: 'auto' }}>{new Date(i.createdAt).toLocaleString()}</span>

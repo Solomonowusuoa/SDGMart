@@ -4,12 +4,9 @@
 // public OpenStreetMap tiles + Nominatim. This makes the switch a no-op until
 // a key is added — no breakage if it's missing.
 function sdgMapTileLayer(L) {
-  const key = (typeof window !== 'undefined' && window.LOCATIONIQ_KEY) || '';
-  if (key) {
-    return L.tileLayer(`https://tiles.locationiq.com/v3/streets/r/{z}/{x}/{y}.png?key=${key}`, {
-      maxZoom: 19, attribution: '© LocationIQ © OpenStreetMap',
-    });
-  }
+  // Always use OpenStreetMap raster tiles for the visible map — they render
+  // reliably and are fine for our low tile volume. LocationIQ is used only for
+  // geocoding/search (see sdgGeocoder), which is the part with quota concerns.
   return L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '© OpenStreetMap contributors',
   });

@@ -117,8 +117,23 @@ const App = () => {
 
   const navigateTo = (pg) => {
     setPage(pg);
+    // Push a history entry so the browser/Android back button steps back
+    // through in-app pages instead of leaving the site entirely.
+    try { window.history.pushState({ sdgPage: pg }, ''); } catch (_) {}
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
+
+  // Back/forward button → navigate within the SPA instead of exiting.
+  React.useEffect(() => {
+    try { window.history.replaceState({ sdgPage: 'home' }, ''); } catch (_) {}
+    const onPop = (e) => {
+      const p = (e.state && e.state.sdgPage) || 'home';
+      setPage(p);
+      window.scrollTo({ top: 0, behavior: 'auto' });
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   const logout = async () => {
     try { await apiFetch('/api/auth/logout', { method: 'POST' }); } catch (_) {}
@@ -215,32 +230,8 @@ const App = () => {
   }
 
   // ── Normal shopping app ──────────────────────────────────────────────────
-  const showVerifyBanner = currentUser && currentUser.id && currentUser.emailVerified === false;
-  const resendVerification = async () => {
-    try {
-      const res = await apiFetch('/api/auth/resend-verification', { method: 'POST' });
-      const data = await res.json();
-      if (data.alreadyVerified) {
-        setCurrentUser(prev => ({ ...prev, emailVerified: true }));
-        return;
-      }
-      if (data.verificationLink) {
-        const proceed = window.confirm(`Open the new verification link?\n\n${data.verificationLink}`);
-        if (proceed) window.open(data.verificationLink, '_blank', 'noopener');
-      }
-    } catch (_) {}
-  };
-
   return (
     <div style={{ minHeight: '100vh', background: 'var(--cream)' }}>
-      {showVerifyBanner && (
-        <div style={{ background: '#E8960A', color: '#fff', textAlign: 'center', padding: '8px 16px', fontSize: 13, fontWeight: 600 }}>
-          ✉️ Please verify your email to unlock checkout.
-          <button onClick={resendVerification} style={{ marginLeft: 12, color: '#fff', textDecoration: 'underline', fontWeight: 700, background: 'transparent', border: 'none', cursor: 'pointer' }}>
-            Resend link
-          </button>
-        </div>
-      )}
       <Header
         cart={cart}
         page={page}
@@ -363,4 +354,37 @@ const App = () => {
   );
 };
 
-ReactDOM.createRoot(document.getElementById('app')).render(<App />);
+// Error boundary — a render error in any screen no longer blanks the whole app.
+class AppErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) {
+    console.error('App crashed:', error, info);
+    try {
+      fetch('/api/client-error', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: String(error && error.message || error), stack: String((error && error.stack) || ''), path: location.pathname }) });
+    } catch (_) {}
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', padding: 24 }}>
+          <div style={{ textAlign: 'center', maxWidth: 360 }}>
+            <div style={{ fontSize: 40 }}>😞</div>
+            <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, marginTop: 8 }}>Something hiccuped</h2>
+            <p style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 8, lineHeight: 1.5 }}>The page hit an error. Reloading usually fixes it.</p>
+            <button onClick={() => { this.setState({ error: null }); location.reload(); }}
+              style={{ marginTop: 16, background: '#1A1A1A', color: '#fff', borderRadius: 10, padding: '12px 24px', fontWeight: 700, fontSize: 14, border: 'none', cursor: 'pointer' }}>
+              Reload
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+ReactDOM.createRoot(document.getElementById('app')).render(
+  <AppErrorBoundary><App /></AppErrorBoundary>
+);

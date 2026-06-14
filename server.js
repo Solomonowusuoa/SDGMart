@@ -460,7 +460,11 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
     if (discountApplied) await db.squads.consumeDiscount(userId);
     if (loyaltyUsed) await db.squads.consumeLoyalty(userId, loyaltyUsed);
     squadInfo = await db.squads.recordSpend(userId, Number(subtotal || total || 0));
-    if (!reqUser.firstOrderDone) await db.sb.from('users').update({ first_order_done: true }).eq('id', userId);
+    if (!reqUser.firstOrderDone) {
+      await db.sb.from('users').update({ first_order_done: true }).eq('id', userId);
+      // Credit the referrer (GHS 5) now that this referred user has actually bought.
+      await db.referrals.creditFirstPurchase(reqUser);
+    }
     if (loc) await db.addresses.markLastUsed(userId, loc, neighborhood);
   }
   db.stats.invalidateDelivered();
@@ -473,9 +477,6 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
 }
 
 app.post('/api/orders', async (req, res) => {
-  if (req.user && req.user.role !== 'rider' && req.user.emailVerified === false) {
-    return res.status(403).json({ error: 'Please verify your email before placing an order.' });
-  }
   try {
     const result = await createOrderFromBody(req.user, req.body, { paid: false });
     res.status(201).json(result);
@@ -623,29 +624,12 @@ app.post('/api/auth/signup', async (req, res) => {
     const existing = await db.users.findByEmail(email);
     if (existing) return res.status(409).json({ error: 'An account with that email already exists' });
     const u = await db.users.create({ name, email, phone, password, refCode, role: 'customer' });
-    const verifyToken = await db.makeEmailToken(u.id, 'verify');
-    const verifyLink = `${req.protocol}://${req.get('host')}/api/auth/verify?token=${verifyToken}`;
-    // Send real email if Resend is configured; otherwise fall back to dev-style link surfacing.
-    const emailResult = await sendEmail({
-      to: u.email,
-      subject: 'Verify your SDGMart email',
-      html: emailLayout({
-        title: `Welcome to SDGMart, ${u.name.split(' ')[0]}!`,
-        intro: 'Tap the button below to verify your email. This link expires in 24 hours.',
-        cta: 'Verify my email', ctaUrl: verifyLink,
-        footer: "If you didn't sign up, you can safely ignore this email.",
-      }),
-      text: `Welcome to SDGMart!\n\nVerify your email by opening: ${verifyLink}\n\n(Link expires in 24 hours.)`,
-    });
-    if (emailResult.skipped) console.log(`✉️  (no email config) verification link for ${u.email}: ${verifyLink}`);
+    // Email verification is disabled — accounts are usable immediately. Mark
+    // verified so no banner/gate ever appears.
+    try { await db.users.markEmailVerified(u.id); } catch (_) {}
+    u.emailVerified = true;
     const token = await db.sessions.create(u.id);
-    res.status(201).json({
-      user: publicUser(u), token,
-      // Only return the raw link in dev (when no real email goes out) so the UI can still surface it
-      verificationLink: emailResult.skipped ? verifyLink : undefined,
-      emailSent: !!emailResult.ok,
-      message: emailResult.ok ? 'Account created — check your email to verify.' : 'Account created. Please verify your email.',
-    });
+    res.status(201).json({ user: publicUser(u), token, message: 'Account created — welcome to SDGMart!' });
   } catch (e) {
     console.error('signup failed:', e);
     res.status(500).json({ error: e.message || 'Signup failed' });
@@ -1046,12 +1030,23 @@ app.get('/api/admin/leaderboard', requireAdmin, async (req, res) => {
 // Public version (first names only) for the squad page gamification
 app.get('/api/leaderboard', async (req, res) => {
   try {
+    // Opportunistically award last month's winner (idempotent, cron-less).
+    db.leaderboard.awardLastMonthWinner().catch(() => {});
     const list = await db.leaderboard.topReferrers(10);
     res.json(list.map(u => ({
       name: (u.name || 'A friend').split(' ')[0],
       referralCount: u.referralCount,
     })));
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Client-side crash reporter (from the React error boundary)
+app.post('/api/client-error', async (req, res) => {
+  try {
+    const { message, stack, path: p } = req.body || {};
+    await db.errorLog.record({ message: 'CLIENT: ' + (message || 'unknown'), stack: stack || '', path: p || '', method: 'CLIENT', status: 0, userId: req.user ? req.user.id : null });
+  } catch (_) {}
+  res.json({ ok: true });
 });
 
 // ── Admin: error logs ────────────────────────────────────────────────────

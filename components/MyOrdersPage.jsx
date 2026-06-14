@@ -61,7 +61,7 @@ const MyOrdersPage = ({ setPage, openTracking, setCart }) => {
     if (!window.generateReceiptPDF) { alert('PDF engine still loading — try again in a moment.'); return; }
     const items = Array.isArray(o.items) ? o.items : [];
     window.generateReceiptPDF({
-      orderId: o.id,
+      orderId: window.orderCode(o.id),
       date: o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-GB') : new Date().toLocaleDateString('en-GB'),
       items: items.map(i => ({ name: i.name, qty: i.qty, price: i.price })),
       subtotal: o.subtotal,
@@ -159,7 +159,7 @@ const MyOrdersPage = ({ setPage, openTracking, setCart }) => {
                 style={{ cursor: o.status !== 'cancelled' ? 'pointer' : 'default', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                    <span style={{ fontWeight: 700, fontSize: 14 }}>#{String(o.id).slice(-6)}</span>
+                    <span style={{ fontWeight: 700, fontSize: 14 }}>{window.orderCode(o.id)}</span>
                     {statusBadge(o.status)}
                     {o.priority && <span style={{ background: '#FFF4E0', color: '#7A5A00', borderRadius: 999, padding: '3px 8px', fontSize: 10, fontWeight: 700 }}>⭐ Priority</span>}
                     {o.surpriseExtra && <span style={{ background: '#FCE4F0', color: '#9B2D60', borderRadius: 999, padding: '3px 8px', fontSize: 10, fontWeight: 700 }}>🎁 Free extra</span>}
@@ -213,7 +213,7 @@ const MyOrdersPage = ({ setPage, openTracking, setCart }) => {
         <div onClick={() => setIssueFor(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
           <div onClick={e => e.stopPropagation()} style={{ background: 'var(--white)', borderRadius: 14, padding: 22, maxWidth: 460, width: '100%' }}>
             <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, marginBottom: 14 }}>Report a problem</h2>
-            <p style={{ fontSize: 13, color: 'var(--warm-gray)', marginBottom: 14 }}>Order #{String(issueFor).slice(-6)}. Tell us what went wrong and we'll reach out.</p>
+            <p style={{ fontSize: 13, color: 'var(--warm-gray)', marginBottom: 14 }}>Order {window.orderCode(issueFor)}. Tell us what went wrong and we'll reach out.</p>
             <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
               {[['missing','Missing item'],['damaged','Damaged/bad'],['wrong','Wrong item'],['other','Other']].map(([v,l]) => (
                 <button key={v} onClick={() => setIssue(s => ({ ...s, issueType: v }))}

@@ -177,7 +177,7 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage }) => {
       </button>
 
       <div style={{ background: 'var(--white)', borderRadius: 14, padding: 22, boxShadow: 'var(--shadow-lg)' }}>
-        <div style={{ fontSize: 12, color: 'var(--warm-gray)', fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase' }}>Order #{String(o.id).slice(-6)}</div>
+        <div style={{ fontSize: 12, color: 'var(--warm-gray)', fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase' }}>Order {window.orderCode(o.id)}</div>
         <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 24, fontWeight: 700, marginTop: 4, color: accent }}>{primaryMsg}</h1>
         <div style={{ fontSize: 14, color: 'var(--warm-gray)', marginTop: 6, lineHeight: 1.5 }}>{secondaryMsg}</div>
 

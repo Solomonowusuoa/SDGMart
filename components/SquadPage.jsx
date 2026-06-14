@@ -158,7 +158,7 @@ const SquadPage = ({ setPage, currentUser }) => {
       <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', padding: '24px 28px', boxShadow: 'var(--shadow)' }}>
         <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Invite Friends → Earn GHS 5 Each</h2>
         <p style={{ fontSize: 13, color: 'var(--warm-gray)', marginBottom: 14, lineHeight: 1.6 }}>
-          Every friend who signs up with your code adds <strong style={{ color: 'var(--warm-black)' }}>GHS 5 credit</strong> to your next order. Credits stack — invite as many as you like.
+          When a friend signs up with your code <strong style={{ color: 'var(--warm-black)' }}>and makes their first purchase</strong>, you get <strong style={{ color: 'var(--warm-black)' }}>GHS 5 credit</strong>. Credits stack — invite as many as you like.
         </p>
         <p style={{ fontSize: 13, color: 'var(--warm-gray)', marginBottom: 14, lineHeight: 1.6 }}>
           Your code: <strong style={{ color: '#000', letterSpacing: '.06em' }}>{squad.referralCode}</strong>
@@ -196,8 +196,8 @@ const TopRecruiters = () => {
   if (!leaders || leaders.length === 0) return null;
   return (
     <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', padding: '20px 24px', boxShadow: 'var(--shadow)', marginTop: 20 }}>
-      <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 18, fontWeight: 700, marginBottom: 4 }}>🏆 Top Recruiters</h2>
-      <p style={{ fontSize: 12, color: 'var(--warm-gray)', marginBottom: 14 }}>The people bringing the most friends to SDGMart. Could be you next month!</p>
+      <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 18, fontWeight: 700, marginBottom: 4 }}>🏆 Top Recruiters — This Month</h2>
+      <p style={{ fontSize: 12, color: 'var(--warm-gray)', marginBottom: 14 }}>Most friends brought in this month. The leader at month-end wins <strong style={{ color: 'var(--warm-black)' }}>GHS 15 off</strong> their next order. Resets on the 1st!</p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {leaders.slice(0, 5).map((u, i) => (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: i === 0 ? 'none' : '1px solid var(--cream-dark)' }}>

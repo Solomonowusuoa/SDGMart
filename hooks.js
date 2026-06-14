@@ -1,5 +1,17 @@
 // Global hooks — loaded before any component, available on window
 
+// Human-friendly order code derived from the real DB order id, e.g. SDG-00017.
+// Used on receipts, My Orders, admin, and tracking so the same code is shown
+// everywhere and always maps back to a real order.
+function orderCode(id) {
+  if (id == null || id === '') return '—';
+  const s = String(id);
+  // If it's already an SDG- code, keep it; otherwise pad the numeric id.
+  if (/^SDG-/i.test(s)) return s;
+  return 'SDG-' + s.replace(/\D/g, '').padStart(5, '0');
+}
+if (typeof window !== 'undefined') window.orderCode = orderCode;
+
 function useMobile(breakpoint) {
   breakpoint = breakpoint || 768;
   const [mobile, setMobile] = React.useState(

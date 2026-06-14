@@ -44,7 +44,7 @@ const CategoryPage = ({ selectedCategory, setSelectedCategory, onAdd, onView, se
       {/* Header */}
       <div style={{ marginBottom: isMobile ? 16 : 24 }}>
         <h1 style={{ fontFamily: 'var(--font-head)', fontSize: isMobile ? 22 : 30, fontWeight: 700 }}>
-          {activeCategory ? activeCategory : searchQuery ? `Search: "${searchQuery}"` : 'All Products'}
+          {activeCategory ? activeCategory : 'All Products'}
         </h1>
         <div style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 4 }}>{filtered.length} items found</div>
       </div>
