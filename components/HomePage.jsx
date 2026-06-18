@@ -544,7 +544,7 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
         <div style={{ maxWidth: 1280, margin: '32px auto 0', paddingTop: 20, borderTop: '1px solid rgba(255,255,255,.15)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
           <span style={{ fontSize: 12, opacity: .5 }}>© 2026 SDGMart. Tamale, Ghana. All rights reserved.</span>
           <span style={{ fontSize: 12, opacity: .5 }}>
-            <a href="/privacy" style={{ color: 'inherit', textDecoration: 'underline', textUnderlineOffset: 2 }}>Privacy</a> · Terms · MoMo Payments
+            <a href="/privacy" style={{ color: 'inherit', textDecoration: 'underline', textUnderlineOffset: 2 }}>Privacy</a> · <a href="/terms" style={{ color: 'inherit', textDecoration: 'underline', textUnderlineOffset: 2 }}>Terms</a> · MoMo Payments
           </span>
         </div>
       </footer>

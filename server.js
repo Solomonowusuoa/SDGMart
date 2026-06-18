@@ -1222,6 +1222,7 @@ app.delete('/api/me/recurring/:id', requireAuth, async (req, res) => {
 
 // ── Legal pages ──────────────────────────────────────────────────────────
 app.get('/privacy', (req, res) => res.sendFile(path.join(__dirname, 'privacy.html')));
+app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, 'terms.html')));
 
 // ── Static files ─────────────────────────────────────────────────────────
 app.use('/icons', express.static(path.join(__dirname, 'icons')));
