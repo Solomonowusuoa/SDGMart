@@ -1220,6 +1220,9 @@ app.delete('/api/me/recurring/:id', requireAuth, async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Legal pages ──────────────────────────────────────────────────────────
+app.get('/privacy', (req, res) => res.sendFile(path.join(__dirname, 'privacy.html')));
+
 // ── Static files ─────────────────────────────────────────────────────────
 app.use('/icons', express.static(path.join(__dirname, 'icons')));
 app.use(express.static(__dirname, { index: 'SDGMart.html' }));
