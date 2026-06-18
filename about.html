@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SDGMart — Tamale's Same-Day Grocery Delivery</title>
+<meta name="description" content="SDGMart is a same-day grocery delivery service for Tamale, Ghana. Browse groceries and household essentials, pay by card or mobile money, and get same-day delivery.">
+<link rel="icon" type="image/svg+xml" href="/icons/icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --cream:#FBF9F4;
+    --white:#FFFFFF;
+    --warm-black:#1A1710;
+    --ink:#33302A;
+    --warm-gray:#6B6355;
+    --line:#E9E3D6;
+    --accent-gold:#C8923A;
+    --font-head:'Playfair Display',Georgia,serif;
+    --font-body:'Plus Jakarta Sans',-apple-system,Segoe UI,sans-serif;
+  }
+  html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+  body{
+    font-family:var(--font-body);
+    background:var(--cream);
+    color:var(--ink);
+    line-height:1.7;
+    font-size:16px;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:inherit;text-decoration:none}
+
+  /* Header */
+  .site-head{border-bottom:1px solid var(--line);background:var(--white)}
+  .site-head .inner{
+    max-width:960px;margin:0 auto;padding:18px 24px;
+    display:flex;align-items:center;justify-content:space-between;gap:16px;
+  }
+  .brand{display:flex;align-items:center;gap:10px}
+  .brand img{width:34px;height:34px;border-radius:8px}
+  .brand .name{font-family:var(--font-head);font-weight:700;font-size:22px;color:var(--warm-black)}
+  .btn{
+    display:inline-block;font-weight:600;font-size:14px;border-radius:999px;
+    padding:10px 20px;transition:all .15s ease;cursor:pointer;
+  }
+  .btn-primary{background:var(--warm-black);color:#fff}
+  .btn-primary:hover{background:#000}
+  .btn-ghost{border:1px solid var(--line);color:var(--warm-gray)}
+  .btn-ghost:hover{color:var(--warm-black);border-color:var(--accent-gold)}
+
+  main{max-width:960px;margin:0 auto;padding:0 24px}
+
+  /* Hero */
+  .hero{text-align:center;padding:72px 0 56px;border-bottom:1px solid var(--line)}
+  .eyebrow{
+    font-size:12px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--accent-gold);
+  }
+  .hero h1{
+    font-family:var(--font-head);font-weight:700;
+    font-size:clamp(36px,7vw,58px);color:var(--warm-black);line-height:1.08;
+    letter-spacing:-.01em;margin:16px auto 0;max-width:14ch;
+  }
+  .hero p.lead{
+    margin:22px auto 0;max-width:60ch;font-size:18px;color:var(--ink);
+  }
+  .hero .actions{margin-top:32px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+
+  /* Sections */
+  section.block{padding:56px 0;border-bottom:1px solid var(--line)}
+  section.block h2{
+    font-family:var(--font-head);font-weight:600;font-size:30px;
+    color:var(--warm-black);line-height:1.2;
+  }
+  section.block p{margin-top:14px;max-width:65ch;color:var(--ink)}
+
+  /* Features */
+  .features{
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));
+    gap:18px;margin-top:8px;
+  }
+  .card{
+    background:var(--white);border:1px solid var(--line);border-radius:16px;
+    padding:24px;
+  }
+  .card .ico{font-size:26px}
+  .card h3{font-family:var(--font-head);font-weight:600;font-size:19px;color:var(--warm-black);margin-top:12px}
+  .card p{margin-top:8px;font-size:14.5px;color:var(--warm-gray);max-width:none}
+
+  /* Google sign-in explainer */
+  .gdata{
+    background:var(--white);border:1px solid var(--line);border-left:4px solid var(--accent-gold);
+    border-radius:14px;padding:26px 28px;margin-top:18px;max-width:none;
+  }
+  .gdata h2{margin:0}
+  .gdata ul{margin:14px 0 0;list-style:none}
+  .gdata li{position:relative;padding-left:22px;margin:9px 0;color:var(--ink)}
+  .gdata li::before{content:"";position:absolute;left:4px;top:11px;width:6px;height:6px;border-radius:50%;background:var(--accent-gold)}
+  .gdata a{color:var(--accent-gold);font-weight:600}
+  .gdata a:hover{text-decoration:underline}
+
+  /* CTA band */
+  .cta{text-align:center;padding:64px 0}
+  .cta h2{font-family:var(--font-head);font-weight:700;font-size:32px;color:var(--warm-black)}
+  .cta p{margin-top:10px;color:var(--warm-gray)}
+  .cta .actions{margin-top:26px}
+
+  /* Footer */
+  footer{border-top:1px solid var(--line);background:var(--white);color:var(--warm-gray);font-size:13px}
+  footer .inner{
+    max-width:960px;margin:0 auto;padding:26px 24px;
+    display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;
+  }
+  footer a{color:var(--warm-gray);font-weight:600}
+  footer a:hover{color:var(--warm-black)}
+  footer .links a{margin-left:16px}
+  strong{color:var(--warm-black);font-weight:600}
+</style>
+</head>
+<body>
+  <header class="site-head">
+    <div class="inner">
+      <a class="brand" href="/about">
+        <img src="/icons/icon.svg" alt="SDGMart logo">
+        <span class="name">SDGMart</span>
+      </a>
+      <a class="btn btn-primary" href="/">Enter the store</a>
+    </div>
+  </header>
+
+  <main>
+    <!-- Hero -->
+    <div class="hero">
+      <div class="eyebrow">Tamale's smart grocery service</div>
+      <h1>Fresh groceries, delivered the same day.</h1>
+      <p class="lead">
+        SDGMart is a same-day grocery delivery service for <strong>Tamale, Ghana</strong>. Browse everyday
+        groceries and household essentials, order in a few taps, pay by card or mobile money, and get it
+        delivered to your neighbourhood — often the same day.
+      </p>
+      <div class="actions">
+        <a class="btn btn-primary" href="/">Shop groceries</a>
+        <a class="btn btn-ghost" href="#how-it-works">How it works</a>
+      </div>
+    </div>
+
+    <!-- Purpose -->
+    <section class="block" id="how-it-works">
+      <h2>What is SDGMart?</h2>
+      <p>
+        SDGMart helps people and households in Tamale shop for groceries online and have them delivered the same
+        day. You can browse our catalog of fresh produce, pantry staples, drinks, and household essentials,
+        compare prices in Ghana Cedis, build a cart, and check out securely. After ordering, you can track your
+        delivery and reorder your favourites in one tap. Our goal is to make everyday shopping faster, simpler,
+        and reliable for the Tamale community.
+      </p>
+      <div class="features">
+        <div class="card">
+          <div class="ico">⚡</div>
+          <h3>Same-day delivery</h3>
+          <p>Order before noon and get your groceries delivered the same day across Tamale.</p>
+        </div>
+        <div class="card">
+          <div class="ico">💳</div>
+          <h3>Card &amp; Mobile Money</h3>
+          <p>Pay securely online by card or mobile money, or choose cash on delivery.</p>
+        </div>
+        <div class="card">
+          <div class="ico">📍</div>
+          <h3>Live order tracking</h3>
+          <p>Follow your order on a map and see an estimated arrival time to your door.</p>
+        </div>
+        <div class="card">
+          <div class="ico">🔁</div>
+          <h3>One-tap reorder</h3>
+          <p>Save your regulars and reorder your usual basket in a single tap.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Google sign-in explainer -->
+    <section class="block">
+      <div class="gdata">
+        <h2>Signing in with Google</h2>
+        <p>
+          SDGMart offers <strong>Sign in with Google</strong> as a convenient, secure way to create and access
+          your account. Using it is optional — you can also sign up with an email and password. When you choose
+          to sign in with Google, Google shares the following basic profile information with SDGMart:
+        </p>
+        <ul>
+          <li>Your <strong>name</strong> — to personalise your account and orders.</li>
+          <li>Your <strong>email address</strong> — to create and identify your account and send essential order and account emails.</li>
+          <li>Your <strong>profile picture</strong> — shown in your account so you can recognise you're signed in.</li>
+        </ul>
+        <p>
+          We request <strong>only this basic profile information</strong>. We never receive your Google password,
+          we do not use this data for advertising, and we do not sell it. For full details, see our
+          <a href="/privacy">Privacy Policy</a> and <a href="/terms">Terms of Service</a>.
+        </p>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <div class="cta">
+      <h2>Ready to shop?</h2>
+      <p>Browse the SDGMart store and get your essentials delivered today.</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="/">Enter the store</a>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="inner">
+      <span>&copy; 2026 SDGMart &middot; Tamale, Ghana</span>
+      <span class="links">
+        <a href="/">Store</a>
+        <a href="/privacy">Privacy</a>
+        <a href="/terms">Terms</a>
+      </span>
+    </div>
+  </footer>
+</body>
+</html>
