@@ -422,6 +422,19 @@ app.get('/api/orders', requireAdmin, async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Birthday gift eligibility — valid in the user's birth MONTH, once per year,
+// only when the admin has enabled it and configured gift products.
+async function birthdayGiftStatus(user) {
+  const cfg = (await db.appConfig.get('birthday_gifts')) || { enabled: false, productIds: [] };
+  const year = new Date().getFullYear();
+  const inBirthMonth = !!(user && user.birthMonth) && (new Date().getMonth() + 1) === Number(user.birthMonth);
+  const eligible = !!cfg.enabled
+    && Array.isArray(cfg.productIds) && cfg.productIds.length > 0
+    && inBirthMonth
+    && Number(user.birthdayGiftClaimedYear || 0) !== year;
+  return { cfg, eligible, year };
+}
+
 // Shared order-creation logic. Used by Cash-on-Delivery (/api/orders) and the
 // Paystack verify/webhook paths. `reqUser` may be null (guest). `extra` carries
 // payment status (paid, paystackRef).
@@ -454,12 +467,27 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
   }
   const loc = location && typeof location.lat === 'number' ? location : null;
 
+  // Birthday free gift — server-validated (never trust the client), appended at
+  // price 0, and claimable only once per calendar year.
+  let itemsList = Array.isArray(items) ? [...items] : [];
+  if (reqUser && body.birthdayGift) {
+    const { cfg, eligible, year } = await birthdayGiftStatus(reqUser);
+    const gid = parseInt(body.birthdayGift, 10);
+    if (eligible && (cfg.productIds || []).map(Number).includes(gid)) {
+      const gp = await db.products.get(gid);
+      if (gp) {
+        itemsList.push({ id: gp.id, name: gp.name, category: gp.category, unit: gp.unit, qty: 1, price: 0, birthdayGift: true });
+        await db.sb.from('users').update({ birthday_gift_claimed_year: year }).eq('id', reqUser.id);
+      }
+    }
+  }
+
   const created = await db.orders.create({
     userId,
     customerName: customer || '', customerPhone: phone || '',
     recipientName: recipientName || '', recipientPhone: recipientPhone || '',
     address: address || recipientAddress || '', neighborhood: neighborhood || '',
-    items: items || [], subtotal: Number(subtotal || 0), deliveryFee: Number(delivery || 0),
+    items: itemsList, subtotal: Number(subtotal || 0), deliveryFee: Number(delivery || 0),
     discount: Number(discountApplied ? (subtotal * 0.05) : 0),
     loyaltyUsed: Number(loyaltyUsed || 0),
     total: Number(total || 0),
@@ -825,6 +853,37 @@ async function pushToUser(userId, payload) {
   } catch (e) { console.warn('pushToUser failed:', e.message); }
 }
 
+// Lightweight daily job runner. There is no cron on this host, so it runs
+// opportunistically on /healthz pings (UptimeRobot hits it every 5 min) and is
+// guarded by an app_config date-marker so the work happens at most once a day.
+let _dailyJobRunning = false;
+async function runDailyJobs() {
+  if (_dailyJobRunning) return;
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    if ((await db.appConfig.get('daily_job_last_run')) === today) return;
+    _dailyJobRunning = true;
+    await db.appConfig.set('daily_job_last_run', today);
+    const now = new Date();
+    const m = now.getMonth() + 1, d = now.getDate(), year = now.getFullYear();
+    const isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+    const { data } = await db.sb.from('users').select('id,name,birthday_notified_year').eq('birth_month', m).eq('birth_day', d);
+    let people = data || [];
+    // Feb-29 birthdays get their wish on Feb-28 in non-leap years.
+    if (m === 2 && d === 28 && !isLeap) {
+      const r = await db.sb.from('users').select('id,name,birthday_notified_year').eq('birth_month', 2).eq('birth_day', 29);
+      people = people.concat(r.data || []);
+    }
+    for (const u of people) {
+      if (Number(u.birthday_notified_year || 0) === year) continue;
+      const first = u.name ? String(u.name).split(' ')[0] : '';
+      await pushToUser(u.id, { title: `🎂 Happy Birthday${first ? ', ' + first : ''}!`, body: 'Your free birthday gift is waiting — shop today and pick a treat on us. 🎁', url: '/' });
+      await db.sb.from('users').update({ birthday_notified_year: year }).eq('id', u.id);
+    }
+  } catch (e) { console.warn('runDailyJobs failed:', e.message); }
+  finally { _dailyJobRunning = false; }
+}
+
 app.get('/api/push/vapid-public-key', (req, res) => {
   if (!VAPID) return res.status(503).json({ error: 'Push not configured' });
   res.json({ publicKey: VAPID.publicKey });
@@ -1033,7 +1092,7 @@ app.post('/api/me/orders/:id/cancel', requireAuth, async (req, res) => {
 
 // ── Health check (for UptimeRobot / load balancers) ──────────────────────
 // Lightweight: no DB hit, returns instantly so pings are cheap.
-app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now() }));
+app.get('/healthz', (req, res) => { runDailyJobs(); res.json({ ok: true, ts: Date.now() }); });
 
 // ── Admin: operational metrics dashboard ─────────────────────────────────
 app.get('/api/admin/metrics', requireAdmin, async (req, res) => {
@@ -1231,6 +1290,32 @@ app.post('/api/admin/settings', requireAdmin, async (req, res) => {
       await db.appConfig.set('delivery_slots', clean);
     }
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Birthday gifts (admin config + customer eligibility) ─────────────────
+app.get('/api/admin/birthday-gifts', requireAdmin, async (req, res) => {
+  try { res.json((await db.appConfig.get('birthday_gifts')) || { enabled: false, productIds: [] }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/admin/birthday-gifts', requireAdmin, async (req, res) => {
+  const { enabled, productIds } = req.body || {};
+  try {
+    const ids = Array.isArray(productIds) ? productIds.map(n => parseInt(n, 10)).filter(Boolean).slice(0, 50) : [];
+    await db.appConfig.set('birthday_gifts', { enabled: !!enabled, productIds: ids });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/birthday/gifts', requireAuth, async (req, res) => {
+  try {
+    const { cfg, eligible } = await birthdayGiftStatus(req.user);
+    if (!eligible) return res.json({ eligible: false, products: [] });
+    const products = [];
+    for (const id of cfg.productIds) {
+      const p = await db.products.get(id);
+      if (p && (p.stock == null || p.stock > 0)) products.push(p);
+    }
+    res.json({ eligible: products.length > 0, products });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

@@ -41,6 +41,9 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   const [scheduledDate, setScheduledDate] = React.useState('');
   const [scheduledSlot, setScheduledSlot] = React.useState('');
   const [slots, setSlots] = React.useState([]);
+  // Birthday free gift (eligible only during the user's birth month)
+  const [bdayGifts, setBdayGifts] = React.useState({ eligible: false, products: [] });
+  const [chosenGift, setChosenGift] = React.useState(null);
   // Saved-address book for one-tap checkout
   const [savedAddresses, setSavedAddresses] = React.useState([]);
   React.useEffect(() => {
@@ -81,6 +84,11 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
 
   React.useEffect(() => {
     fetch('/api/delivery/slots').then(r => r.ok ? r.json() : {}).then(d => { if (Array.isArray(d.slots)) setSlots(d.slots); }).catch(() => {});
+  }, []);
+
+  React.useEffect(() => {
+    if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
+    apiFetch('/api/birthday/gifts').then(r => r.ok ? r.json() : {}).then(d => { if (d && d.eligible) setBdayGifts({ eligible: true, products: d.products || [] }); }).catch(() => {});
   }, []);
 
   const [form, setForm] = React.useState({
@@ -274,6 +282,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     location: snap.form.location || null,
     deliveryDate: scheduleLater && scheduledDate ? scheduledDate : null,
     deliverySlot: scheduleLater && scheduledSlot ? scheduledSlot : null,
+    birthdayGift: chosenGift || null,
     discountApplied: canUseDiscount,
     loyaltyUsed,
   });
@@ -467,6 +476,23 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
           {step === 1 && (
             <>
               <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, marginBottom: 14 }}>Delivery Details</h2>
+
+              {bdayGifts.eligible && bdayGifts.products.length > 0 && (
+                <div style={{ marginBottom: 20, padding: '16px', background: '#FFF8E1', border: '1.5px solid #F0DCA0', borderRadius: 12 }}>
+                  <div style={{ fontWeight: 700, fontSize: 15, color: '#7A5A00' }}>🎂 Happy Birthday{currentUser && currentUser.name ? `, ${String(currentUser.name).split(' ')[0]}` : ''}!</div>
+                  <div style={{ fontSize: 13, color: '#7A5A00', marginTop: 2, marginBottom: 12 }}>Add one free gift to your order — on us. 🎁</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {bdayGifts.products.map(p => (
+                      <button key={p.id} type="button" onClick={() => setChosenGift(chosenGift === p.id ? null : p.id)}
+                        style={{ textAlign: 'left', padding: '10px 14px', borderRadius: 10, border: `2px solid ${chosenGift === p.id ? 'var(--sage)' : 'var(--cream-dark)'}`, background: chosenGift === p.id ? 'rgba(0,0,0,.05)' : 'var(--white)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span style={{ fontWeight: 700, fontSize: 14 }}>{p.name}</span>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: chosenGift === p.id ? 'var(--sage-dark)' : 'var(--warm-gray)' }}>{chosenGift === p.id ? '✓ FREE' : 'FREE'}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {chosenGift && <div style={{ fontSize: 11, color: '#7A5A00', marginTop: 8 }}>Tap again to deselect. Your gift is added free at checkout.</div>}
+                </div>
+              )}
 
               {/* Delivery window notice — depends on time of day */}
               {(() => {
@@ -800,6 +826,12 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                 <span style={{ fontWeight: 600 }}>GHS {(i.price * i.qty).toFixed(2)}</span>
               </div>
             ))}
+            {chosenGift && bdayGifts.products.find(p => p.id === chosenGift) && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#7A5A00' }}>
+                <span>🎁 {bdayGifts.products.find(p => p.id === chosenGift).name} <span style={{ fontWeight: 700 }}>(birthday)</span></span>
+                <span style={{ fontWeight: 700 }}>FREE</span>
+              </div>
+            )}
           </div>
           <div style={{ borderTop: '1.5px solid var(--cream-dark)', paddingTop: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>

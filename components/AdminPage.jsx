@@ -367,7 +367,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
     ['expiry','⏰ Expiry'],['routes','🗺 Routes'],['riders','🛵 Riders'],
     ['promotions','⚡ Promotions'],['requests','🛒 Requests'],['issues','🚨 Issues'],
     ['analytics','🔎 Analytics'],['leaderboard','🏆 Leaderboard'],['comms','📣 Comms'],
-    ['errors','🐞 Errors'],['settings','⚙️ Settings'],['security','🔐 Security'],
+    ['errors','🐞 Errors'],['birthday','🎂 Birthday Gifts'],['settings','⚙️ Settings'],['security','🔐 Security'],
   ];
 
   // ── Dashboard / metrics state ──
@@ -406,6 +406,18 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
     await apiFetch('/api/admin/settings', { method: 'POST', body: JSON.stringify(patch) });
     setSettingsSaved('Saved — reload the storefront to see changes');
     setTimeout(() => setSettingsSaved(''), 3000);
+  };
+
+  // ── Birthday gifts tab state ──
+  const [birthdayCfg, setBirthdayCfg] = React.useState({ enabled: false, productIds: [] });
+  const [birthdaySaved, setBirthdaySaved] = React.useState('');
+  const loadBirthday = React.useCallback(() => {
+    apiFetch('/api/admin/birthday-gifts').then(r => r.ok ? r.json() : {}).then(c => setBirthdayCfg({ enabled: !!c.enabled, productIds: c.productIds || [] })).catch(() => {});
+  }, []);
+  React.useEffect(() => { if (adminTab === 'birthday') loadBirthday(); }, [adminTab, loadBirthday]);
+  const saveBirthday = async () => {
+    await apiFetch('/api/admin/birthday-gifts', { method: 'POST', body: JSON.stringify(birthdayCfg) });
+    setBirthdaySaved('Saved'); setTimeout(() => setBirthdaySaved(''), 2500);
   };
 
   // ── Promotions tab state ──
@@ -1414,6 +1426,34 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
         )}
 
         {/* PAYMENTS — admin sets the MoMo numbers shown at checkout */}
+        {adminTab === 'birthday' && (
+          <div>
+            <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginBottom: 6 }}>🎂 Birthday Gifts</h1>
+            <p style={{ color: 'var(--warm-gray)', fontSize: 14, marginBottom: 24, lineHeight: 1.5 }}>
+              Choose a group of products. During their birth month, each customer can add <strong>one free</strong> gift from this group to an order (once per year), and gets a birthday push notification.
+            </p>
+            <div style={{ background: 'var(--white)', borderRadius: 12, padding: '20px 22px', boxShadow: 'var(--shadow)', maxWidth: 620 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 16 }}>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>Birthday gifts enabled</div>
+                <button onClick={() => setBirthdayCfg(c => ({ ...c, enabled: !c.enabled }))}
+                  style={{ flexShrink: 0, width: 52, height: 30, borderRadius: 999, background: birthdayCfg.enabled ? 'var(--sage)' : 'var(--cream-dark)', position: 'relative', transition: 'background .2s', border: 'none', cursor: 'pointer' }}>
+                  <span style={{ position: 'absolute', top: 3, left: birthdayCfg.enabled ? 25 : 3, width: 24, height: 24, borderRadius: '50%', background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.2)' }} />
+                </button>
+              </div>
+              <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Gift products (Ctrl/Cmd+click to multi-select)</label>
+              <select multiple value={birthdayCfg.productIds.map(String)} onChange={e => setBirthdayCfg(c => ({ ...c, productIds: Array.from(e.target.selectedOptions).map(o => parseInt(o.value)) }))}
+                style={{ ...inputS, height: 200, marginTop: 6 }}>
+                {products.map(p => <option key={p.id} value={p.id}>{p.name} — GHS {Number(p.price).toFixed(2)}</option>)}
+              </select>
+              <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 6 }}>{birthdayCfg.productIds.length} selected</div>
+              <div style={{ marginTop: 16, display: 'flex', gap: 12, alignItems: 'center' }}>
+                <button onClick={saveBirthday} style={{ background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '11px 24px', fontWeight: 700, fontSize: 13 }}>Save</button>
+                {birthdaySaved && <span style={{ color: 'var(--sage)', fontSize: 13 }}>✓ {birthdaySaved}</span>}
+              </div>
+            </div>
+          </div>
+        )}
+
         {adminTab === 'payments' && (
           <div>
             <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginBottom: 8 }}>Payment Settings</h1>
