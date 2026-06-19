@@ -3,6 +3,9 @@ const AccountPage = ({ setPage, currentUser, setCurrentUser }) => {
   const isMobile = useMobile();
   const [name, setName] = React.useState(currentUser.name || '');
   const [phone, setPhone] = React.useState(currentUser.phone || '');
+  const birthdayLocked = !!(currentUser.birthDay && currentUser.birthMonth);
+  const [birthDay, setBirthDay] = React.useState(currentUser.birthDay || '');
+  const [birthMonth, setBirthMonth] = React.useState(currentUser.birthMonth || '');
   const [addresses, setAddresses] = React.useState(null);
   const [adding, setAdding] = React.useState(false);
   const [editingId, setEditingId] = React.useState(null);
@@ -18,7 +21,9 @@ const AccountPage = ({ setPage, currentUser, setCurrentUser }) => {
   const saveProfile = async () => {
     setErr(''); setSaved('');
     try {
-      const r = await apiFetch('/api/me/profile', { method: 'PUT', body: JSON.stringify({ name, phone }) });
+      const body = { name, phone };
+      if (!birthdayLocked && birthDay && birthMonth) { body.birthDay = Number(birthDay); body.birthMonth = Number(birthMonth); }
+      const r = await apiFetch('/api/me/profile', { method: 'PUT', body: JSON.stringify(body) });
       if (!r.ok) { const d = await r.json(); setErr(d.error || 'Failed'); return; }
       const u = await r.json();
       setCurrentUser(prev => ({ ...prev, ...u }));
@@ -86,6 +91,28 @@ const AccountPage = ({ setPage, currentUser, setCurrentUser }) => {
         <input value={name} onChange={e => setName(e.target.value)} style={inputS} />
         <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Phone</label>
         <input value={phone} onChange={e => setPhone(e.target.value)} style={inputS} placeholder="+233 24 123 4567" />
+
+        <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Birthday</label>
+        {birthdayLocked ? (
+          <div style={{ ...inputS, color: 'var(--warm-gray)', background: 'var(--cream)', display: 'flex', alignItems: 'center' }}>
+            🎂 {currentUser.birthDay} {['','January','February','March','April','May','June','July','August','September','October','November','December'][currentUser.birthMonth] || ''}
+            <span style={{ marginLeft: 'auto', fontSize: 11 }}>🔒 locked</span>
+          </div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <select value={birthDay} onChange={e => setBirthDay(e.target.value)} style={{ ...inputS, flex: 1, marginBottom: 6, cursor: 'pointer' }}>
+                <option value="">Day</option>
+                {Array.from({ length: 31 }, (_, i) => i + 1).map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+              <select value={birthMonth} onChange={e => setBirthMonth(e.target.value)} style={{ ...inputS, flex: 2, marginBottom: 6, cursor: 'pointer' }}>
+                <option value="">Month</option>
+                {['January','February','March','April','May','June','July','August','September','October','November','December'].map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+              </select>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--warm-gray)', marginBottom: 10 }}>Set once to unlock birthday treats 🎁 — it can't be changed afterwards.</div>
+          </>
+        )}
         <div style={{ marginTop: 4 }}>
           <input value={currentUser.email || ''} readOnly style={{ ...inputS, color: 'var(--warm-gray)', background: 'var(--cream)' }} />
           <div style={{ fontSize: 11, color: 'var(--warm-gray)', marginTop: -6, marginBottom: 10 }}>Email is permanent and cannot be changed.</div>
@@ -110,6 +137,9 @@ const AccountPage = ({ setPage, currentUser, setCurrentUser }) => {
           )}
         </div>
 
+        <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: -6, marginBottom: 12 }}>
+          Your <strong style={{ color: 'var(--warm-black)' }}>default</strong> address auto-fills checkout. Add Home, Work, or anywhere else you order to.
+        </div>
         {addresses === null ? (
           <div style={{ fontSize: 13, color: 'var(--warm-gray)' }}>Loading…</div>
         ) : addresses.length === 0 && !adding ? (

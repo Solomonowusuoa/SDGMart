@@ -43,7 +43,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     apiFetch('/api/me/addresses').then(r => r.ok ? r.json() : []).then(list => {
       setSavedAddresses(list || []);
       // Auto-pre-select last-used or default address
-      const preferred = list.find(a => a.isLastUsed) || list.find(a => a.isDefault);
+      const preferred = list.find(a => a.isDefault) || list.find(a => a.isLastUsed);
       if (preferred && !form.neighborhood) {
         setForm(f => ({
           ...f,

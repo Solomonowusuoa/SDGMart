@@ -655,6 +655,11 @@ const addresses = {
     return rowsOut(data);
   },
   async create(userId, { label, neighborhood, address, location, isDefault }) {
+    // First address a user saves becomes their default automatically.
+    if (!isDefault) {
+      const { count } = await sb.from('addresses').select('id', { count: 'exact', head: true }).eq('user_id', userId);
+      if (!count) isDefault = true;
+    }
     if (isDefault) await sb.from('addresses').update({ is_default: false }).eq('user_id', userId);
     const { data, error } = await sb.from('addresses').insert({
       user_id: userId, label, neighborhood, address, location: location || null, is_default: !!isDefault,

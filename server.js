@@ -945,14 +945,21 @@ app.delete('/api/me/addresses/:id', requireAuth, async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Update profile (name + phone)
+// Update profile (name + phone; birthday is captured ONCE then locked)
 app.put('/api/me/profile', requireAuth, async (req, res) => {
-  const { name, phone } = req.body || {};
+  const { name, phone, birthDay, birthMonth } = req.body || {};
   try {
-    const { data, error } = await db.sb.from('users').update({
+    const patch = {
       name: String(name || req.user.name).slice(0, 100),
       phone: String(phone || '').slice(0, 30),
-    }).eq('id', req.user.id).select().single();
+    };
+    // Only accept a birthday if the user has none yet — never allow changes
+    // afterwards (prevents gaming the birthday-gift offer).
+    if (req.user.birthDay == null && req.user.birthMonth == null && birthDay != null && birthMonth != null) {
+      const d = parseInt(birthDay, 10), m = parseInt(birthMonth, 10);
+      if (d >= 1 && d <= 31 && m >= 1 && m <= 12) { patch.birth_day = d; patch.birth_month = m; }
+    }
+    const { data, error } = await db.sb.from('users').update(patch).eq('id', req.user.id).select().single();
     if (error) throw error;
     const out = {}; for (const k of Object.keys(data)) out[k.replace(/_([a-z])/g, (_, c) => c.toUpperCase())] = data[k];
     res.json(out);
