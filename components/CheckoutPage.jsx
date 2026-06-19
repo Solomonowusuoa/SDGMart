@@ -36,6 +36,11 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // Recurring orders: opt-in checkbox + cadence (every N days)
   const [autoReorder, setAutoReorder] = React.useState(false);
   const [reorderCadence, setReorderCadence] = React.useState(14);
+  // Scheduled delivery: ASAP (default) or a future date + time slot
+  const [scheduleLater, setScheduleLater] = React.useState(false);
+  const [scheduledDate, setScheduledDate] = React.useState('');
+  const [scheduledSlot, setScheduledSlot] = React.useState('');
+  const [slots, setSlots] = React.useState([]);
   // Saved-address book for one-tap checkout
   const [savedAddresses, setSavedAddresses] = React.useState([]);
   React.useEffect(() => {
@@ -72,6 +77,10 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     fetch('/api/paystack/config').then(r => r.ok ? r.json() : {}).then(cfg => {
       if (cfg && cfg.enabled) { setPaystackEnabled(true); setForm(f => ({ ...f, payMethod: 'paystack' })); }
     }).catch(() => {});
+  }, []);
+
+  React.useEffect(() => {
+    fetch('/api/delivery/slots').then(r => r.ok ? r.json() : {}).then(d => { if (Array.isArray(d.slots)) setSlots(d.slots); }).catch(() => {});
   }, []);
 
   const [form, setForm] = React.useState({
@@ -123,6 +132,12 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   const err = (k, msg) => setErrors(e => ({ ...e, [k]: msg }));
   const clearErr = (k) => setErrors(e => { const n = {...e}; delete n[k]; return n; });
 
+  // Scheduled-delivery date bounds: tomorrow … +7 days
+  const _pad = (n) => String(n).padStart(2, '0');
+  const _ymd = (d) => `${d.getFullYear()}-${_pad(d.getMonth() + 1)}-${_pad(d.getDate())}`;
+  const minSchedDate = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return _ymd(d); })();
+  const maxSchedDate = (() => { const d = new Date(); d.setDate(d.getDate() + 7); return _ymd(d); })();
+
   // The neighborhood actually used everywhere (display, receipts, API):
   // either the dropdown choice, or — when "Other" is picked — the typed value.
   const effectiveNeighborhood = form.neighborhood === '__other__'
@@ -140,6 +155,10 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     if (familyMode) {
       if (!form.recipientName.trim()) { err('recipientName','Required'); ok=false; }
       if (!form.recipientPhone.trim()) { err('recipientPhone','Required'); ok=false; }
+    }
+    if (scheduleLater) {
+      if (!scheduledDate) { err('scheduledDate', 'Pick a date'); ok = false; }
+      if (!scheduledSlot) { err('scheduledSlot', 'Pick a time slot'); ok = false; }
     }
     return ok;
   };
@@ -253,6 +272,8 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     payMethod: snap.form.payMethod,
     mapsPin: snap.form.mapsPin,
     location: snap.form.location || null,
+    deliveryDate: scheduleLater && scheduledDate ? scheduledDate : null,
+    deliverySlot: scheduleLater && scheduledSlot ? scheduledSlot : null,
     discountApplied: canUseDiscount,
     loyaltyUsed,
   });
@@ -374,9 +395,11 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
         {(() => {
           const now = new Date();
           const afterCutoff = now.getHours() >= 12;
-          const txt = afterCutoff
-            ? '📅 Delivery: tomorrow from 12 PM (priority queue)'
-            : '🛵 Delivery: today, starting from 12 PM';
+          const txt = (scheduleLater && scheduledDate)
+            ? `📅 Scheduled: ${scheduledDate}${scheduledSlot ? ` · ${scheduledSlot}` : ''}`
+            : (afterCutoff
+              ? '📅 Delivery: tomorrow from 12 PM (priority queue)'
+              : '🛵 Delivery: today, starting from 12 PM');
           return (
             <div style={{ marginTop: 14, display: 'inline-block', background: 'var(--cream)', border: '1px solid var(--cream-dark)', borderRadius: 999, padding: '8px 16px', fontSize: 13, fontWeight: 600, color: 'var(--warm-black)' }}>
               {txt}
@@ -470,6 +493,37 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                   </div>
                 );
               })()}
+
+              {/* Delivery timing — ASAP or scheduled for later */}
+              <div style={{ marginBottom: 16, padding: '14px 16px', background: 'var(--cream)', borderRadius: 12, border: '1px solid var(--cream-dark)' }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>When should we deliver?</div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button type="button" onClick={() => setScheduleLater(false)}
+                    style={{ flex: 1, padding: '10px', borderRadius: 8, fontWeight: 700, fontSize: 13, color: 'var(--warm-black)', border: `1.5px solid ${!scheduleLater ? 'var(--sage)' : 'var(--cream-dark)'}`, background: !scheduleLater ? 'rgba(0,0,0,.05)' : 'var(--white)' }}>
+                    🛵 Deliver ASAP
+                  </button>
+                  <button type="button" onClick={() => setScheduleLater(true)}
+                    style={{ flex: 1, padding: '10px', borderRadius: 8, fontWeight: 700, fontSize: 13, color: 'var(--warm-black)', border: `1.5px solid ${scheduleLater ? 'var(--sage)' : 'var(--cream-dark)'}`, background: scheduleLater ? 'rgba(0,0,0,.05)' : 'var(--white)' }}>
+                    📅 Schedule for later
+                  </button>
+                </div>
+                {scheduleLater && (
+                  <>
+                    <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
+                      <input type="date" value={scheduledDate} min={minSchedDate} max={maxSchedDate}
+                        onChange={e => { setScheduledDate(e.target.value); clearErr('scheduledDate'); }}
+                        style={{ flex: 1, minWidth: 150, padding: '11px 12px', borderRadius: 10, border: `1.5px solid ${errors.scheduledDate ? 'var(--accent-red)' : 'var(--cream-dark)'}`, fontSize: 14, background: 'var(--white)', outline: 'none' }} />
+                      <select value={scheduledSlot} onChange={e => { setScheduledSlot(e.target.value); clearErr('scheduledSlot'); }}
+                        style={{ flex: 1, minWidth: 150, padding: '11px 12px', borderRadius: 10, border: `1.5px solid ${errors.scheduledSlot ? 'var(--accent-red)' : 'var(--cream-dark)'}`, fontSize: 14, background: 'var(--white)', outline: 'none', cursor: 'pointer' }}>
+                        <option value="">Pick a time slot…</option>
+                        {slots.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+                    {(errors.scheduledDate || errors.scheduledSlot) && <div style={{ fontSize: 11, color: 'var(--accent-red)', marginTop: 6 }}>Pick a delivery date and time slot.</div>}
+                    <div style={{ fontSize: 11, color: 'var(--warm-gray)', marginTop: 8 }}>Choose any day within the next 7 days. Delivery fee is unchanged.</div>
+                  </>
+                )}
+              </div>
 
               {/* First-order-free notice */}
               {isFirstOrderFree && (
@@ -635,6 +689,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                 <div style={{ fontSize: 13, color: 'var(--warm-gray)' }}>
                   {familyMode ? form.recipientName : form.name} · {form.neighborhood}
                   {familyMode && form.giftMessage && <div style={{ marginTop: 6, fontStyle: 'italic' }}>"{form.giftMessage}"</div>}
+                  {scheduleLater && scheduledDate && <div style={{ marginTop: 6, fontWeight: 700, color: 'var(--sage-dark)' }}>📅 Scheduled: {scheduledDate}{scheduledSlot ? ` · ${scheduledSlot}` : ''}</div>}
                 </div>
               </div>
 

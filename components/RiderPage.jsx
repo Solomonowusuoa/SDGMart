@@ -148,6 +148,7 @@ const RiderPage = ({ currentUser, onLogout }) => {
                     {(o.phone || o.customerPhone) && <> · <a href={`tel:${o.phone || o.customerPhone}`} style={{ color: 'var(--sage-dark)', fontWeight: 700, textDecoration: 'none' }}>📞 {o.phone || o.customerPhone}</a></>}
                   </div>
                   {o.neighborhood && <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginBottom: 4 }}>🏘 {o.neighborhood}{o.address ? ` · ${o.address}` : ''}</div>}
+                  {o.deliverySlot && <div style={{ fontSize: 12, color: 'var(--sage-dark)', fontWeight: 700, marginBottom: 4 }}>📅 Scheduled: {o.deliveryDate || ''} · {o.deliverySlot}</div>}
                   {/* Itemised list so the rider knows what to deliver */}
                   {Array.isArray(o.items) && o.items.length > 0 && (
                     <div style={{ background: 'var(--cream)', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>

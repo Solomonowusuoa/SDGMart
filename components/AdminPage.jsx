@@ -395,8 +395,9 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   // ── Settings tab state ──
   const [settings, setSettings] = React.useState({ showFreshness: false });
   const [settingsSaved, setSettingsSaved] = React.useState('');
+  const [slotsText, setSlotsText] = React.useState('');
   const loadSettings = React.useCallback(() => {
-    apiFetch('/api/admin/settings').then(r => r.ok ? r.json() : {}).then(s => setSettings({ showFreshness: !!s.showFreshness })).catch(() => {});
+    apiFetch('/api/admin/settings').then(r => r.ok ? r.json() : {}).then(s => { setSettings({ showFreshness: !!s.showFreshness }); setSlotsText((s.deliverySlots || []).join('\n')); }).catch(() => {});
   }, []);
   React.useEffect(() => { if (adminTab === 'settings') loadSettings(); }, [adminTab, loadSettings]);
   const saveSettings = async (patch) => {
@@ -652,13 +653,14 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                               {statusLabel[statusKey] || o.status}
                             </span>
                             {o.priority && <span style={{ background: '#FFF4E0', color: '#7A5A00', borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>⭐ Priority</span>}
+                            {o.deliverySlot && <span style={{ background: '#E8F0FE', color: '#1A4F91', borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>📅 Scheduled</span>}
                           </div>
                           <div style={{ marginTop: 4, fontSize: 12, color: 'var(--warm-gray)' }}>
                             {o.customerName || o.customer || '—'} · {o.customerPhone || o.phone || 'no phone'} · {o.neighborhood || '—'}
                           </div>
                           <div style={{ marginTop: 2, fontSize: 11, color: 'var(--warm-gray)' }}>
                             {o.createdAt ? new Date(o.createdAt).toLocaleString() : ''}
-                            {o.deliveryDate ? ` · delivery ${o.deliveryDate}` : ''}
+                            {o.deliveryDate ? ` · delivery ${o.deliveryDate}${o.deliverySlot ? ` (${o.deliverySlot})` : ''}` : ''}
                             · {itemsArr.length} item{itemsArr.length === 1 ? '' : 's'}
                           </div>
                         </div>
@@ -1394,6 +1396,19 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                 </button>
               </div>
               {settingsSaved && <div style={{ marginTop: 16, fontSize: 13, color: 'var(--sage)' }}>✓ {settingsSaved}</div>}
+            </div>
+
+            <div style={{ background: 'var(--white)', borderRadius: 12, padding: '20px 22px', boxShadow: 'var(--shadow)', maxWidth: 620, marginTop: 20 }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>Delivery time slots</div>
+              <div style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 4, lineHeight: 1.5 }}>
+                One slot per line (e.g. <code>12:00-14:00</code>). Customers choose one of these when scheduling a delivery for a future day.
+              </div>
+              <textarea value={slotsText} onChange={e => setSlotsText(e.target.value)} rows={4}
+                style={{ width: '100%', marginTop: 12, padding: '10px 12px', borderRadius: 8, border: '1.5px solid var(--cream-dark)', fontSize: 14, fontFamily: 'monospace', outline: 'none', background: 'var(--white)', resize: 'vertical' }} />
+              <button onClick={() => saveSettings({ deliverySlots: slotsText.split(/[\n,]/).map(x => x.trim()).filter(Boolean) })}
+                style={{ marginTop: 12, background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '10px 20px', fontWeight: 700, fontSize: 13 }}>
+                Save slots
+              </button>
             </div>
           </div>
         )}

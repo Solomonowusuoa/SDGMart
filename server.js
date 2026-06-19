@@ -431,13 +431,27 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
     items, total, delivery,
     recipientName, recipientPhone, recipientAddress, payMethod, momoNumber,
     subtotal, discountApplied, loyaltyUsed, location,
+    deliveryDate: reqDate, deliverySlot: reqSlot,
   } = body || {};
   const userId = reqUser ? reqUser.id : null;
   const now = new Date();
-  const afterCutoff = now.getHours() >= 12;
-  const deliveryDate = new Date(now);
-  if (afterCutoff) deliveryDate.setDate(deliveryDate.getDate() + 1);
-  const deliveryDateStr = deliveryDate.toISOString().slice(0, 10);
+  // Scheduled delivery: customer may choose a future date (within 7 days) + a
+  // time slot. Otherwise fall back to same-day / next-day on the 12:00 cutoff.
+  const todayStr = now.toISOString().slice(0, 10);
+  const maxDate = new Date(now); maxDate.setDate(maxDate.getDate() + 7);
+  const maxStr = maxDate.toISOString().slice(0, 10);
+  let deliveryDateStr, deliverySlot = null, priority;
+  if (reqDate && /^\d{4}-\d{2}-\d{2}$/.test(reqDate) && reqDate > todayStr && reqDate <= maxStr) {
+    deliveryDateStr = reqDate;
+    deliverySlot = reqSlot ? String(reqSlot).slice(0, 20) : null;
+    priority = false;
+  } else {
+    const afterCutoff = now.getHours() >= 12;
+    const d = new Date(now);
+    if (afterCutoff) d.setDate(d.getDate() + 1);
+    deliveryDateStr = d.toISOString().slice(0, 10);
+    priority = afterCutoff;
+  }
   const loc = location && typeof location.lat === 'number' ? location : null;
 
   const created = await db.orders.create({
@@ -452,7 +466,7 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
     paymentMethod: payMethod || (extra.paid ? 'paystack' : 'cash'),
     momoNumber: momoNumber || '',
     paid: !!extra.paid, paystackRef: extra.paystackRef || null,
-    status: 'queued', location: loc, deliveryDate: deliveryDateStr, priority: afterCutoff,
+    status: 'queued', location: loc, deliveryDate: deliveryDateStr, deliverySlot, priority,
   });
 
   let squadInfo = null;
@@ -470,7 +484,7 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
   db.stats.invalidateDelivered();
   return {
     ok: true, id: created.id,
-    deliveryDate: deliveryDateStr, priority: afterCutoff,
+    deliveryDate: deliveryDateStr, deliverySlot, priority,
     loyaltyEarned: squadInfo ? squadInfo.loyaltyEarned : 0,
     squadGoalHit: !!(squadInfo && squadInfo.squadGoalHit),
   };
@@ -1169,6 +1183,14 @@ app.post('/api/admin/orders/:id/surprise', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Delivery time slots (admin-configured, read by checkout) ─────────────
+app.get('/api/delivery/slots', async (req, res) => {
+  try {
+    const slots = (await db.appConfig.get('delivery_slots')) || ['12:00-14:00', '14:00-16:00', '16:00-18:00'];
+    res.json({ slots, maxDaysAhead: 7 });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── MoMo merchant numbers (admin-configured, read by checkout) ───────────
 // Stored in app_config under key 'momo_numbers' as { mtn, telecel, at, name }
 app.get('/api/momo/numbers', async (req, res) => {
@@ -1195,14 +1217,19 @@ app.get('/api/admin/settings', requireAdmin, async (req, res) => {
     res.json({
       showFreshness: !!(await db.appConfig.get('show_freshness')),
       storeName: (await db.appConfig.get('store_name')) || 'SDGMart',
+      deliverySlots: (await db.appConfig.get('delivery_slots')) || ['12:00-14:00', '14:00-16:00', '16:00-18:00'],
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/admin/settings', requireAdmin, async (req, res) => {
-  const { showFreshness, storeName } = req.body || {};
+  const { showFreshness, storeName, deliverySlots } = req.body || {};
   try {
     if (showFreshness != null) await db.appConfig.set('show_freshness', !!showFreshness);
     if (storeName != null) await db.appConfig.set('store_name', String(storeName).slice(0, 60));
+    if (Array.isArray(deliverySlots)) {
+      const clean = deliverySlots.map(s => String(s).slice(0, 20).trim()).filter(Boolean).slice(0, 12);
+      await db.appConfig.set('delivery_slots', clean);
+    }
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
