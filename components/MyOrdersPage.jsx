@@ -86,7 +86,7 @@ const MyOrdersPage = ({ setPage, openTracking, setCart }) => {
     if (!r.ok) { alert('Could not submit — please try again'); return; }
     setIssueFor(null);
     setIssue({ issueType: 'missing', description: '' });
-    alert('Thanks — your report has been sent. We will reach out on WhatsApp soon.');
+    alert("Thanks — your report has been sent. We'll reach out soon.");
   };
 
   const statusBadge = (s) => {

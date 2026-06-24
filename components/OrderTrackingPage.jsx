@@ -5,7 +5,7 @@
 //  - assigned + queueAhead === 0 → "You are NEXT — ETA based on distance"
 //  - in_transit → live map with rider's blinking position
 //  - delivered → success state
-const OrderTrackingPage = ({ orderId, currentUser, setPage }) => {
+const OrderTrackingPage = ({ orderId, currentUser, setPage, setCart }) => {
   const isMobile = useMobile();
   const [data, setData] = React.useState(null);
   const [err, setErr] = React.useState('');
@@ -144,10 +144,32 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage }) => {
 
   const o = data.order;
   const status = o.status;
+  const fmtDeliveryDate = (ymd) => {
+    if (!ymd) return '';
+    const t = new Date().toISOString().slice(0, 10);
+    const tm = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    if (ymd === t) return 'Today';
+    if (ymd === tm) return 'Tomorrow';
+    try { return new Date(ymd + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }); } catch (_) { return ymd; }
+  };
+  const reorder = () => {
+    const items = Array.isArray(o.items) ? o.items : [];
+    const products = window.PRODUCTS || [];
+    const newCart = [];
+    items.forEach(it => { const f = products.find(p => p.id === it.id); if (f && (f.stock || 0) > 0) newCart.push({ ...f, qty: it.qty || 1 }); });
+    if (!newCart.length) { alert('None of these items are in stock right now — sorry!'); return; }
+    if (setCart) setCart(newCart);
+    setPage('checkout');
+  };
   let primaryMsg, secondaryMsg, accent = 'var(--sage)';
   if (status === 'queued') {
-    primaryMsg = o.priority ? '⭐ Priority queued for tomorrow at 12 PM' : '🕑 Queued for the 12 PM dispatch';
-    secondaryMsg = 'A rider will be assigned when the dispatch starts.';
+    if (o.deliverySlot) {
+      primaryMsg = `🗓 Scheduled · ${o.deliverySlot}`;
+      secondaryMsg = `We'll deliver on ${fmtDeliveryDate(o.deliveryDate)} during your ${o.deliverySlot} slot. A rider is assigned closer to the time.`;
+    } else {
+      primaryMsg = o.priority ? '⭐ Priority — queued for tomorrow at 12 PM' : '🕑 Queued for the 12 PM dispatch';
+      secondaryMsg = 'A rider will be assigned when the dispatch starts.';
+    }
     accent = '#C8923A';
   } else if (status === 'assigned' && data.queueAhead > 0) {
     primaryMsg = `${data.queueAhead} ${data.queueAhead === 1 ? 'delivery' : 'deliveries'} ahead of you`;
@@ -181,8 +203,8 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage }) => {
         <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 24, fontWeight: 700, marginTop: 4, color: accent }}>{primaryMsg}</h1>
         <div style={{ fontSize: 14, color: 'var(--warm-gray)', marginTop: 6, lineHeight: 1.5 }}>{secondaryMsg}</div>
 
-        {/* Notification permission CTA */}
-        {notifPermission === 'default' && (
+        {/* Notification permission CTA — only while the order is still active */}
+        {status !== 'delivered' && notifPermission === 'default' && (
           <div style={{ marginTop: 14, background: 'var(--cream)', borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
             <div style={{ fontSize: 12 }}>🔔 Get notified when your rider is on the way</div>
             <button onClick={requestNotifPermission}
@@ -192,14 +214,29 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage }) => {
           </div>
         )}
 
-        {/* Map */}
-        <div style={{ marginTop: 18 }}>
-          <div ref={mapContainerRef} style={{ height: 340, width: '100%', borderRadius: 10, overflow: 'hidden', border: '1px solid var(--cream-dark)' }} />
-        </div>
+        {/* Delivered → thank-you + reorder instead of the live map */}
+        {status === 'delivered' ? (
+          <div style={{ marginTop: 18, background: 'var(--cream)', borderRadius: 12, padding: '22px 20px', textAlign: 'center' }}>
+            <div style={{ fontSize: 40 }}>🎉</div>
+            <div style={{ fontFamily: 'var(--font-head)', fontSize: 18, fontWeight: 700, marginTop: 6 }}>Thank you for ordering with SDGMart!</div>
+            <div style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 4 }}>We hope everything arrived just right. 🙏</div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 16, flexWrap: 'wrap' }}>
+              <button onClick={reorder} style={{ background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '11px 20px', fontWeight: 700, fontSize: 14, border: 'none', cursor: 'pointer' }}>🔁 Order again</button>
+              <button onClick={() => setPage('orders')} style={{ background: 'var(--white)', color: 'var(--warm-black)', border: '1px solid var(--cream-dark)', borderRadius: 10, padding: '11px 20px', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>📦 My orders</button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ marginTop: 18 }}>
+            <div ref={mapContainerRef} style={{ height: 340, width: '100%', borderRadius: 10, overflow: 'hidden', border: '1px solid var(--cream-dark)' }} />
+          </div>
+        )}
 
         {/* Order summary */}
         <div style={{ marginTop: 16, fontSize: 13, color: 'var(--warm-gray)' }}>
           <div>📍 <strong style={{ color: 'var(--warm-black)' }}>{o.location?.address || o.address || o.neighborhood}</strong></div>
+          {status !== 'delivered' && o.deliveryDate && (
+            <div style={{ marginTop: 4 }}>📅 Delivery: <strong style={{ color: 'var(--warm-black)' }}>{fmtDeliveryDate(o.deliveryDate)}{o.deliverySlot ? ` · ${o.deliverySlot}` : ''}</strong></div>
+          )}
           <div style={{ marginTop: 4 }}>💰 GHS {Number(o.total || 0).toFixed(2)}</div>
           {data.rider && (
             <div style={{ marginTop: 4 }}>

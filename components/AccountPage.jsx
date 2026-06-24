@@ -169,6 +169,7 @@ const AccountPage = ({ setPage, currentUser, setCurrentUser }) => {
         {adding && (
           <div style={{ marginTop: 16, padding: 16, background: 'var(--cream)', borderRadius: 10 }}>
             {/* Label picker */}
+            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', display: 'block', marginBottom: 6 }}>Label <span style={{ color: 'var(--accent-red)' }}>*</span></label>
             <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
               {['Home', 'Work'].map(l => (
                 <button key={l} onClick={() => setDraft(d => ({ ...d, label: l }))}
@@ -187,6 +188,7 @@ const AccountPage = ({ setPage, currentUser, setCurrentUser }) => {
             )}
 
             {/* Neighborhood with custom option */}
+            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', display: 'block', marginBottom: 4 }}>Neighborhood <span style={{ color: 'var(--accent-red)' }}>*</span></label>
             <select value={draft.neighborhood} onChange={e => setDraft(d => ({ ...d, neighborhood: e.target.value }))} style={inputS}>
               <option value="">Select neighborhood…</option>
               {(window.NEIGHBORHOODS || []).map(n => <option key={n} value={n}>{n}</option>)}

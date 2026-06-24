@@ -585,13 +585,13 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                   </tr>
                 </thead>
                 <tbody>
-                  {orders.map((o, i) => (
+                  {orders.slice(0, 10).map((o, i) => (
                     <tr key={o.id} style={{ borderTop: '1px solid var(--cream-dark)', background: i % 2 === 0 ? 'var(--white)' : 'var(--cream)' }}>
-                      <td style={{ padding: '12px 16px', fontWeight: 700, color: 'var(--sage-dark)' }}>{o.id}</td>
-                      <td style={{ padding: '12px 16px', fontWeight: 600 }}>{o.customer}</td>
+                      <td style={{ padding: '12px 16px', fontWeight: 700, color: 'var(--sage-dark)' }}>{window.orderCode(o.id)}</td>
+                      <td style={{ padding: '12px 16px', fontWeight: 600 }}>{o.customer || o.customerName || '—'}</td>
                       <td style={{ padding: '12px 16px', color: 'var(--warm-gray)' }}>{o.neighborhood}</td>
-                      <td style={{ padding: '12px 16px', color: 'var(--warm-gray)', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.items}</td>
-                      <td style={{ padding: '12px 16px', fontWeight: 700 }}>GHS {o.total.toFixed(2)}</td>
+                      <td style={{ padding: '12px 16px', color: 'var(--warm-gray)', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{Array.isArray(o.items) ? o.items.map(it => `${it.qty || 1}× ${it.name}`).join(', ') : ''}</td>
+                      <td style={{ padding: '12px 16px', fontWeight: 700 }}>GHS {Number(o.total || 0).toFixed(2)}</td>
                       <td style={{ padding: '12px 16px' }}>
                         <span style={{ background: `${statusColor[o.status]}22`, color: statusColor[o.status], borderRadius: 20, padding: '3px 10px', fontWeight: 700, fontSize: 11 }}>{o.status}</span>
                       </td>

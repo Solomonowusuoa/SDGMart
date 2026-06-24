@@ -306,6 +306,7 @@ const App = () => {
           orderId={trackingOrderId}
           currentUser={currentUser}
           setPage={navigateTo}
+          setCart={setCart}
         />
       )}
 
@@ -372,11 +373,17 @@ class AppErrorBoundary extends React.Component {
           <div style={{ textAlign: 'center', maxWidth: 360 }}>
             <div style={{ fontSize: 40 }}>😞</div>
             <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, marginTop: 8 }}>Something hiccuped</h2>
-            <p style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 8, lineHeight: 1.5 }}>The page hit an error. Reloading usually fixes it.</p>
-            <button onClick={() => { this.setState({ error: null }); location.reload(); }}
-              style={{ marginTop: 16, background: '#1A1A1A', color: '#fff', borderRadius: 10, padding: '12px 24px', fontWeight: 700, fontSize: 14, border: 'none', cursor: 'pointer' }}>
-              Reload
-            </button>
+            <p style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 8, lineHeight: 1.5 }}>The page hit an error. Try reloading — if it keeps happening, sign out and restart.</p>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 16, flexWrap: 'wrap' }}>
+              <button onClick={() => { this.setState({ error: null }); location.reload(); }}
+                style={{ background: '#1A1A1A', color: '#fff', borderRadius: 10, padding: '12px 24px', fontWeight: 700, fontSize: 14, border: 'none', cursor: 'pointer' }}>
+                Reload
+              </button>
+              <button onClick={() => { try { sessionStorage.clear(); } catch (_) {} location.reload(); }}
+                style={{ background: '#EDEAE2', color: '#1A1A1A', borderRadius: 10, padding: '12px 24px', fontWeight: 700, fontSize: 14, border: 'none', cursor: 'pointer' }}>
+                Sign out &amp; restart
+              </button>
+            </div>
           </div>
         </div>
       );
