@@ -393,11 +393,11 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   React.useEffect(() => { if (adminTab === 'errors') loadErrors(); }, [adminTab, loadErrors]);
 
   // ── Settings tab state ──
-  const [settings, setSettings] = React.useState({ showFreshness: false });
+  const [settings, setSettings] = React.useState({ showFreshness: false, deductStock: false });
   const [settingsSaved, setSettingsSaved] = React.useState('');
   const [slotsText, setSlotsText] = React.useState('');
   const loadSettings = React.useCallback(() => {
-    apiFetch('/api/admin/settings').then(r => r.ok ? r.json() : {}).then(s => { setSettings({ showFreshness: !!s.showFreshness }); setSlotsText((s.deliverySlots || []).join('\n')); }).catch(() => {});
+    apiFetch('/api/admin/settings').then(r => r.ok ? r.json() : {}).then(s => { setSettings({ showFreshness: !!s.showFreshness, deductStock: !!s.deductStock }); setSlotsText((s.deliverySlots || []).join('\n')); }).catch(() => {});
   }, []);
   React.useEffect(() => { if (adminTab === 'settings') loadSettings(); }, [adminTab, loadSettings]);
   const saveSettings = async (patch) => {
@@ -1405,6 +1405,19 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                 <button onClick={() => saveSettings({ showFreshness: !settings.showFreshness })}
                   style={{ flexShrink: 0, width: 52, height: 30, borderRadius: 999, background: settings.showFreshness ? 'var(--sage)' : 'var(--cream-dark)', position: 'relative', transition: 'background .2s', border: 'none', cursor: 'pointer' }}>
                   <span style={{ position: 'absolute', top: 3, left: settings.showFreshness ? 25 : 3, width: 24, height: 24, borderRadius: '50%', background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.2)' }} />
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, marginTop: 20, paddingTop: 20, borderTop: '1px solid var(--cream-dark)' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: 15 }}>Deduct stock on each order</div>
+                  <div style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 4, lineHeight: 1.5 }}>
+                    When ON, placing an order automatically reduces each product's stock count. Leave OFF while stock is sourced from partners on demand — turn it on once you hold your own inventory.
+                  </div>
+                </div>
+                <button onClick={() => saveSettings({ deductStock: !settings.deductStock })}
+                  style={{ flexShrink: 0, width: 52, height: 30, borderRadius: 999, background: settings.deductStock ? 'var(--sage)' : 'var(--cream-dark)', position: 'relative', transition: 'background .2s', border: 'none', cursor: 'pointer' }}>
+                  <span style={{ position: 'absolute', top: 3, left: settings.deductStock ? 25 : 3, width: 24, height: 24, borderRadius: '50%', background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.2)' }} />
                 </button>
               </div>
               {settingsSaved && <div style={{ marginTop: 16, fontSize: 13, color: 'var(--sage)' }}>✓ {settingsSaved}</div>}

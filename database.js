@@ -115,6 +115,19 @@ const products = {
     if (error) throw error;
     return rowsOut(data).filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
   },
+  // Reduce stock for each ordered line item (used only when the deduct_stock
+  // admin setting is ON). Best-effort read-modify-write; never throws.
+  async decrementStock(items) {
+    for (const it of (items || [])) {
+      if (!it || it.id == null || it.birthdayGift) continue;
+      try {
+        const { data } = await sb.from('products').select('stock').eq('id', it.id).maybeSingle();
+        if (!data) continue;
+        const next = Math.max(0, Number(data.stock || 0) - Number(it.qty || 1));
+        await sb.from('products').update({ stock: next }).eq('id', it.id);
+      } catch (_) { /* keep going */ }
+    }
+  },
 };
 
 // ── Users ────────────────────────────────────────────────────────────────
@@ -1047,6 +1060,7 @@ module.exports = {
   addresses, reviews, issueReports, promotions, productRequests, stats,
   metrics, leaderboard, referrals, errorLog, pendingPayments,
   pushSubs, searchLog, recurring, appConfig,
+  rowOut, rowsOut,
   hashPassword, verifyPassword, validatePasswordStrength,
   rateCheck, rateClear,
   makeEmailToken, consumeEmailToken,

@@ -130,7 +130,16 @@ function riderOnly(req, res, next) {
   if (!req.user || req.user.role !== 'rider') return res.status(403).json({ error: 'Rider only' });
   next();
 }
+// Customer endpoints under /api/me/* must never run for riders — riders live in
+// a separate table with their own ids, so a rider hitting /api/me/* would
+// read or overwrite an unrelated customer's row.
+function customerOnly(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Sign in required' });
+  if (req.user.role === 'rider') return res.status(403).json({ error: 'Not available for riders' });
+  next();
+}
 app.use(authMiddleware);
+app.use('/api/me', customerOnly);
 
 // ── PNG icon generator (no external deps) ────────────────────────────────
 function makeCRCTable() {
@@ -212,10 +221,12 @@ function createIconSVG() {
 function ensureIcons() {
   const iconsDir = path.join(__dirname, 'icons');
   if (!fs.existsSync(iconsDir)) fs.mkdirSync(iconsDir);
-  // Always overwrite so updates to the icon code propagate to the file system.
-  fs.writeFileSync(path.join(iconsDir, 'icon-192.png'), createIconPNG(192));
-  fs.writeFileSync(path.join(iconsDir, 'icon-512.png'), createIconPNG(512));
-  fs.writeFileSync(path.join(iconsDir, 'icon.svg'), createIconSVG());
+  // Only generate icons that are missing — avoid rewriting 3 files on every boot.
+  const gen = [['icon-192.png', () => createIconPNG(192)], ['icon-512.png', () => createIconPNG(512)], ['icon.svg', createIconSVG]];
+  for (const [name, make] of gen) {
+    const fp = path.join(iconsDir, name);
+    if (!fs.existsSync(fp)) fs.writeFileSync(fp, make());
+  }
 }
 ensureIcons();
 
@@ -307,17 +318,27 @@ app.get('/app.bundle.js', (req, res) => {
 try { _bundleCache = buildAppBundle(); _bundleBuiltAt = newestSourceMtime(); console.log('📦 App bundle pre-built'); }
 catch (e) { console.warn('⚠️  initial bundle build failed (will retry on first request):', e.message); }
 
+// Cached top-seller counts. Scanning the whole orders table is expensive and
+// /data/products.js runs on every page load — cache it for 5 minutes.
+let _orderCountsCache = { counts: null, at: 0 };
+async function getOrderItemCounts() {
+  if (_orderCountsCache.counts && Date.now() - _orderCountsCache.at < 5 * 60 * 1000) return _orderCountsCache.counts;
+  const ordersList = await db.orders.list();
+  const counts = {};
+  ordersList.forEach(o => {
+    let items = o.items;
+    if (typeof items === 'string') { try { items = JSON.parse(items); } catch (_) { items = []; } }
+    (items || []).forEach(i => { counts[i.id] = (counts[i.id] || 0) + (i.qty || 1); });
+  });
+  _orderCountsCache = { counts, at: Date.now() };
+  return counts;
+}
+
 // ── Dynamic products.js (served from DB) ─────────────────────────────────
 app.get('/data/products.js', async (req, res) => {
   try {
     const productsList = (await db.products.list()).map(p => ({ ...p, bestseller: !!p.bestseller, img: p.img || null }));
-    const ordersList = await db.orders.list();
-    const counts = {};
-    ordersList.forEach(o => {
-      let items = o.items;
-      if (typeof items === 'string') { try { items = JSON.parse(items); } catch (_) { items = []; } }
-      (items || []).forEach(i => { counts[i.id] = (counts[i.id] || 0) + (i.qty || 1); });
-    });
+    const counts = await getOrderItemCounts();
     const TOP_IDS_BY_ORDERS = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => Number(id));
     const categories = ["Cereals","Dairy","Detergents","Rice & Grains","Cooking Oil","Snacks","Canned Foods","Drinks","Desserts"];
     const essentials = [1, 5, 13, 17, 9, 29, 25, 22, 3];
@@ -363,13 +384,7 @@ app.get('/api/products/top', async (req, res) => {
   try {
     const limit = Math.max(1, Math.min(20, parseInt(req.query.limit) || 8));
     const productsList = (await db.products.list()).map(p => ({ ...p, bestseller: !!p.bestseller }));
-    const ordersList = await db.orders.list();
-    const counts = {};
-    ordersList.forEach(o => {
-      let items = o.items;
-      if (typeof items === 'string') { try { items = JSON.parse(items); } catch (_) { items = []; } }
-      (items || []).forEach(i => { counts[i.id] = (counts[i.id] || 0) + (i.qty || 1); });
-    });
+    const counts = await getOrderItemCounts();
     const ranked = productsList.map(p => ({ ...p, _orderCount: counts[p.id] || 0 })).sort((a, b) => b._orderCount - a._orderCount);
     const realTop = ranked.filter(p => p._orderCount > 0).slice(0, limit);
     if (realTop.length < limit) {
@@ -435,15 +450,54 @@ async function birthdayGiftStatus(user) {
   return { cfg, eligible, year };
 }
 
+// ── Server-authoritative pricing ─────────────────────────────────────────
+// NEVER trust client prices / subtotal / total / amount. Recompute everything
+// from DB product prices + active promos + the signed-in user's discount &
+// loyalty. Used by both order creation and Paystack init so the charge and the
+// stored order always match reality.
+const STANDARD_DELIVERY = 10;
+const FREE_DELIVERY_MIN = 150;
+async function computeOrderPricing(reqUser, body) {
+  const clientItems = Array.isArray(body.items) ? body.items : [];
+  let promoMap = {};
+  try {
+    const promos = await db.promotions.listActive();
+    (promos || []).forEach(p => (p.productIds || []).forEach(id => {
+      if (!promoMap[id] || p.discountPercent > promoMap[id]) promoMap[id] = p.discountPercent;
+    }));
+  } catch (_) {}
+  const items = [];
+  for (const ci of clientItems) {
+    if (!ci || ci.birthdayGift) continue; // gift is appended separately, always free
+    const p = await db.products.get(ci.id);
+    if (!p) continue; // unknown id → drop (can't be trusted)
+    const qty = Math.max(1, Math.min(99, parseInt(ci.qty, 10) || 1));
+    const pct = Number(promoMap[p.id] || 0);
+    const price = +(Number(p.price) * (1 - pct / 100)).toFixed(2);
+    items.push({ id: p.id, name: p.name, category: p.category, unit: p.unit, price, qty, ...(pct ? { originalPrice: Number(p.price), promoPercent: pct } : {}) });
+  }
+  const subtotal = +items.reduce((s, i) => s + i.price * i.qty, 0).toFixed(2);
+  const discountApplied = !!(reqUser && reqUser.discountPending);
+  const discount = discountApplied ? +(subtotal * 0.05).toFixed(2) : 0;
+  const afterDiscount = +(subtotal - discount).toFixed(2);
+  let loyaltyUsed = 0;
+  if (reqUser && Number(body.loyaltyUsed || 0) > 0) {
+    loyaltyUsed = +Math.min(Number(body.loyaltyUsed), Number(reqUser.loyaltyBalance || 0), afterDiscount).toFixed(2);
+  }
+  const afterLoyalty = +(afterDiscount - loyaltyUsed).toFixed(2);
+  const firstOrderFree = !!(reqUser && reqUser.id && reqUser.role !== 'guest' && reqUser.firstOrderDone === false);
+  const delivery = (firstOrderFree || afterLoyalty >= FREE_DELIVERY_MIN) ? 0 : STANDARD_DELIVERY;
+  const total = +(afterLoyalty + delivery).toFixed(2);
+  return { items, subtotal, discount, discountApplied, loyaltyUsed, delivery, total };
+}
+
 // Shared order-creation logic. Used by Cash-on-Delivery (/api/orders) and the
 // Paystack verify/webhook paths. `reqUser` may be null (guest). `extra` carries
 // payment status (paid, paystackRef).
 async function createOrderFromBody(reqUser, body, extra = {}) {
   const {
     customer, phone, neighborhood, address,
-    items, total, delivery,
-    recipientName, recipientPhone, recipientAddress, payMethod, momoNumber,
-    subtotal, discountApplied, loyaltyUsed, location,
+    recipientName, recipientPhone, recipientAddress, payMethod, momoNumber, location,
     deliveryDate: reqDate, deliverySlot: reqSlot,
   } = body || {};
   const userId = reqUser ? reqUser.id : null;
@@ -467,18 +521,21 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
   }
   const loc = location && typeof location.lat === 'number' ? location : null;
 
-  // Birthday free gift — server-validated (never trust the client), appended at
-  // price 0, and claimable only once per calendar year.
-  let itemsList = Array.isArray(items) ? [...items] : [];
+  // Authoritative pricing — recomputed on the server from DB prices + promos +
+  // the signed-in user's discount/loyalty. Client prices/subtotal/total ignored.
+  const pricing = await computeOrderPricing(reqUser, body);
+  const itemsList = [...pricing.items];
+
+  // Birthday free gift — server-validated, appended at price 0. The claim is
+  // recorded only AFTER a successful create (below), so a failed create can't
+  // burn the once-a-year gift.
+  let giftClaimYear = null;
   if (reqUser && body.birthdayGift) {
     const { cfg, eligible, year } = await birthdayGiftStatus(reqUser);
     const gid = parseInt(body.birthdayGift, 10);
     if (eligible && (cfg.productIds || []).map(Number).includes(gid)) {
       const gp = await db.products.get(gid);
-      if (gp) {
-        itemsList.push({ id: gp.id, name: gp.name, category: gp.category, unit: gp.unit, qty: 1, price: 0, birthdayGift: true });
-        await db.sb.from('users').update({ birthday_gift_claimed_year: year }).eq('id', reqUser.id);
-      }
+      if (gp) { itemsList.push({ id: gp.id, name: gp.name, category: gp.category, unit: gp.unit, qty: 1, price: 0, birthdayGift: true }); giftClaimYear = year; }
     }
   }
 
@@ -487,21 +544,26 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
     customerName: customer || '', customerPhone: phone || '',
     recipientName: recipientName || '', recipientPhone: recipientPhone || '',
     address: address || recipientAddress || '', neighborhood: neighborhood || '',
-    items: itemsList, subtotal: Number(subtotal || 0), deliveryFee: Number(delivery || 0),
-    discount: Number(discountApplied ? (subtotal * 0.05) : 0),
-    loyaltyUsed: Number(loyaltyUsed || 0),
-    total: Number(total || 0),
+    items: itemsList, subtotal: pricing.subtotal, deliveryFee: pricing.delivery,
+    discount: pricing.discount, loyaltyUsed: pricing.loyaltyUsed, total: pricing.total,
     paymentMethod: payMethod || (extra.paid ? 'paystack' : 'cash'),
     momoNumber: momoNumber || '',
     paid: !!extra.paid, paystackRef: extra.paystackRef || null,
     status: 'queued', location: loc, deliveryDate: deliveryDateStr, deliverySlot, priority,
   });
 
+  // Record the birthday-gift claim now that the order exists.
+  if (giftClaimYear != null) {
+    try { await db.sb.from('users').update({ birthday_gift_claimed_year: giftClaimYear }).eq('id', reqUser.id); } catch (_) {}
+  }
+  // Optional stock depletion — OFF by default (admin toggle 'deduct_stock').
+  try { if (await db.appConfig.get('deduct_stock')) await db.products.decrementStock(itemsList); } catch (_) {}
+
   let squadInfo = null;
   if (userId) {
-    if (discountApplied) await db.squads.consumeDiscount(userId);
-    if (loyaltyUsed) await db.squads.consumeLoyalty(userId, loyaltyUsed);
-    squadInfo = await db.squads.recordSpend(userId, Number(subtotal || total || 0));
+    if (pricing.discountApplied) await db.squads.consumeDiscount(userId);
+    if (pricing.loyaltyUsed) await db.squads.consumeLoyalty(userId, pricing.loyaltyUsed);
+    squadInfo = await db.squads.recordSpend(userId, pricing.subtotal);
     if (!reqUser.firstOrderDone) {
       await db.sb.from('users').update({ first_order_done: true }).eq('id', userId);
       // Credit the referrer (GHS 5) now that this referred user has actually bought.
@@ -511,7 +573,7 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
   }
   db.stats.invalidateDelivered();
   return {
-    ok: true, id: created.id,
+    ok: true, id: created.id, total: pricing.total,
     deliveryDate: deliveryDateStr, deliverySlot, priority,
     loyaltyEarned: squadInfo ? squadInfo.loyaltyEarned : 0,
     squadGoalHit: !!(squadInfo && squadInfo.squadGoalHit),
@@ -555,10 +617,12 @@ app.get('/api/paystack/config', (req, res) => {
 //    payment is confirmed.
 app.post('/api/paystack/init', async (req, res) => {
   if (!PAYSTACK_SECRET_KEY) return res.status(503).json({ error: 'Online payment is not configured' });
-  const { email, amount, draft } = req.body || {};
-  const ghs = Number(amount);
-  if (!(ghs > 0)) return res.status(400).json({ error: 'Invalid amount' });
+  const { email, draft } = req.body || {};
   if (!draft || !Array.isArray(draft.items) || !draft.items.length) return res.status(400).json({ error: 'Empty order' });
+  // Amount is computed server-side from the cart — never trust the client amount.
+  const pricing = await computeOrderPricing(req.user, draft);
+  const ghs = pricing.total;
+  if (!(ghs > 0)) return res.status(400).json({ error: 'Invalid amount' });
   const customerEmail = (email && /\S+@\S+\.\S+/.test(email)) ? email
     : (req.user && req.user.email) ? req.user.email
     : `guest_${Date.now()}@guest.sdgmart.app`;
@@ -968,9 +1032,7 @@ app.get('/api/me/orders', requireAuth, async (req, res) => {
   try {
     const { data, error } = await db.sb.from('orders').select('*').eq('user_id', req.user.id).order('created_at', { ascending: false });
     if (error) throw error;
-    // Convert snake_case to camelCase for the client
-    const out = data.map(o => { const x = {}; for (const k of Object.keys(o)) x[k.replace(/_([a-z])/g, (_, c) => c.toUpperCase())] = o[k]; return x; });
-    res.json(out);
+    res.json(db.rowsOut(data));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1034,8 +1096,7 @@ app.put('/api/me/profile', requireAuth, async (req, res) => {
     }
     const { data, error } = await db.sb.from('users').update(patch).eq('id', req.user.id).select().single();
     if (error) throw error;
-    const out = {}; for (const k of Object.keys(data)) out[k.replace(/_([a-z])/g, (_, c) => c.toUpperCase())] = data[k];
-    res.json(out);
+    res.json(db.rowOut(data));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1275,15 +1336,17 @@ app.get('/api/admin/settings', requireAdmin, async (req, res) => {
   try {
     res.json({
       showFreshness: !!(await db.appConfig.get('show_freshness')),
+      deductStock: !!(await db.appConfig.get('deduct_stock')),
       storeName: (await db.appConfig.get('store_name')) || 'SDGMart',
       deliverySlots: (await db.appConfig.get('delivery_slots')) || ['12:00-14:00', '14:00-16:00', '16:00-18:00'],
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/admin/settings', requireAdmin, async (req, res) => {
-  const { showFreshness, storeName, deliverySlots } = req.body || {};
+  const { showFreshness, storeName, deliverySlots, deductStock } = req.body || {};
   try {
     if (showFreshness != null) await db.appConfig.set('show_freshness', !!showFreshness);
+    if (deductStock != null) await db.appConfig.set('deduct_stock', !!deductStock);
     if (storeName != null) await db.appConfig.set('store_name', String(storeName).slice(0, 60));
     if (Array.isArray(deliverySlots)) {
       const clean = deliverySlots.map(s => String(s).slice(0, 20).trim()).filter(Boolean).slice(0, 12);
@@ -1343,6 +1406,22 @@ app.delete('/api/me/recurring/:id', requireAuth, async (req, res) => {
 app.get('/privacy', (req, res) => res.sendFile(path.join(__dirname, 'privacy.html')));
 app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, 'terms.html')));
 app.get('/about', (req, res) => res.sendFile(path.join(__dirname, 'about.html')));
+
+// ── Block direct download of source, configs, docs, and schema ───────────
+// express.static(__dirname) below would otherwise serve server.js, database.js,
+// HANDOFF.md, package.json, *.sql, etc. as plain text. The client only ever
+// needs the built bundle (/app.bundle.js), /data, /icons, the HTML, css, sw.js
+// and manifest — all of which are unaffected by this guard.
+app.use((req, res, next) => {
+  const p = req.path;
+  if (/^\/components\//.test(p)
+    || /^\/(server|database|hooks|tweaks-panel|App)\.jsx?$/.test(p)
+    || /^\/package(-lock)?\.json$/.test(p)
+    || /\.(md|sql|log|sh|ya?ml|env)$/i.test(p)) {
+    return res.status(404).end();
+  }
+  next();
+});
 
 // ── Static files ─────────────────────────────────────────────────────────
 app.use('/icons', express.static(path.join(__dirname, 'icons')));
