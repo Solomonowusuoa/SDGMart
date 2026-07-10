@@ -386,9 +386,10 @@ const _distKm = (a, b) => {
 };
 
 const orders = {
-  async list({ status = null } = {}) {
+  async list({ status = null, limit = null } = {}) {
     let q = sb.from('orders').select('*').order('created_at', { ascending: false });
     if (status) q = q.eq('status', status);
+    if (limit) q = q.limit(limit);
     const { data, error } = await q;
     if (error) throw error;
     return rowsOut(data);

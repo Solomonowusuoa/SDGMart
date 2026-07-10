@@ -85,7 +85,12 @@ function getGoogleClient() {
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.set('trust proxy', 1);
-app.use(cors());
+// CORS locked to our known web origins. Same-origin app calls and
+// server-to-server requests (no Origin header — curl, webhooks) are allowed.
+const ALLOWED_ORIGINS = ['https://sdg-mart.com', 'https://www.sdg-mart.com', 'https://sdgmart.onrender.com'];
+app.use(cors({
+  origin(origin, cb) { cb(null, !origin || ALLOWED_ORIGINS.includes(origin)); },
+}));
 // Capture the raw body so we can verify the Paystack webhook signature.
 app.use(express.json({ limit: '3mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 
@@ -433,7 +438,7 @@ app.get('/api/admin/inventory/low', requireAdmin, async (req, res) => {
 
 // ── Orders API ───────────────────────────────────────────────────────────
 app.get('/api/orders', requireAdmin, async (req, res) => {
-  try { res.json(await db.orders.list()); }
+  try { res.json(await db.orders.list({ limit: Math.min(2000, parseInt(req.query.limit, 10) || 500) })); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
