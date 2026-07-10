@@ -342,7 +342,7 @@ app.get('/data/products.js', async (req, res) => {
     const TOP_IDS_BY_ORDERS = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => Number(id));
     const categories = ["Cereals","Dairy","Detergents","Rice & Grains","Cooking Oil","Snacks","Canned Foods","Drinks","Desserts"];
     const essentials = [1, 5, 13, 17, 9, 29, 25, 22, 3];
-    const neighborhoods = ["Tamale Central","Kalpohin","Lamashegu","Sagnarigu","Nyohini","Choggu","Kalpohini","Vittin","Tishigu","Gumbihini","Jisonayili"];
+    const neighborhoods = ["Tamale Central","Kalpohin","Lamashegu","Sagnarigu","Nyohini","Choggu","Vittin","Tishigu","Gumbihini","Jisonayili"];
     // Customer-facing freshness/expiry display is off by default; admin can flip it on.
     const showFreshness = !!(await db.appConfig.get('show_freshness'));
     // LocationIQ publishable key for maps + geocoding (falls back to OSM when blank).
