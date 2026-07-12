@@ -227,6 +227,11 @@ const AccountPage = ({ setPage, currentUser, setCurrentUser }) => {
           </div>
         )}
       </section>
+
+      {/* Feedback / complaints */}
+      <section style={{ marginBottom: 20 }}>
+        <FeedbackBox />
+      </section>
     </div>
   );
 };

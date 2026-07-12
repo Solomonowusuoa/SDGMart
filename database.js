@@ -771,9 +771,13 @@ const issueReports = {
     return rowOut(data);
   },
   async listAll() {
-    const { data, error } = await sb.from('issue_reports').select('*').order('created_at', { ascending: false });
+    const { data, error } = await sb.from('issue_reports')
+      .select('*, users(name, email)').order('created_at', { ascending: false });
     if (error) throw error;
-    return rowsOut(data);
+    return (data || []).map((r) => {
+      const { users: u, ...rest } = r;
+      return { ...rowOut(rest), userName: u ? u.name : null, userEmail: u ? u.email : null };
+    });
   },
   async resolve(id, note) {
     await sb.from('issue_reports').update({

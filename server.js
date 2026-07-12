@@ -257,6 +257,7 @@ const BUNDLE_FILES = [
   'components/MyOrdersPage.jsx',
   'components/AccountPage.jsx',
   'components/ReviewPromptModal.jsx',
+  'components/FeedbackBox.jsx',
   'components/RequestProductButton.jsx',
   'components/OrderTrackingPage.jsx',
   'tweaks-panel.jsx',
@@ -495,7 +496,7 @@ async function computeOrderPricing(reqUser, body) {
     && afterLoyalty >= FIRST_ORDER_FREE_MIN);
   const delivery = (firstOrderFree || afterLoyalty >= FREE_DELIVERY_MIN) ? 0 : STANDARD_DELIVERY;
   const total = +(afterLoyalty + delivery).toFixed(2);
-  return { items, subtotal, discount, discountApplied, loyaltyUsed, delivery, total };
+  return { items, subtotal, discount, discountApplied, loyaltyUsed, delivery, total, firstOrderFree };
 }
 
 // Shared order-creation logic. Used by Cash-on-Delivery (/api/orders) and the
@@ -571,7 +572,11 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
     if (pricing.discountApplied) await db.squads.consumeDiscount(userId);
     if (pricing.loyaltyUsed) await db.squads.consumeLoyalty(userId, pricing.loyaltyUsed);
     squadInfo = await db.squads.recordSpend(userId, pricing.subtotal);
-    if (!reqUser.firstOrderDone) {
+    // The first-order-free-delivery perk persists until it is actually used:
+    // small (< GHS 50) first orders don't consume it. Referral credit rides the
+    // same flag, so the referrer is credited on the referee's first QUALIFYING
+    // order (also blocks GHS-1 referral farming).
+    if (!reqUser.firstOrderDone && pricing.firstOrderFree) {
       await db.sb.from('users').update({ first_order_done: true }).eq('id', userId);
       // Credit the referrer (GHS 5) now that this referred user has actually bought.
       await db.referrals.creditFirstPurchase(reqUser);
@@ -1142,6 +1147,20 @@ app.post('/api/me/orders/:id/report-issue', requireAuth, async (req, res) => {
     res.json(rep);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+// General feedback / complaints (no order attached) — appear in Admin → Issues.
+// Requires supabase-schema-feedback.sql (issue_reports.order_id made nullable).
+app.post('/api/feedback', requireAuth, async (req, res) => {
+  const description = String((req.body && req.body.message) || '').trim();
+  if (!description) return res.status(400).json({ error: 'Please write your feedback' });
+  const rate = db.rateCheck(`feedback:${req.user.id}`, { windowMs: 10 * 60 * 1000, max: 5 });
+  if (!rate.allowed) return res.status(429).json({ error: 'Too many messages — please try again later' });
+  try {
+    res.json(await db.issueReports.create({ orderId: null, userId: req.user.id, issueType: 'feedback', description }));
+  } catch (e) {
+    console.error('feedback save failed:', e.message);
+    res.status(500).json({ error: 'Could not send right now — please use the WhatsApp button instead.' });
+  }
+});
 app.get('/api/admin/issue-reports', requireAdmin, async (req, res) => {
   try { res.json(await db.issueReports.listAll()); }
   catch (e) { res.status(500).json({ error: e.message }); }
@@ -1186,6 +1205,78 @@ app.get('/api/leaderboard', async (req, res) => {
       referralCount: u.referralCount,
     })));
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Retention (admin) — returning vs new customers per month + lapsed list ──
+const LAPSED_AFTER_DAYS = 30;
+app.get('/api/admin/retention', requireAdmin, async (req, res) => {
+  try {
+    const { data: orderRows, error } = await db.sb.from('orders')
+      .select('user_id, created_at')
+      .not('user_id', 'is', null)
+      .neq('status', 'cancelled')
+      .order('created_at', { ascending: true })
+      .limit(20000);
+    if (error) throw error;
+    const monthKey = (iso) => String(iso).slice(0, 7);
+    const byUser = new Map();
+    for (const o of orderRows || []) {
+      const b = byUser.get(o.user_id) || { first: o.created_at, last: o.created_at, count: 0, months: new Set() };
+      b.count += 1;
+      if (o.created_at < b.first) b.first = o.created_at;
+      if (o.created_at > b.last) b.last = o.created_at;
+      b.months.add(monthKey(o.created_at));
+      byUser.set(o.user_id, b);
+    }
+    // Last 6 calendar months: active = ordered that month; returning = also
+    // ordered in an earlier month; rate = share of the month's customers who
+    // are repeat customers.
+    const now = new Date();
+    const months = [];
+    for (let k = 5; k >= 0; k--) {
+      const ym = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - k, 1)).toISOString().slice(0, 7);
+      let active = 0, returning = 0;
+      for (const b of byUser.values()) {
+        if (!b.months.has(ym)) continue;
+        active += 1;
+        if (monthKey(b.first) < ym) returning += 1;
+      }
+      months.push({ month: ym, active, returning, newCustomers: active - returning, rate: active ? Math.round((returning / active) * 100) : 0 });
+    }
+    // Lapsed = has ordered before, but nothing in the last LAPSED_AFTER_DAYS days.
+    const cutoff = new Date(Date.now() - LAPSED_AFTER_DAYS * 86400000).toISOString();
+    const lapsedIds = [...byUser.entries()].filter(([, b]) => b.last < cutoff).map(([id]) => id).slice(0, 500);
+    let lapsed = [];
+    if (lapsedIds.length) {
+      const { data: us } = await db.sb.from('users').select('id, name, email, phone, role').in('id', lapsedIds);
+      const { data: subs } = await db.sb.from('push_subscriptions').select('user_id').in('user_id', lapsedIds);
+      const pushSet = new Set((subs || []).map((s) => s.user_id));
+      lapsed = (us || []).filter((u) => u.role !== 'admin').map((u) => {
+        const b = byUser.get(u.id);
+        return {
+          id: u.id, name: u.name, email: u.email, phone: u.phone,
+          orders: b.count, lastOrder: b.last,
+          daysSince: Math.floor((Date.now() - new Date(b.last).getTime()) / 86400000),
+          hasPush: pushSet.has(u.id),
+        };
+      }).sort((a, z) => z.daysSince - a.daysSince);
+    }
+    res.json({ months, lapsedAfterDays: LAPSED_AFTER_DAYS, lapsed });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Win-back push to selected lapsed customers (only lands for users with a
+// push subscription; pushToUser silently skips the rest).
+app.post('/api/admin/retention/notify', requireAdmin, async (req, res) => {
+  const { userIds, title, body } = req.body || {};
+  if (!Array.isArray(userIds) || !userIds.length) return res.status(400).json({ error: 'userIds required' });
+  const t = String(title || '').trim().slice(0, 80) || '👋 We miss you at SDGMart!';
+  const b = String(body || '').trim().slice(0, 200) || "It's been a while — come back and see what's new. 🛒";
+  let attempted = 0;
+  for (const id of userIds.slice(0, 200)) {
+    await pushToUser(Number(id), { title: t, body: b, url: '/' });
+    attempted += 1;
+  }
+  res.json({ ok: true, attempted });
 });
 
 // Client-side crash reporter (from the React error boundary)

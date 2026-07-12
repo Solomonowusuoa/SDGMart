@@ -541,6 +541,10 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
             ));
           })()}
         </div>
+        {/* Feedback / problem-report box */}
+        <div style={{ maxWidth: 640, margin: '36px auto 0' }}>
+          <FeedbackBox />
+        </div>
         <div style={{ maxWidth: 1280, margin: '32px auto 0', paddingTop: 20, borderTop: '1px solid rgba(255,255,255,.15)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
           <span style={{ fontSize: 12, opacity: .5 }}>© 2026 SDGMart. Tamale, Ghana. All rights reserved.</span>
           <span style={{ fontSize: 12, opacity: .5 }}>

@@ -569,7 +569,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                   <span style={{ fontSize: 18 }}>🎁</span>
                   <div style={{ fontSize: 13, lineHeight: 1.5, color: '#7A5A00' }}>
                     <div style={{ fontWeight: 700 }}>Your first delivery is FREE on orders above GHS {FIRST_ORDER_FREE_MIN}</div>
-                    Add <strong>GHS {(FIRST_ORDER_FREE_MIN - afterLoyalty).toFixed(2)}</strong> more to skip the GHS {STANDARD_DELIVERY} delivery fee.
+                    Add <strong>GHS {(FIRST_ORDER_FREE_MIN - afterLoyalty).toFixed(2)}</strong> more to skip the GHS {STANDARD_DELIVERY} delivery fee — or keep it for a bigger order; it doesn't expire until you use it.
                   </div>
                 </div>
               )}

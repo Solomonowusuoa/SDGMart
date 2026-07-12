@@ -366,7 +366,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
     ['overview','📊 Overview'],['dashboard','📈 Dashboard'],['orders','📦 Orders'],['inventory','🏪 Inventory'],
     ['expiry','⏰ Expiry'],['routes','🗺 Routes'],['riders','🛵 Riders'],
     ['promotions','⚡ Promotions'],['requests','🛒 Requests'],['issues','🚨 Issues'],
-    ['analytics','🔎 Analytics'],['leaderboard','🏆 Leaderboard'],['comms','📣 Comms'],
+    ['analytics','🔎 Analytics'],['retention','🔁 Retention'],['leaderboard','🏆 Leaderboard'],['comms','📣 Comms'],
     ['errors','🐞 Errors'],['birthday','🎂 Birthday Gifts'],['settings','⚙️ Settings'],['security','🔐 Security'],
   ];
 
@@ -384,6 +384,25 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
     apiFetch('/api/admin/leaderboard?limit=15').then(r => r.ok ? r.json() : []).then(setLeaders).catch(() => {});
   }, []);
   React.useEffect(() => { if (adminTab === 'leaderboard') loadLeaders(); }, [adminTab, loadLeaders]);
+
+  // ── Retention state ──
+  const [retention, setRetention] = React.useState(null);
+  const [winback, setWinback] = React.useState({ title: '👋 We miss you at SDGMart!', body: "It's been a while — come back and see what's new. We'd love to deliver to you again. 🛒" });
+  const [winbackStatus, setWinbackStatus] = React.useState('');
+  const loadRetention = React.useCallback(() => {
+    apiFetch('/api/admin/retention').then(r => r.ok ? r.json() : null).then(setRetention).catch(() => {});
+  }, []);
+  React.useEffect(() => { if (adminTab === 'retention') loadRetention(); }, [adminTab, loadRetention]);
+  const sendWinback = async (userIds) => {
+    if (!userIds.length) { setWinbackStatus('No customers with push subscriptions to notify.'); return; }
+    setWinbackStatus('Sending…');
+    try {
+      const r = await apiFetch('/api/admin/retention/notify', { method: 'POST', body: JSON.stringify({ userIds, title: winback.title, body: winback.body }) });
+      const d = await r.json();
+      setWinbackStatus(r.ok ? `✓ Notification sent to ${d.attempted} customer(s).` : (d.error || 'Failed'));
+    } catch (_) { setWinbackStatus('Network error'); }
+    setTimeout(() => setWinbackStatus(''), 5000);
+  };
 
   // ── Errors state ──
   const [errorLogs, setErrorLogs] = React.useState([]);
@@ -1240,8 +1259,9 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                 {issues.map(i => (
                   <div key={i.id} style={{ background: 'var(--white)', borderRadius: 10, padding: '14px 16px', boxShadow: 'var(--shadow)', opacity: i.resolved ? .6 : 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                      <strong style={{ fontSize: 13 }}>Order {window.orderCode(i.orderId)}</strong>
-                      <span style={{ background: 'rgba(192,57,43,.1)', color: 'var(--accent-red)', borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>{i.issueType}</span>
+                      <strong style={{ fontSize: 13 }}>{i.orderId ? `Order ${window.orderCode(i.orderId)}` : '💬 General feedback'}</strong>
+                      {i.userName && <span style={{ fontSize: 12, color: 'var(--warm-gray)' }}>from {i.userName}{i.userEmail ? ` (${i.userEmail})` : ''}</span>}
+                      <span style={{ background: i.orderId ? 'rgba(192,57,43,.1)' : 'rgba(56,121,191,.12)', color: i.orderId ? 'var(--accent-red)' : '#3879BF', borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>{i.issueType}</span>
                       {i.resolved && <span style={{ background: 'var(--sage)', color: '#fff', borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>RESOLVED</span>}
                       <span style={{ fontSize: 11, color: 'var(--warm-gray)', marginLeft: 'auto' }}>{new Date(i.createdAt).toLocaleString()}</span>
                     </div>
@@ -1349,6 +1369,106 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* RETENTION — returning customers + win-back notifications */}
+        {adminTab === 'retention' && (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 6 }}>
+              <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700 }}>Customer Retention</h1>
+              <button onClick={loadRetention} style={{ fontSize: 12, fontWeight: 700, padding: '7px 14px', borderRadius: 8, background: 'var(--cream)', color: 'var(--warm-gray)' }}>↻ Refresh</button>
+            </div>
+            <p style={{ color: 'var(--warm-gray)', fontSize: 14, marginBottom: 20 }}>Who keeps coming back — and who hasn't ordered in a while, so you can win them back with a push notification.</p>
+            {!retention ? (
+              <div style={{ color: 'var(--warm-gray)', fontSize: 14 }}>Loading…</div>
+            ) : (() => {
+              const cur = retention.months[retention.months.length - 1] || { active: 0, returning: 0, newCustomers: 0, rate: 0 };
+              const withPush = retention.lapsed.filter(l => l.hasPush);
+              return (
+                <>
+                  {/* This-month KPIs */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14, marginBottom: 24 }}>
+                    <StatCard label="Retention rate" value={`${cur.rate}%`} sub="of this month's customers are repeat" accent="#27AE60" />
+                    <StatCard label="Returning this month" value={cur.returning} sub="ordered before + again" accent="#3879BF" />
+                    <StatCard label="New this month" value={cur.newCustomers} sub="first-ever order" accent="#C8923A" />
+                    <StatCard label="Lapsed" value={retention.lapsed.length} sub={`no order in ${retention.lapsedAfterDays}+ days`} accent="#C0392B" />
+                  </div>
+
+                  {/* Month-by-month table */}
+                  <div style={{ background: 'var(--white)', borderRadius: 12, boxShadow: 'var(--shadow)', overflow: 'auto', marginBottom: 28, maxWidth: 640 }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ background: 'var(--cream)', textAlign: 'left' }}>
+                          {['Month', 'Customers', 'Returning', 'New', 'Retention'].map(h => (
+                            <th key={h} style={{ padding: '10px 14px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--warm-gray)' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {retention.months.map(m => (
+                          <tr key={m.month} style={{ borderTop: '1px solid var(--cream-dark)' }}>
+                            <td style={{ padding: '9px 14px', fontWeight: 700 }}>{m.month}</td>
+                            <td style={{ padding: '9px 14px' }}>{m.active}</td>
+                            <td style={{ padding: '9px 14px', color: '#3879BF', fontWeight: 700 }}>{m.returning}</td>
+                            <td style={{ padding: '9px 14px', color: '#C8923A' }}>{m.newCustomers}</td>
+                            <td style={{ padding: '9px 14px' }}>{m.rate}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Lapsed customers + win-back */}
+                  <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Lapsed customers</h2>
+                  <p style={{ color: 'var(--warm-gray)', fontSize: 13, marginBottom: 14 }}>
+                    Ordered before, but nothing in {retention.lapsedAfterDays}+ days. Notifications only reach customers with the 🔔 badge (they allowed push); call or WhatsApp the rest.
+                  </p>
+                  {retention.lapsed.length === 0 ? (
+                    <div style={{ background: 'var(--cream)', borderRadius: 10, padding: 30, textAlign: 'center', color: 'var(--warm-gray)', fontSize: 14 }}>
+                      🎉 Nobody has lapsed — every past customer ordered recently.
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ background: 'var(--white)', borderRadius: 12, boxShadow: 'var(--shadow)', padding: '14px 16px', marginBottom: 16, maxWidth: 640 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>Win-back message</div>
+                        <input value={winback.title} onChange={e => setWinback(w => ({ ...w, title: e.target.value }))} maxLength={80}
+                          style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1.5px solid var(--cream-dark)', fontSize: 13, fontWeight: 700, outline: 'none', marginBottom: 8 }} />
+                        <textarea value={winback.body} onChange={e => setWinback(w => ({ ...w, body: e.target.value }))} rows={2} maxLength={200}
+                          style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1.5px solid var(--cream-dark)', fontSize: 13, outline: 'none', resize: 'vertical', fontFamily: 'inherit' }} />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 10, flexWrap: 'wrap' }}>
+                          <button onClick={() => sendWinback(withPush.map(l => l.id))}
+                            style={{ fontSize: 12, fontWeight: 700, padding: '8px 16px', borderRadius: 8, background: 'var(--sage)', color: '#fff' }}>
+                            🔔 Notify all lapsed with push ({withPush.length})
+                          </button>
+                          {winbackStatus && <span style={{ fontSize: 12, color: 'var(--sage-dark)', fontWeight: 600 }}>{winbackStatus}</span>}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 640 }}>
+                        {retention.lapsed.map(l => (
+                          <div key={l.id} style={{ background: 'var(--white)', borderRadius: 10, padding: '12px 14px', boxShadow: 'var(--shadow)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                            <div style={{ flex: 1, minWidth: 160 }}>
+                              <div style={{ fontWeight: 700, fontSize: 14 }}>{l.name} {l.hasPush && <span title="Has push subscription">🔔</span>}</div>
+                              <div style={{ fontSize: 12, color: 'var(--warm-gray)' }}>{l.phone || l.email || ''}</div>
+                            </div>
+                            <div style={{ fontSize: 12, color: 'var(--warm-gray)', textAlign: 'right' }}>
+                              <div><strong style={{ color: 'var(--accent-red)' }}>{l.daysSince}d</strong> since last order</div>
+                              <div>{l.orders} order{l.orders === 1 ? '' : 's'} total</div>
+                            </div>
+                            {l.hasPush && (
+                              <button onClick={() => sendWinback([l.id])}
+                                style={{ fontSize: 11, fontWeight: 700, padding: '7px 12px', borderRadius: 8, background: 'var(--cream)', color: 'var(--sage-dark)' }}>
+                                Notify
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </>
+              );
+            })()}
           </div>
         )}
 

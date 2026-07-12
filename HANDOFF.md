@@ -28,8 +28,13 @@ User chose a **full wipe** of placeholder products → load the real catalog →
 - **Hardening:** the source-file deny middleware in `server.js` now also 404s `/scripts/*` (CACHE_NAME → `sdgmart-v50-scripts-deny`).
 - ⚠️ **After a full replace:** update the app's **category list** (currently 9, hardcoded in `server.js` `categories` array) to the final set, and **re-point `ESSENTIALS`** (hardcoded product ids in `server.js` ~line 349) since ids change on reinsert. Then bump CACHE_NAME + deploy.
 
+### Shipped 2026-07-12 (this session; CACHE_NAME `sdgmart-v52-feedback-retention`)
+- **First-order free delivery ≥ GHS 50 + persistent perk** (see §7) — small first orders no longer consume it; referral credit now fires on the first *qualifying* order.
+- **FeedbackBox** (`components/FeedbackBox.jsx`): "Spotted a problem? Tell us." card in the HomePage footer + Account page — in-app send (`POST /api/feedback`, rate-limited 5/10min) lands in Admin → Issues as "💬 General feedback (from <name>)"; WhatsApp button always available. **Requires `supabase-schema-feedback.sql` (§4.8) — NOT YET RUN.**
+- **Admin → 🔁 Retention tab**: `GET /api/admin/retention` (last-6-months active/returning/new + rate; lapsed = no order in 30+ days, capped 500) + `POST /api/admin/retention/notify` (win-back push, editable message, only reaches 🔔 push subscribers). Logic verified read-only against prod data; **tab UI not yet eyeballed (needs admin login)**.
+
 ### Still pending at launch
-Enable Birthday Gifts (above) · run `supabase-schema-referrals.sql` if not done · **Paystack live keys** + live webhook + account activation · **Cloudflare orange-cloud flip** (Full-strict first, then purge cache each deploy — §13) · post-deploy test order · clean **test data** in Supabase (throwaway customers `sdgtest-…@example.com` userId 6 and `sdgtest-firstorder@example.com` + test orders ~ids 20–23).
+Enable Birthday Gifts (above) · run `supabase-schema-referrals.sql` **and `supabase-schema-feedback.sql`** if not done · **Paystack live keys** + live webhook + account activation · **Cloudflare orange-cloud flip** (Full-strict first, then purge cache each deploy — §13) · post-deploy test order · clean **test data** in Supabase (throwaway customers `sdgtest-…@example.com` userId 6 and `sdgtest-firstorder@example.com` + test orders ~ids 20–23).
 
 ---
 
@@ -79,6 +84,7 @@ Enable Birthday Gifts (above) · run `supabase-schema-referrals.sql` if not done
 5. `supabase-rls-fix.sql` (enable RLS everywhere)
 6. `supabase-schema-paystack.sql` (orders.paid, orders.paystack_ref, pending_payments)
 7. **`supabase-schema-referrals.sql`** ← **USER STILL NEEDS TO RUN THIS** (users.referred_by, referral_credited, referrals table)
+8. **`supabase-schema-feedback.sql`** ← **USER STILL NEEDS TO RUN THIS** (makes issue_reports.order_id nullable so the general FeedbackBox works — in-app sends fail with a friendly error until then; WhatsApp path unaffected)
 
 ## 5. Day-to-day workflow
 1. Edit files locally.
@@ -103,7 +109,7 @@ Enable Birthday Gifts (above) · run `supabase-schema-referrals.sql` if not done
 - Real order id is a Postgres bigserial. Displayed everywhere as **`SDG-<id>`** via `window.orderCode(id)`.
 - Tracking uses the numeric id (`/api/orders/:id/tracking`). `createOrderFromBody` ignores any client-sent `id`.
 - New orders are `status: 'queued'`, unassigned. **Riders only see orders the admin assigns** (`/api/admin/orders/:id/assign`). Riders see `forRider` (assigned/in_transit only).
-- First order (signed-in) → free delivery **only when the order is ≥ GHS 50** (`FIRST_ORDER_FREE_MIN`, after squad discount + loyalty; mirrored in `server.js` `computeOrderPricing` and `CheckoutPage.jsx`). Any first order — even under 50 — still sets `first_order_done` and credits the referrer (see §8), so a small first order forfeits the free-delivery perk.
+- First order (signed-in) → free delivery **only when the order is ≥ GHS 50** (`FIRST_ORDER_FREE_MIN`, after squad discount + loyalty; mirrored in `server.js` `computeOrderPricing` and `CheckoutPage.jsx`). **The perk persists**: `first_order_done` is set only when a qualifying (≥50) order is placed, so small first orders don't burn it. Referral credit rides the same flag → the referrer is credited on the referee's first **qualifying** order (also blocks GHS-1 referral farming). Guests can never get it (no session → `reqUser` null on every path).
 
 ## 8. Referrals & leaderboard (current behaviour)
 - Signup with a code stores `referred_by` (NO immediate credit).
