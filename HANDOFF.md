@@ -29,7 +29,7 @@ User chose a **full wipe** of placeholder products → load the real catalog →
 - ⚠️ **After a full replace:** update the app's **category list** (currently 9, hardcoded in `server.js` `categories` array) to the final set, and **re-point `ESSENTIALS`** (hardcoded product ids in `server.js` ~line 349) since ids change on reinsert. Then bump CACHE_NAME + deploy.
 
 ### Still pending at launch
-Enable Birthday Gifts (above) · run `supabase-schema-referrals.sql` if not done · **Paystack live keys** + live webhook + account activation · **Cloudflare orange-cloud flip** (Full-strict first, then purge cache each deploy — §13) · post-deploy test order · clean **test data** in Supabase (throwaway customer `sdgtest-…@example.com` userId 6 + test orders ~ids 20–23).
+Enable Birthday Gifts (above) · run `supabase-schema-referrals.sql` if not done · **Paystack live keys** + live webhook + account activation · **Cloudflare orange-cloud flip** (Full-strict first, then purge cache each deploy — §13) · post-deploy test order · clean **test data** in Supabase (throwaway customers `sdgtest-…@example.com` userId 6 and `sdgtest-firstorder@example.com` + test orders ~ids 20–23).
 
 ---
 
@@ -103,7 +103,7 @@ Enable Birthday Gifts (above) · run `supabase-schema-referrals.sql` if not done
 - Real order id is a Postgres bigserial. Displayed everywhere as **`SDG-<id>`** via `window.orderCode(id)`.
 - Tracking uses the numeric id (`/api/orders/:id/tracking`). `createOrderFromBody` ignores any client-sent `id`.
 - New orders are `status: 'queued'`, unassigned. **Riders only see orders the admin assigns** (`/api/admin/orders/:id/assign`). Riders see `forRider` (assigned/in_transit only).
-- First order (signed-in) → free delivery, then sets `first_order_done`, and credits the referrer (see §8).
+- First order (signed-in) → free delivery **only when the order is ≥ GHS 50** (`FIRST_ORDER_FREE_MIN`, after squad discount + loyalty; mirrored in `server.js` `computeOrderPricing` and `CheckoutPage.jsx`). Any first order — even under 50 — still sets `first_order_done` and credits the referrer (see §8), so a small first order forfeits the free-delivery perk.
 
 ## 8. Referrals & leaderboard (current behaviour)
 - Signup with a code stores `referred_by` (NO immediate credit).

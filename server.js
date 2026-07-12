@@ -462,6 +462,7 @@ async function birthdayGiftStatus(user) {
 // stored order always match reality.
 const STANDARD_DELIVERY = 10;
 const FREE_DELIVERY_MIN = 150;
+const FIRST_ORDER_FREE_MIN = 50; // first-order free delivery only when the order is ≥ this (GHS)
 async function computeOrderPricing(reqUser, body) {
   const clientItems = Array.isArray(body.items) ? body.items : [];
   let promoMap = {};
@@ -490,7 +491,8 @@ async function computeOrderPricing(reqUser, body) {
     loyaltyUsed = +Math.min(Number(body.loyaltyUsed), Number(reqUser.loyaltyBalance || 0), afterDiscount).toFixed(2);
   }
   const afterLoyalty = +(afterDiscount - loyaltyUsed).toFixed(2);
-  const firstOrderFree = !!(reqUser && reqUser.id && reqUser.role !== 'guest' && reqUser.firstOrderDone === false);
+  const firstOrderFree = !!(reqUser && reqUser.id && reqUser.role !== 'guest' && reqUser.firstOrderDone === false
+    && afterLoyalty >= FIRST_ORDER_FREE_MIN);
   const delivery = (firstOrderFree || afterLoyalty >= FREE_DELIVERY_MIN) ? 0 : STANDARD_DELIVERY;
   const total = +(afterLoyalty + delivery).toFixed(2);
   return { items, subtotal, discount, discountApplied, loyaltyUsed, delivery, total };

@@ -2,8 +2,10 @@
 // GHS 10 delivery for orders under FREE_DELIVERY_MIN, free above it.
 const STANDARD_DELIVERY = 10;
 const FREE_DELIVERY_MIN = 150;
-// Signed-in users also get their first ever order delivered free.
+// Signed-in users also get their first ever order delivered free — but only
+// when that order is at least FIRST_ORDER_FREE_MIN (GHS). Mirrors server.js.
 const FIRST_ORDER_FREE = true;
+const FIRST_ORDER_FREE_MIN = 50;
 
 // Hoisted out of CheckoutPage so React doesn't recreate the component on
 // every render (which would unmount the input and steal focus on each
@@ -128,10 +130,11 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   const loyaltyUsed = useLoyalty ? Math.min(loyaltyAvailable, subtotalAfterDiscount) : 0;
   const afterLoyalty = subtotalAfterDiscount - loyaltyUsed;
   // First-order-free for signed-in users (prevents guest abuse: guests pay normally)
-  const isFirstOrderFree = FIRST_ORDER_FREE
+  const isFirstOrderEligible = FIRST_ORDER_FREE
     && currentUser && currentUser.id && currentUser.role !== 'guest'
     && currentUser.firstOrderDone === false;
   // afterLoyalty is the customer's effective subtotal (post-squad, post-loyalty)
+  const isFirstOrderFree = isFirstOrderEligible && afterLoyalty >= FIRST_ORDER_FREE_MIN;
   const qualifiesFreeByThreshold = afterLoyalty >= FREE_DELIVERY_MIN;
   const delivery = (isFirstOrderFree || qualifiesFreeByThreshold) ? 0 : STANDARD_DELIVERY;
   const total = afterLoyalty + delivery;
@@ -557,7 +560,16 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                   <span style={{ fontSize: 18 }}>🎁</span>
                   <div style={{ fontSize: 13, lineHeight: 1.5, color: '#7A5A00' }}>
                     <div style={{ fontWeight: 700 }}>Welcome — your first delivery is FREE</div>
-                    No delivery fee on this order. (Future orders are a flat GHS 10.)
+                    No delivery fee on this order (first orders above GHS {FIRST_ORDER_FREE_MIN}). Future orders are a flat GHS 10.
+                  </div>
+                </div>
+              )}
+              {isFirstOrderEligible && !isFirstOrderFree && (
+                <div style={{ background: '#FFF8E1', border: '1px solid #F0DCA0', borderRadius: 10, padding: '12px 14px', marginBottom: 16, display: 'flex', gap: 10 }}>
+                  <span style={{ fontSize: 18 }}>🎁</span>
+                  <div style={{ fontSize: 13, lineHeight: 1.5, color: '#7A5A00' }}>
+                    <div style={{ fontWeight: 700 }}>Your first delivery is FREE on orders above GHS {FIRST_ORDER_FREE_MIN}</div>
+                    Add <strong>GHS {(FIRST_ORDER_FREE_MIN - afterLoyalty).toFixed(2)}</strong> more to skip the GHS {STANDARD_DELIVERY} delivery fee.
                   </div>
                 </div>
               )}
@@ -876,7 +888,9 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
           </div>
           {afterLoyalty < FREE_DELIVERY_MIN && !isFirstOrderFree && (
             <div style={{ marginTop: 14, padding: '10px 12px', background: 'rgba(0,0,0,.06)', borderRadius: 8, fontSize: 12, color: 'var(--sage-dark)', fontWeight: 600 }}>
-              Add <strong>GHS {(FREE_DELIVERY_MIN - afterLoyalty).toFixed(2)}</strong> more for free delivery 🚚
+              {isFirstOrderEligible
+                ? <>Add <strong>GHS {(FIRST_ORDER_FREE_MIN - afterLoyalty).toFixed(2)}</strong> more — your FIRST delivery is free above GHS {FIRST_ORDER_FREE_MIN} 🎁</>
+                : <>Add <strong>GHS {(FREE_DELIVERY_MIN - afterLoyalty).toFixed(2)}</strong> more for free delivery 🚚</>}
             </div>
           )}
         </div>
