@@ -30,11 +30,11 @@ User chose a **full wipe** of placeholder products → load the real catalog →
 
 ### Shipped 2026-07-12 (this session; CACHE_NAME `sdgmart-v52-feedback-retention`)
 - **First-order free delivery ≥ GHS 50 + persistent perk** (see §7) — small first orders no longer consume it; referral credit now fires on the first *qualifying* order.
-- **FeedbackBox** (`components/FeedbackBox.jsx`): "Spotted a problem? Tell us." card in the HomePage footer + Account page — in-app send (`POST /api/feedback`, rate-limited 5/10min) lands in Admin → Issues as "💬 General feedback (from <name>)"; WhatsApp button always available. **Requires `supabase-schema-feedback.sql` (§4.8) — NOT YET RUN.**
+- **FeedbackBox** (`components/FeedbackBox.jsx`): "Spotted a problem? Tell us." card in the HomePage footer + Account page — in-app send (`POST /api/feedback`, rate-limited 5/10min) lands in Admin → Issues as "💬 General feedback (from <name>)"; WhatsApp button always available. Migration run + **verified end-to-end 2026-07-12** (insert → admin join with sender name → test row cleaned up).
 - **Admin → 🔁 Retention tab**: `GET /api/admin/retention` (last-6-months active/returning/new + rate; lapsed = no order in 30+ days, capped 500) + `POST /api/admin/retention/notify` (win-back push, editable message, only reaches 🔔 push subscribers). Logic verified read-only against prod data; **tab UI not yet eyeballed (needs admin login)**.
 
 ### Still pending at launch
-Enable Birthday Gifts (above) · run `supabase-schema-referrals.sql` **and `supabase-schema-feedback.sql`** if not done · **Paystack live keys** + live webhook + account activation · **Cloudflare orange-cloud flip** (Full-strict first, then purge cache each deploy — §13) · post-deploy test order · clean **test data** in Supabase (throwaway customers `sdgtest-…@example.com` userId 6 and `sdgtest-firstorder@example.com` + test orders ~ids 20–23).
+Enable Birthday Gifts (above) · run `supabase-schema-referrals.sql` if not done · **Paystack live keys** + live webhook + account activation · **Cloudflare orange-cloud flip** (Full-strict first, then purge cache each deploy — §13) · post-deploy test order · clean **test data** in Supabase (throwaway customers `sdgtest-…@example.com` userId 6 and `sdgtest-firstorder@example.com` + test orders ~ids 20–23).
 
 ---
 
@@ -84,7 +84,7 @@ Enable Birthday Gifts (above) · run `supabase-schema-referrals.sql` **and `supa
 5. `supabase-rls-fix.sql` (enable RLS everywhere)
 6. `supabase-schema-paystack.sql` (orders.paid, orders.paystack_ref, pending_payments)
 7. **`supabase-schema-referrals.sql`** ← **USER STILL NEEDS TO RUN THIS** (users.referred_by, referral_credited, referrals table)
-8. **`supabase-schema-feedback.sql`** ← **USER STILL NEEDS TO RUN THIS** (makes issue_reports.order_id nullable so the general FeedbackBox works — in-app sends fail with a friendly error until then; WhatsApp path unaffected)
+8. **`supabase-schema-feedback.sql`** ✅ run 2026-07-12 (issue_reports.order_id nullable; general FeedbackBox verified end-to-end)
 
 ## 5. Day-to-day workflow
 1. Edit files locally.
