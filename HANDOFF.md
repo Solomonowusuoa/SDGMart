@@ -4,6 +4,33 @@ A same-day grocery web app for Tamale, Ghana. This doc lets a new chat (or you) 
 
 ---
 
+## ⭐ LATEST STATE — resume here (updated 2026-07 mid-session)
+> This file was edited locally but **NOT yet `git`-committed** (the command-runner was down at session end). A new Claude Code chat reads this local file fine; **commit + push it when the runner works.** §1–§13 below are still accurate; this block is the current front line.
+
+### Shipped & live this session (prod; `sw.js` CACHE_NAME = `sdgmart-v48-fixes`)
+- **Feature 1 — Profile:** "👤 My Profile" added to the mobile menu (page existed but was unreachable); **birthday** (day+month) captured **once then locked** (server-enforced in `/api/me/profile`); a user's **first saved address auto-becomes default**; checkout **auto-fills** name/phone + the default address.
+- **Feature 3 — Scheduled delivery:** checkout has a **"Deliver ASAP vs Schedule for later"** toggle → future date (≤7 days) + an **admin-editable time slot**; `createOrderFromBody` validates the 7-day window; admin + rider cards show the slot; slot editor in Admin → Settings; public `GET /api/delivery/slots`.
+- **Feature 2 — Birthday gifts (⚠️ built + live but STILL OFF):** Admin **"🎂 Birthday Gifts"** tab = enable toggle + product multi-select (→ `app_config.birthday_gifts`). In a customer's **birth month** they add **one free gift** at checkout (server-validated, **once/year**). Daily happy-birthday **push** via `runDailyJobs()` fired from `/healthz`. **NEXT ACTION (user):** Admin → 🎂 Birthday Gifts → toggle ON + pick 2–3 products + Save → then run the final end-to-end gift check (test customer has a June birthday).
+- **5 UX fixes:** add-address marks **Label*/Neighborhood*** required; **delivered orders** show a thank-you + "Order again" (no stale map/notify) on `OrderTrackingPage`; **track page** shows the chosen slot + delivery date; report success says **"We'll reach out soon"**; **admin overview crash FIXED** (it rendered the raw `items` array → React crash; now a summary string, 10 recent rows) + **"Sign out & restart"** on the error screen.
+- **Security + perf code review — all 10 findings + 2 follow-ups fixed & deployed:**
+  1. **CRITICAL — server-authoritative pricing.** `computeOrderPricing(reqUser, body)` recomputes item prices (DB) + promos + squad discount + loyalty(capped) + delivery + total. Both `/api/paystack/init` (charge amount) and `createOrderFromBody` (stored order) use it — **client `price`/`total`/`amount` no longer trusted** (was: pay GHS 0.01 for any cart).
+  2. `express.static(__dirname)` no longer serves source/docs (deny-middleware 404s `/server.js`, `/database.js`, `*.md`, `*.sql`, `package.json`, `/components/*`). 3. Riders blocked from `/api/me/*` (`customerOnly`) — was overwriting the customer with the same id. 4. 5-min cache (`getOrderItemCounts`) for the per-pageload top-seller scan. 6. gift claim set **after** create. 7. exported `db.rowOut/rowsOut`. 10. `ensureIcons` writes only missing files.
+  - **Stock-decrement admin toggle** (`app_config.deduct_stock`, Admin → Settings, **OFF by default** — turn ON only when SDGMart holds its own stock; partners supply now).
+  - Follow-ups: `/api/orders` bounded to recent **500** (`?limit`); **CORS locked** to `sdg-mart.com`/`www`/`sdgmart.onrender.com`; removed duplicate **"Kalpohini"** (kept "Kalpohin").
+- **New migration run:** `supabase-schema-tweaks.sql` (birthday cols, `orders.delivery_slot`, `app_config` seeds) — applied in Supabase.
+
+### 🟡 IN PROGRESS — catalog population (the active task)
+User chose a **full wipe** of placeholder products → load the real catalog → then attach images.
+- **Research delivered:** `C:\Users\Solo\Downloads\SDGMart-catalog-research.csv` — **254 Ghanaian grocery products, 16 categories** (name / category / price GHS / Keep? / Notes), from konzoom.shop et al. **Awaiting user triage** (mark Keep Y/N, adjust prices, add missing). (An `.xlsx` generator `build_catalog.py` is in the old session scratchpad, unrun — runner was down.)
+- **Images:** source **manufacturer-first** photos for the kept set (copyright caveat given; user does final review — inherently imperfect, candidates + cleanup).
+- **Import mechanism to build:** a **one-off Node script** reusing `db.uploadProductPhoto(buf, mime)` (→ Supabase `product-photos` bucket) + `db.products.create({ name, category, price, unit, description, bestseller, img })`. Products have an `img` **text** column. Flow: wipe → per row download+compress image → upload → insert.
+- ⚠️ **After a full replace:** update the app's **category list** (currently 9, hardcoded in `server.js` `categories` array + mirrored client-side) to the final set, and **re-point `ESSENTIALS`** (hardcoded product ids in `server.js` ~line 323) since ids change on reinsert.
+
+### Still pending at launch
+Enable Birthday Gifts (above) · run `supabase-schema-referrals.sql` if not done · **Paystack live keys** + live webhook + account activation · **Cloudflare orange-cloud flip** (Full-strict first, then purge cache each deploy — §13) · post-deploy test order · clean **test data** in Supabase (throwaway customer `sdgtest-…@example.com` userId 6 + test orders ~ids 20–23).
+
+---
+
 ## 1. What & where
 
 - **Local project dir:** `C:\Users\Solo\Downloads\SDGMart`
