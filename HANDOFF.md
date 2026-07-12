@@ -4,10 +4,10 @@ A same-day grocery web app for Tamale, Ghana. This doc lets a new chat (or you) 
 
 ---
 
-## ⭐ LATEST STATE — resume here (updated 2026-07 mid-session)
-> This file was edited locally but **NOT yet `git`-committed** (the command-runner was down at session end). A new Claude Code chat reads this local file fine; **commit + push it when the runner works.** §1–§13 below are still accurate; this block is the current front line.
+## ⭐ LATEST STATE — resume here (updated 2026-07-12)
+> §1–§13 below are still accurate; this block is the current front line. `sw.js` CACHE_NAME = `sdgmart-v50-scripts-deny`.
 
-### Shipped & live this session (prod; `sw.js` CACHE_NAME = `sdgmart-v48-fixes`)
+### Shipped & live (previous session)
 - **Feature 1 — Profile:** "👤 My Profile" added to the mobile menu (page existed but was unreachable); **birthday** (day+month) captured **once then locked** (server-enforced in `/api/me/profile`); a user's **first saved address auto-becomes default**; checkout **auto-fills** name/phone + the default address.
 - **Feature 3 — Scheduled delivery:** checkout has a **"Deliver ASAP vs Schedule for later"** toggle → future date (≤7 days) + an **admin-editable time slot**; `createOrderFromBody` validates the 7-day window; admin + rider cards show the slot; slot editor in Admin → Settings; public `GET /api/delivery/slots`.
 - **Feature 2 — Birthday gifts (⚠️ built + live but STILL OFF):** Admin **"🎂 Birthday Gifts"** tab = enable toggle + product multi-select (→ `app_config.birthday_gifts`). In a customer's **birth month** they add **one free gift** at checkout (server-validated, **once/year**). Daily happy-birthday **push** via `runDailyJobs()` fired from `/healthz`. **NEXT ACTION (user):** Admin → 🎂 Birthday Gifts → toggle ON + pick 2–3 products + Save → then run the final end-to-end gift check (test customer has a June birthday).
@@ -21,10 +21,12 @@ A same-day grocery web app for Tamale, Ghana. This doc lets a new chat (or you) 
 
 ### 🟡 IN PROGRESS — catalog population (the active task)
 User chose a **full wipe** of placeholder products → load the real catalog → then attach images.
-- **Research delivered:** `C:\Users\Solo\Downloads\SDGMart-catalog-research.csv` — **254 Ghanaian grocery products, 16 categories** (name / category / price GHS / Keep? / Notes), from konzoom.shop et al. **Awaiting user triage** (mark Keep Y/N, adjust prices, add missing). (An `.xlsx` generator `build_catalog.py` is in the old session scratchpad, unrun — runner was down.)
+- **Research delivered:** `C:\Users\Solo\Downloads\SDGMart-catalog-research.csv` — **254 Ghanaian grocery products, 16 categories**, from konzoom.shop et al.
+- **✅ Triage workbook built (2026-07-12):** `C:\Users\Solo\Downloads\SDGMart-catalog-triage.xlsx` — Catalog sheet (Y/N dropdowns for Keep?/Bestseller?, pre-guessed Unit column, optional Image URL column, autofilter) + READ ME sheet (instructions, example row, live kept-count counters). **NEXT ACTION (user): fill the Keep? column** (adjust prices/units, add missing rows), hand it back.
+- **✅ Import script built + dry-run tested (2026-07-12):** `scripts/import-catalog.js`. Usage: `node scripts/import-catalog.js <catalog.csv> [--wipe] [--dry-run] [--stock 100] [--images-dir <dir>]`. Reads a CSV export of the triage sheet (Claude converts the xlsx → CSV); imports only Keep=Y rows; `--wipe` required for full replace (refuses if products exist without it); default stock 100 (stock 0 shows "Sold out"); images from Image URL / local `--images-dir` (matched by row# or name slug), compressed to 900px JPEG via optional `sharp` (`npm i --no-save sharp`) using `db.uploadProductPhoto` + `db.products.create`. Aborts on invalid rows; prints the final category list at the end.
 - **Images:** source **manufacturer-first** photos for the kept set (copyright caveat given; user does final review — inherently imperfect, candidates + cleanup).
-- **Import mechanism to build:** a **one-off Node script** reusing `db.uploadProductPhoto(buf, mime)` (→ Supabase `product-photos` bucket) + `db.products.create({ name, category, price, unit, description, bestseller, img })`. Products have an `img` **text** column. Flow: wipe → per row download+compress image → upload → insert.
-- ⚠️ **After a full replace:** update the app's **category list** (currently 9, hardcoded in `server.js` `categories` array + mirrored client-side) to the final set, and **re-point `ESSENTIALS`** (hardcoded product ids in `server.js` ~line 323) since ids change on reinsert.
+- **Hardening:** the source-file deny middleware in `server.js` now also 404s `/scripts/*` (CACHE_NAME → `sdgmart-v50-scripts-deny`).
+- ⚠️ **After a full replace:** update the app's **category list** (currently 9, hardcoded in `server.js` `categories` array) to the final set, and **re-point `ESSENTIALS`** (hardcoded product ids in `server.js` ~line 349) since ids change on reinsert. Then bump CACHE_NAME + deploy.
 
 ### Still pending at launch
 Enable Birthday Gifts (above) · run `supabase-schema-referrals.sql` if not done · **Paystack live keys** + live webhook + account activation · **Cloudflare orange-cloud flip** (Full-strict first, then purge cache each deploy — §13) · post-deploy test order · clean **test data** in Supabase (throwaway customer `sdgtest-…@example.com` userId 6 + test orders ~ids 20–23).

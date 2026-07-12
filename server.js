@@ -1419,7 +1419,7 @@ app.get('/about', (req, res) => res.sendFile(path.join(__dirname, 'about.html'))
 // and manifest — all of which are unaffected by this guard.
 app.use((req, res, next) => {
   const p = req.path;
-  if (/^\/components\//.test(p)
+  if (/^\/(components|scripts)\//.test(p)
     || /^\/(server|database|hooks|tweaks-panel|App)\.jsx?$/.test(p)
     || /^\/package(-lock)?\.json$/.test(p)
     || /\.(md|sql|log|sh|ya?ml|env)$/i.test(p)) {
