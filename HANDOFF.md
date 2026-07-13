@@ -5,7 +5,7 @@ A same-day grocery web app for Tamale, Ghana. This doc lets a new chat (or you) 
 ---
 
 ## ⭐ LATEST STATE — resume here (updated 2026-07-12)
-> §1–§13 below are still accurate; this block is the current front line. `sw.js` CACHE_NAME = `sdgmart-v54-spa-routing-ga`.
+> §1–§13 below are still accurate; this block is the current front line. `sw.js` CACHE_NAME = `sdgmart-v55-ga-purchase-event`.
 
 ### SPA routing + Google Analytics (2026-07-12)
 - **Google Analytics is live** — gtag (`G-D6LK26XSY0`) is in `SDGMart.html` `<head>` (user added). ⚠️ **NOT yet on `about.html`/`privacy.html`/`terms.html`** — offered, user hasn't confirmed adding it there.
@@ -13,7 +13,7 @@ A same-day grocery web app for Tamale, Ghana. This doc lets a new chat (or you) 
 - `server.js` has a catch-all (`app.get('*')`) serving the app shell for client routes (refresh/deep-link safe); API + real files fall through.
 - **Fixed latent bug:** `SDGMart.html` loaded `data/products.js` + `responsive.css` via RELATIVE URLs → 404 + white-screen crash on deep paths → made absolute. (If a white screen with "Cannot read properties of undefined (reading 'map')" ever recurs, suspect a relative asset URL.)
 - Verified end-to-end in preview: catch-all, cold-load deep paths load data, per-section page_views, `/order-confirmed` fires once on a real order, back button. NOT eyeballed: GA Realtime dashboard (needs live deploy).
-- **Deferred/offered:** GA4 `purchase` event with value+items (more accurate conversion than the URL view) — not built yet.
+- **GA4 `purchase` event DONE (2026-07-12):** `trackPurchase(snap, code)` in `CheckoutPage.jsx` fires on order success (both COD + Paystack, via `finishOrder`) → gtag `purchase` with `transaction_id`=SDG order code, `value`=order total (incl. delivery), `currency`=GHS, `shipping`, and `items[]` (item_id/name/category/price/quantity). Verified in preview: fires once on real order, correct fields. No double-count on refresh (/order-confirmed cold-loads to home). **User's GA setup TODO:** mark `purchase` as a Key event in GA4 + import to Google Ads (this is the accurate revenue conversion; the /order-confirmed page_view still works as a backup destination conversion).
 
 ### Shipped & live (previous session)
 - **Feature 1 — Profile:** "👤 My Profile" added to the mobile menu (page existed but was unreachable); **birthday** (day+month) captured **once then locked** (server-enforced in `/api/me/profile`); a user's **first saved address auto-becomes default**; checkout **auto-fills** name/phone + the default address.

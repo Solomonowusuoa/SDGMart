@@ -7,6 +7,30 @@ const FREE_DELIVERY_MIN = 150;
 const FIRST_ORDER_FREE = true;
 const FIRST_ORDER_FREE_MIN = 50;
 
+// Fire a GA4 `purchase` event (order value + line items) so Google
+// Analytics/Ads can track completed orders as revenue-bearing conversions —
+// more accurate than the /order-confirmed page view alone. gtag is defined in
+// SDGMart.html; guarded so checkout still works if analytics is absent/blocked.
+// transaction_id = the SDG order code, which keeps each order counted once.
+const trackPurchase = (snap, code) => {
+  try {
+    if (!window.gtag || !snap) return;
+    window.gtag('event', 'purchase', {
+      transaction_id: String(code || ''),
+      value: Number(snap.total || 0),
+      currency: 'GHS',
+      shipping: Number(snap.delivery || 0),
+      items: (snap.items || []).map((it) => ({
+        item_id: String(it.id),
+        item_name: it.name,
+        item_category: it.category,
+        price: Number(it.price || 0),
+        quantity: Number(it.qty || 1),
+      })),
+    });
+  } catch (_) {}
+};
+
 // Hoisted out of CheckoutPage so React doesn't recreate the component on
 // every render (which would unmount the input and steal focus on each
 // keystroke).
@@ -294,8 +318,9 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // user, show the success screen, clear the cart. `serverId` is the real DB
   // order id used for the display code + tracking.
   const finishOrder = async (snap, serverId) => {
-    if (serverId != null) { setPlacedOrderId(serverId); setOrderId(window.orderCode(serverId)); }
-    if (downloadReceipt) generateReceipt(snap, serverId != null ? window.orderCode(serverId) : orderId);
+    const code = serverId != null ? window.orderCode(serverId) : orderId;
+    if (serverId != null) { setPlacedOrderId(serverId); setOrderId(code); }
+    if (downloadReceipt) generateReceipt(snap, code);
     if (autoReorder && currentUser && currentUser.id && currentUser.role !== 'guest') {
       try {
         const next = new Date(); next.setDate(next.getDate() + Number(reorderCadence || 14));
@@ -317,8 +342,10 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     }
     setOrderPlaced(true);
     setCart([]);
-    // Switch the URL to /order-confirmed + fire the Analytics conversion view.
+    // Switch the URL to /order-confirmed + fire the Analytics conversion view,
+    // then the GA4 purchase event (value + items) on the confirmation page.
     try { if (onOrderPlaced) onOrderPlaced(); } catch (_) {}
+    trackPurchase(snap, code);
   };
 
   // Cash on Delivery — create the order directly.
