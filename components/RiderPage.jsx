@@ -57,7 +57,9 @@ const RiderPage = ({ currentUser, onLogout }) => {
         const now = Date.now();
         if (now - lastSent > 14000) { pushLocation(next.lat, next.lng); lastSent = now; }
       },
-      e => setErr(e.code === 1 ? 'Permission denied. Allow location to go online.' : 'Could not get your location.'),
+      e => setErr(e.code === 1
+        ? 'Location is blocked. Tap the 🔒/ⓘ icon by the web address and allow Location to go online.'
+        : 'Could not get your location — turn on Location/GPS in your phone settings (and disable battery-saver), then try again.'),
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
     );
     // Periodic forced ping + order refresh every 15s

@@ -159,12 +159,32 @@ const MapPicker = ({ value, onChange, height = 240, allowGeolocate = true, defau
 
   const useMyLocation = () => {
     setGeoErr('');
-    if (!navigator.geolocation) { setGeoErr('Geolocation not supported by this browser.'); return; }
+    if (!navigator.geolocation) {
+      setGeoErr("Your browser can't share location. Search a landmark above, or drag the pin on the map.");
+      return;
+    }
     setResolving(true);
+
+    const onOk = (pos) => { setResolving(false); setLocation(pos.coords.latitude, pos.coords.longitude); };
+    // Actionable messages: each tells the customer how to fix it, and that they
+    // can always fall back to the search box or dragging the pin.
+    const DENIED = "Location is blocked. Tap the 🔒 (or ⓘ) icon next to the web address, allow Location, then try again — or search a landmark above / drag the pin.";
+    const OFF = "Couldn't get your location — Location/GPS may be off. Turn it on in your phone settings (and disable battery-saver), then try again — or search a landmark above / drag the pin.";
+
+    // Two-step: first ask for a precise GPS fix (good for delivery), but if that
+    // times out or is unavailable (common indoors), immediately retry with the
+    // faster network/Wi-Fi method so the customer still gets a pin to drag.
     navigator.geolocation.getCurrentPosition(
-      pos => { setResolving(false); setLocation(pos.coords.latitude, pos.coords.longitude); },
-      err => { setResolving(false); setGeoErr(err.code === 1 ? 'Permission denied. Please allow location access.' : 'Could not get your location.'); },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+      onOk,
+      (err1) => {
+        if (err1.code === 1) { setResolving(false); setGeoErr(DENIED); return; } // permission — retry won't help
+        navigator.geolocation.getCurrentPosition(
+          onOk,
+          (err2) => { setResolving(false); setGeoErr(err2.code === 1 ? DENIED : OFF); },
+          { enableHighAccuracy: false, timeout: 10000, maximumAge: 120000 }
+        );
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }
     );
   };
 
