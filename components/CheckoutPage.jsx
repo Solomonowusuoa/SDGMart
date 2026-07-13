@@ -30,7 +30,7 @@ const CheckoutField = ({ label, k, type='text', placeholder='', half, value, err
   </div>
 );
 
-const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, openTracking }) => {
+const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, openTracking, onOrderPlaced }) => {
   const [step, setStep] = React.useState(1); // 1=details, 2=review, 3=confirm
   const isMobile = useMobile();
   const [familyMode, setFamilyMode] = React.useState(false);
@@ -317,6 +317,8 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     }
     setOrderPlaced(true);
     setCart([]);
+    // Switch the URL to /order-confirmed + fire the Analytics conversion view.
+    try { if (onOrderPlaced) onOrderPlaced(); } catch (_) {}
   };
 
   // Cash on Delivery — create the order directly.

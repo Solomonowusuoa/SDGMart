@@ -1525,6 +1525,19 @@ app.use((req, res, next) => {
 app.use('/icons', express.static(path.join(__dirname, 'icons')));
 app.use(express.static(__dirname, { index: 'SDGMart.html' }));
 
+// ── SPA client routes ────────────────────────────────────────────────────
+// The app is a single-page app that now uses real URLs (/shop, /checkout,
+// /squad, /order-confirmed, …) so each section is shareable and shows up as a
+// distinct page in Google Analytics. Any GET that isn't an API call or a real
+// file returns the app shell, so refreshing or directly opening one of those
+// routes works instead of 404ing. (Real files were already served by static
+// above; unknown /api GETs and file paths fall through to the normal 404.)
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/')) return next();
+  if (req.path.includes('.')) return next();
+  res.sendFile(path.join(__dirname, 'SDGMart.html'));
+});
+
 // ── Global error handler (must be last) ──────────────────────────────────
 // Logs any unhandled route error to the error_logs table + console, then
 // returns a clean 500. Optionally forwards to Sentry if SENTRY_DSN is set.

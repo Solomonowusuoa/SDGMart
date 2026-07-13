@@ -3,7 +3,7 @@
 //   updates during development are picked up on reload.
 // - Listens for `push` events and shows native OS notifications.
 // - On notification click, focuses an existing tab or opens the target URL.
-const CACHE_NAME = 'sdgmart-v53-geolocation-fallback';
+const CACHE_NAME = 'sdgmart-v54-spa-routing-ga';
 const STATIC_ASSETS = [
   '/SDGMart.html',
   '/manifest.json',

@@ -8,6 +8,34 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 
 const STORAGE_KEY = 'sdgmart_user';
 
+// ── SPA routing: give each in-app page a real URL ────────────────────────
+// Real paths make sections shareable and let Google Analytics record a
+// distinct page per section (see server.js catch-all that serves the shell
+// for these). Pages that need in-memory context (a selected product, a
+// tracking id) are intentionally NOT restorable on a cold load — they fall
+// back to home — so only the context-free pages appear in PATH_TO_PAGE.
+const PAGE_PATHS = {
+  home: '/', category: '/shop', product: '/product', cart: '/cart',
+  checkout: '/checkout', squad: '/squad', orders: '/my-orders',
+  account: '/account', tracking: '/track', admin: '/admin',
+};
+const PATH_TO_PAGE = {
+  '/': 'home', '/shop': 'category', '/checkout': 'checkout',
+  '/squad': 'squad', '/my-orders': 'orders', '/account': 'account',
+};
+const pageToPath = (pg) => PAGE_PATHS[pg] || '/';
+// Send a Google Analytics page_view for SPA navigations. gtag() is defined in
+// SDGMart.html; guarded so the app works if analytics is absent/blocked.
+const trackPageView = (path) => {
+  try {
+    if (window.gtag) window.gtag('event', 'page_view', {
+      page_path: path,
+      page_location: window.location.origin + path,
+      page_title: document.title,
+    });
+  } catch (_) {}
+};
+
 const App = () => {
   // Auth state — null = not yet decided (login screen), {role:'guest'} = guest, {id,name,...} = signed-in
   const [currentUser, setCurrentUser] = React.useState(() => {
@@ -117,18 +145,38 @@ const App = () => {
 
   const navigateTo = (pg) => {
     setPage(pg);
-    // Push a history entry so the browser/Android back button steps back
-    // through in-app pages instead of leaving the site entirely.
-    try { window.history.pushState({ sdgPage: pg }, ''); } catch (_) {}
+    // Push a history entry (with the page's real path) so the browser/Android
+    // back button steps back through in-app pages instead of leaving the site,
+    // and so the URL bar + Google Analytics reflect the current section.
+    const path = pageToPath(pg);
+    try { window.history.pushState({ sdgPage: pg }, '', path); } catch (_) {}
+    trackPageView(path);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Back/forward button → navigate within the SPA instead of exiting.
+  // Order-placed: swap the URL to a dedicated /order-confirmed address (a real
+  // page in Analytics you can mark as a conversion) without changing the React
+  // page. Called by CheckoutPage when an order succeeds.
+  const markOrderConfirmed = () => {
+    try { window.history.pushState({ sdgPage: 'checkout' }, '', '/order-confirmed'); } catch (_) {}
+    trackPageView('/order-confirmed');
+  };
+
+  // Initial route (deep link / refresh) + back/forward handling. ?track= wins
+  // (push-notification links); otherwise restore a context-free page from the
+  // URL, defaulting to home.
   React.useEffect(() => {
-    try { window.history.replaceState({ sdgPage: 'home' }, ''); } catch (_) {}
+    const hasTrack = new URLSearchParams(window.location.search).get('track');
+    const initial = hasTrack ? 'tracking' : (PATH_TO_PAGE[window.location.pathname] || 'home');
+    if (!hasTrack && initial !== 'home') setPage(initial);
+    try {
+      const url = hasTrack ? (window.location.pathname + window.location.search) : pageToPath(initial);
+      window.history.replaceState({ sdgPage: initial }, '', url);
+    } catch (_) {}
     const onPop = (e) => {
-      const p = (e.state && e.state.sdgPage) || 'home';
+      const p = (e.state && e.state.sdgPage) || PATH_TO_PAGE[window.location.pathname] || 'home';
       setPage(p);
+      trackPageView(window.location.pathname + window.location.search);
       window.scrollTo({ top: 0, behavior: 'auto' });
     };
     window.addEventListener('popstate', onPop);
@@ -284,6 +332,7 @@ const App = () => {
           setPage={navigateTo}
           currentUser={currentUser}
           setCurrentUser={setCurrentUser}
+          onOrderPlaced={markOrderConfirmed}
           openTracking={(id) => { setTrackingOrderId(id); navigateTo('tracking'); }}
         />
       )}

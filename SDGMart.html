@@ -29,7 +29,7 @@
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <!-- Leaflet + jsPDF are loaded ON DEMAND (map picker / receipt download) to
      keep the initial page light. See MapPicker.jsx and receipt.js. -->
-<script src="data/products.js"></script>
+<script src="/data/products.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -110,7 +110,7 @@ img{display:block;max-width:100%}
 <div style="text-align:center"><div style="font-family:'Petit Formal Script','Allura',cursive;font-size:88px;line-height:1;letter-spacing:.03em;animation:sdg-pulse 1.6s ease-in-out infinite">SDG</div><div style="margin-top:14px;font-size:11px;letter-spacing:.3em;color:#888;font-family:sans-serif;text-transform:uppercase">Mart</div></div>
 @keyframes sdg-pulse{0%,100%{opacity:.4;transform:scale(.985)}50%{opacity:1;transform:scale(1)}} */
 </style>
-<link rel="stylesheet" href="responsive.css">
+<link rel="stylesheet" href="/responsive.css">
 <!-- Single pre-bundled, minified app (esbuild on the server). Replaces the old
      in-browser Babel + 22 separate script tags for a much faster first load. -->
 <script src="/app.bundle.js"></script>
