@@ -5,7 +5,15 @@ A same-day grocery web app for Tamale, Ghana. This doc lets a new chat (or you) 
 ---
 
 ## ⭐ LATEST STATE — resume here (updated 2026-07-12)
-> §1–§13 below are still accurate; this block is the current front line. `sw.js` CACHE_NAME = `sdgmart-v50-scripts-deny`.
+> §1–§13 below are still accurate; this block is the current front line. `sw.js` CACHE_NAME = `sdgmart-v54-spa-routing-ga`.
+
+### SPA routing + Google Analytics (2026-07-12)
+- **Google Analytics is live** — gtag (`G-D6LK26XSY0`) is in `SDGMart.html` `<head>` (user added). ⚠️ **NOT yet on `about.html`/`privacy.html`/`terms.html`** — offered, user hasn't confirmed adding it there.
+- **The SPA now uses real URLs** (App.jsx `PAGE_PATHS`/`PATH_TO_PAGE`, `navigateTo` pushes real paths + fires `trackPageView` GA4 page_view): `/`, `/shop`, `/checkout`, `/squad`, `/my-orders`, `/account`, `/product`, `/cart`, `/track`, `/admin`. Order success → **`/order-confirmed`** (via `onOrderPlaced`/`markOrderConfirmed`) = the address to use as the **Google Ads conversion**.
+- `server.js` has a catch-all (`app.get('*')`) serving the app shell for client routes (refresh/deep-link safe); API + real files fall through.
+- **Fixed latent bug:** `SDGMart.html` loaded `data/products.js` + `responsive.css` via RELATIVE URLs → 404 + white-screen crash on deep paths → made absolute. (If a white screen with "Cannot read properties of undefined (reading 'map')" ever recurs, suspect a relative asset URL.)
+- Verified end-to-end in preview: catch-all, cold-load deep paths load data, per-section page_views, `/order-confirmed` fires once on a real order, back button. NOT eyeballed: GA Realtime dashboard (needs live deploy).
+- **Deferred/offered:** GA4 `purchase` event with value+items (more accurate conversion than the URL view) — not built yet.
 
 ### Shipped & live (previous session)
 - **Feature 1 — Profile:** "👤 My Profile" added to the mobile menu (page existed but was unreachable); **birthday** (day+month) captured **once then locked** (server-enforced in `/api/me/profile`); a user's **first saved address auto-becomes default**; checkout **auto-fills** name/phone + the default address.
