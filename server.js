@@ -341,8 +341,20 @@ async function getOrderItemCounts() {
 }
 
 // ── Dynamic products.js (served from DB) ─────────────────────────────────
+// Every visitor loads this file on every page load, and regenerating it hits
+// Supabase (products + app_config) each time — the #1 hot path under traffic.
+// Cache the generated JS in memory for CATALOG_TTL_MS; admin product/settings
+// mutations call invalidateCatalog() so edits still appear immediately.
+const CATALOG_TTL_MS = 60 * 1000;
+let _catalogCache = { js: null, at: 0 };
+function invalidateCatalog() { _catalogCache = { js: null, at: 0 }; }
 app.get('/data/products.js', async (req, res) => {
   try {
+    if (_catalogCache.js && Date.now() - _catalogCache.at < CATALOG_TTL_MS) {
+      res.setHeader('Content-Type', 'application/javascript');
+      res.setHeader('Cache-Control', 'no-cache');
+      return res.send(_catalogCache.js);
+    }
     const productsList = (await db.products.list()).map(p => ({ ...p, bestseller: !!p.bestseller, img: p.img || null }));
     const counts = await getOrderItemCounts();
     const TOP_IDS_BY_ORDERS = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => Number(id));
@@ -371,6 +383,7 @@ if (typeof window !== 'undefined') {
   window.LOCATIONIQ_KEY = ${JSON.stringify(locationiqKey)};
   window.PAYSTACK_PUBLIC_KEY = ${JSON.stringify(PAYSTACK_PUBLIC_KEY)};
 }`;
+    _catalogCache = { js, at: Date.now() };
     res.setHeader('Content-Type', 'application/javascript');
     res.setHeader('Cache-Control', 'no-cache');
     res.send(js);
@@ -414,6 +427,7 @@ app.post('/api/products', requireAdmin, async (req, res) => {
   try {
     const { name, category, price, unit, bestBefore, stock, description, bestseller, lowStockThreshold } = req.body;
     const created = await db.products.create({ name, category, price: parseFloat(price), unit, bestBefore, stock: parseInt(stock) || 0, description: description || '', bestseller: !!bestseller, lowStockThreshold: lowStockThreshold != null ? parseInt(lowStockThreshold) : undefined });
+    invalidateCatalog();
     res.status(201).json({ ...created, bestseller: !!created.bestseller });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -422,12 +436,13 @@ app.put('/api/products/:id', requireAdmin, async (req, res) => {
   try {
     const { name, category, price, unit, bestBefore, stock, description, bestseller, lowStockThreshold } = req.body;
     const updated = await db.products.update(req.params.id, { name, category, price: parseFloat(price), unit, bestBefore, stock: parseInt(stock) || 0, description: description || '', bestseller: !!bestseller, ...(lowStockThreshold != null ? { lowStockThreshold: parseInt(lowStockThreshold) } : {}) });
+    invalidateCatalog();
     res.json({ ...updated, bestseller: !!updated.bestseller });
   } catch (e) { res.status(404).json({ error: e.message }); }
 });
 
 app.delete('/api/products/:id', requireAdmin, async (req, res) => {
-  try { await db.products.delete(req.params.id); res.json({ ok: true }); }
+  try { await db.products.delete(req.params.id); invalidateCatalog(); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1450,6 +1465,7 @@ app.post('/api/admin/settings', requireAdmin, async (req, res) => {
       const clean = deliverySlots.map(s => String(s).slice(0, 20).trim()).filter(Boolean).slice(0, 12);
       await db.appConfig.set('delivery_slots', clean);
     }
+    invalidateCatalog(); // show_freshness is baked into /data/products.js
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

@@ -5,7 +5,8 @@ A same-day grocery web app for Tamale, Ghana. This doc lets a new chat (or you) 
 ---
 
 ## ⭐ LATEST STATE — resume here (updated 2026-07-12)
-> §1–§13 below are still accurate; this block is the current front line. `sw.js` CACHE_NAME = `sdgmart-v55-ga-purchase-event`.
+> §1–§13 below are still accurate; this block is the current front line. `sw.js` CACHE_NAME = `sdgmart-v56-catalog-cache`.
+- **Catalog caching (2026-07-12):** `/data/products.js` (loaded by every visitor, was ~700ms + 2 Supabase queries per request, server buckled at 20 concurrent) is now cached in memory for 60s (`_catalogCache` in server.js); admin product create/update/delete + settings save call `invalidateCatalog()` so edits appear immediately. Load-tested after: ~4,100 req/s at 50 connections, 10ms median, zero errors. ⚠️ Single-process cache — fine on one Render instance; revisit if ever scaled to multiple instances.
 
 ### SPA routing + Google Analytics (2026-07-12)
 - **Google Analytics is live** — gtag (`G-D6LK26XSY0`) is in `SDGMart.html` `<head>` (user added). ⚠️ **NOT yet on `about.html`/`privacy.html`/`terms.html`** — offered, user hasn't confirmed adding it there.
