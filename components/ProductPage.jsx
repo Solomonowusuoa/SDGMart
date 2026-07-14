@@ -67,11 +67,17 @@ const ProductPage = ({ product, onAdd, setPage, setSelectedCategory }) => {
 
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: isMobile ? 20 : 48, alignItems: 'start' }}>
         {/* Image */}
-        <div style={{ background: bg, borderRadius: 'var(--radius-lg)', aspectRatio: '1', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
-          <svg width="120" height="120" viewBox="0 0 120 120">
-            <rect width="120" height="120" rx="12" fill={bg}/>
-            <text x="60" y="72" textAnchor="middle" fontSize="56" fill={fg} fontFamily="sans-serif">{product.category[0]}</text>
-          </svg>
+        <div style={{ background: bg, borderRadius: 'var(--radius-lg)', aspectRatio: '1', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
+          {product.img ? (
+            <img src={product.img} alt={product.name} decoding="async"
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+              onError={e => { e.target.style.display = 'none'; }} />
+          ) : (
+            <svg width="120" height="120" viewBox="0 0 120 120">
+              <rect width="120" height="120" rx="12" fill={bg}/>
+              <text x="60" y="72" textAnchor="middle" fontSize="56" fill={fg} fontFamily="sans-serif">{product.category[0]}</text>
+            </svg>
+          )}
           {product.bestseller && (
             <div style={{ position: 'absolute', top: 16, left: 16 }}>
               <span className="badge badge-green" style={{ fontSize: 13, padding: '4px 12px' }}>★ Bestseller</span>

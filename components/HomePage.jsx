@@ -44,7 +44,7 @@ const ProductCard = ({ product, onAdd, onView, compact }) => {
       {/* Image area */}
       <div onClick={() => onView(product)} style={{ position: 'relative', background: bg, height: compact ? 120 : 150, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
         {product.img ? (
-          <img src={product.img} alt={product.name}
+          <img src={product.img} alt={product.name} loading="lazy" decoding="async"
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             onError={e => { e.target.style.display = 'none'; }} />
         ) : (
@@ -429,7 +429,7 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
                   onMouseEnter={e => { e.currentTarget.style.transform='translateY(-4px) scale(1.02)'; e.currentTarget.style.boxShadow='var(--shadow-lg)'; }}
                   onMouseLeave={e => { e.currentTarget.style.transform='none'; e.currentTarget.style.boxShadow='none'; }}>
                   {/* Photo */}
-                  <img src={catImages[i]} alt={cat}
+                  <img src={catImages[i]} alt={cat} loading="lazy" decoding="async"
                     style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', transition: 'transform .3s' }}
                     onError={e => { e.target.style.display='none'; }}
                   />
