@@ -118,6 +118,14 @@ const ProductPage = ({ product, onAdd, setPage, setSelectedCategory, onView }) =
                 <div style={{ fontSize: 11, color: 'var(--warm-gray)', marginTop: 2 }}>{daysLeft} days remaining</div>
               </div>
             )}
+            {/* Exact stock only in own-stock mode (admin Settings → deduct stock);
+                hidden while partners supply on demand. */}
+            {window.SHOW_STOCK === true && (
+              <div style={{ background: 'rgba(0,0,0,.06)', borderRadius: 8, padding: '10px 14px' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>In Stock</div>
+                <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--sage-dark)', marginTop: 2 }}>{product.stock} units</div>
+              </div>
+            )}
           </div>
 
           <p style={{ marginTop: 20, fontSize: 15, color: 'var(--warm-gray)', lineHeight: 1.7 }}>{product.description}</p>
@@ -142,7 +150,7 @@ const ProductPage = ({ product, onAdd, setPage, setSelectedCategory, onView }) =
           )}
           {(product.stock || 0) > 0 && (product.stock || 0) < 10 && (
             <div style={{ marginTop: 10, color: 'var(--accent-red)', fontSize: 12, fontWeight: 700 }}>
-              ⚠ Almost sold out — order soon
+              {window.SHOW_STOCK === true ? `⚠ Only ${product.stock} left in stock` : '⚠ Almost sold out — order soon'}
             </div>
           )}
 

@@ -1530,9 +1530,9 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
 
               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, marginTop: 20, paddingTop: 20, borderTop: '1px solid var(--cream-dark)' }}>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: 15 }}>Deduct stock on each order</div>
+                  <div style={{ fontWeight: 700, fontSize: 15 }}>Own-stock mode: deduct stock & show quantities</div>
                   <div style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 4, lineHeight: 1.5 }}>
-                    When ON, placing an order automatically reduces each product's stock count. Leave OFF while stock is sourced from partners on demand — turn it on once you hold your own inventory.
+                    When ON, placing an order automatically reduces each product's stock count, and product pages show exact stock quantities to customers. Leave OFF while stock is sourced from partners on demand — turn it on once you hold your own inventory.
                   </div>
                 </div>
                 <button onClick={() => saveSettings({ deductStock: !settings.deductStock })}

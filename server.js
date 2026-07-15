@@ -363,6 +363,9 @@ app.get('/data/products.js', async (req, res) => {
     const neighborhoods = ["Tamale Central","Kalpohin","Lamashegu","Sagnarigu","Nyohini","Choggu","Vittin","Tishigu","Gumbihini","Jisonayili"];
     // Customer-facing freshness/expiry display is off by default; admin can flip it on.
     const showFreshness = !!(await db.appConfig.get('show_freshness'));
+    // Own-stock mode (admin toggle 'deduct_stock'): when ON we hold our own
+    // inventory, so product pages also show exact stock quantities.
+    const showStock = !!(await db.appConfig.get('deduct_stock'));
     // LocationIQ publishable key for maps + geocoding (falls back to OSM when blank).
     // Safe to expose client-side; restrict it by domain in the LocationIQ dashboard.
     const locationiqKey = process.env.LOCATIONIQ_KEY || '';
@@ -373,6 +376,7 @@ const ESSENTIALS = ${JSON.stringify(essentials)};
 const NEIGHBORHOODS = ${JSON.stringify(neighborhoods)};
 const TOP_IDS_BY_ORDERS = ${JSON.stringify(TOP_IDS_BY_ORDERS)};
 const SHOW_FRESHNESS = ${showFreshness ? 'true' : 'false'};
+const SHOW_STOCK = ${showStock ? 'true' : 'false'};
 if (typeof window !== 'undefined') {
   window.PRODUCTS = PRODUCTS;
   window.CATEGORIES = CATEGORIES;
@@ -380,6 +384,7 @@ if (typeof window !== 'undefined') {
   window.NEIGHBORHOODS = NEIGHBORHOODS;
   window.TOP_IDS_BY_ORDERS = TOP_IDS_BY_ORDERS;
   window.SHOW_FRESHNESS = SHOW_FRESHNESS;
+  window.SHOW_STOCK = SHOW_STOCK;
   window.LOCATIONIQ_KEY = ${JSON.stringify(locationiqKey)};
   window.PAYSTACK_PUBLIC_KEY = ${JSON.stringify(PAYSTACK_PUBLIC_KEY)};
 }`;
