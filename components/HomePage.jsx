@@ -204,15 +204,43 @@ const EssentialsCard = ({ onAddAll, onView }) => {
   );
 };
 
-// Suggested for You (Predictive Pantry)
+// Suggested for You (Predictive Pantry).
+// Signed-in customers with order history see the items THEY order most
+// (frequency-ranked from /api/me/orders). Everyone else sees the store-wide
+// top sellers (TOP_IDS_BY_ORDERS, computed server-side from all orders).
 const PredictivePantry = ({ onAdd, onView }) => {
   const isMobile = useMobile();
-  const suggested = window.PRODUCTS.filter(p => [5,13,17,29].includes(p.id));
+  const [myTopIds, setMyTopIds] = React.useState(null);
+  React.useEffect(() => {
+    let signedIn = false;
+    try {
+      const u = JSON.parse(sessionStorage.getItem('sdgmart_user') || 'null');
+      signedIn = !!(u && u.token && u.role !== 'guest');
+    } catch (_) {}
+    if (!signedIn) return;
+    apiFetch('/api/me/orders').then(r => r.ok ? r.json() : []).then(orders => {
+      const counts = {};
+      (orders || []).forEach(o => {
+        let items = o.items;
+        if (typeof items === 'string') { try { items = JSON.parse(items); } catch (_) { items = []; } }
+        (items || []).forEach(i => { if (!i.birthdayGift) counts[i.id] = (counts[i.id] || 0) + (i.qty || 1); });
+      });
+      const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([id]) => Number(id));
+      if (top.length) setMyTopIds(top);
+    }).catch(() => {});
+  }, []);
+  const personalized = !!(myTopIds && myTopIds.length);
+  const ids = (personalized ? myTopIds : (window.TOP_IDS_BY_ORDERS || [])).slice(0, 8);
+  const suggested = ids
+    .map(id => (window.PRODUCTS || []).find(p => p.id === id))
+    .filter(p => p && (p.stock || 0) > 0)
+    .slice(0, 4);
+  if (!suggested.length) return null;
   return (
     <section style={{ maxWidth: 1280, margin: '40px auto 0', padding: '0 24px' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 20 }}>
-        <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 24, fontWeight: 700 }}>Suggested <em>for You</em></h2>
-        <span style={{ fontSize: 13, color: 'var(--warm-gray)' }}>Running low on your regulars?</span>
+        <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 24, fontWeight: 700 }}>{personalized ? <>Suggested <em>for You</em></> : <>Popular <em>right now</em></>}</h2>
+        <span style={{ fontSize: 13, color: 'var(--warm-gray)' }}>{personalized ? 'Running low on your regulars?' : 'What Tamale is ordering'}</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(auto-fill, minmax(200px,1fr))', gap: 16 }}>
         {suggested.map(p => (
@@ -512,13 +540,13 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
                 ...(window.SHOW_FRESHNESS === true ? [['Clearance', () => { goHome(); setTimeout(() => { const el = [...document.querySelectorAll('h2,div')].find(n => /Clearance Corner/i.test(n.textContent)); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100); }]] : []),
               ]],
               ['Customer Care', [
+                // Track Order covers delivery info too (date + time slot on the tracking page)
+                ['Track Order & Delivery', () => setPage('orders')],
+                ['Returns', () => { window.location.href = '/terms#returns'; }],
                 ['WhatsApp Us', () => wa('')],
-                ['Track Order', () => wa('Hi! I would like to track my SDGMart order.')],
-                ['Delivery Info', () => wa('Hi! Could you share delivery info for my area?')],
-                ['Returns', () => wa('Hi! I have a question about returns.')],
               ]],
               ['Company', [
-                ['About SDGMart', () => wa('Hi! I would like to learn more about SDGMart.')],
+                ['About SDGMart', () => { window.location.href = '/about'; }],
                 ['Squad Programme', () => setPage('squad')],
                 ['Family Mode', () => setPage('checkout')],
                 ['Contact Us', () => wa('Hi! I would like to get in touch with SDGMart.')],

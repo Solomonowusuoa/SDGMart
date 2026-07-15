@@ -604,6 +604,8 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
     deliveryDate: deliveryDateStr, deliverySlot, priority,
     loyaltyEarned: squadInfo ? squadInfo.loyaltyEarned : 0,
     squadGoalHit: !!(squadInfo && squadInfo.squadGoalHit),
+    // Lets guests track this order later (stored client-side; see orderTrackToken)
+    trackToken: orderTrackToken(created.id),
   };
 }
 
@@ -1063,13 +1065,25 @@ app.get('/api/me/orders', requireAuth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/api/orders/:id/tracking', requireAuth, async (req, res) => {
+// Signed per-order track token so GUESTS can follow their order after closing
+// the app (no account, no session). Pure HMAC of the order id — nothing stored,
+// unguessable without the server secret, stable across restarts. Returned once
+// at order creation; the client keeps it in localStorage.
+function orderTrackToken(orderId) {
+  return require('crypto').createHmac('sha256', process.env.SUPABASE_SERVICE_KEY)
+    .update('track:' + String(orderId)).digest('hex').slice(0, 20);
+}
+app.get('/api/orders/:id/tracking', async (req, res) => {
   try {
+    const tokenOk = req.query.t && String(req.query.t) === orderTrackToken(req.params.id);
+    if (!tokenOk && !req.user) return res.status(401).json({ error: 'Sign in required' });
     const t = await db.orders.getWithTracking(req.params.id);
     if (!t) return res.status(404).json({ error: 'Order not found' });
-    const isOwner = String(t.order.userId) === String(req.user.id);
-    const isRider = String(t.order.riderId) === String(req.user.id);
-    if (!isOwner && !isRider && req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+    if (!tokenOk) {
+      const isOwner = String(t.order.userId) === String(req.user.id);
+      const isRider = String(t.order.riderId) === String(req.user.id);
+      if (!isOwner && !isRider && req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+    }
     res.json(t);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

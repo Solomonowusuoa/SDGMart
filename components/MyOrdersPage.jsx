@@ -1,5 +1,57 @@
 // MyOrdersPage — past orders + recurring orders + cancel/report/reorder actions
-const MyOrdersPage = ({ setPage, openTracking, setCart }) => {
+// Guests: no server-side order history — show the orders remembered in
+// localStorage (saved with a signed track token at checkout) instead.
+const GuestOrdersView = ({ setPage, openTracking }) => {
+  const isMobile = useMobile();
+  let guestOrders = [];
+  try { guestOrders = JSON.parse(localStorage.getItem('sdgmart_guest_orders') || '[]'); } catch (_) {}
+  return (
+      <div style={{ maxWidth: 720, margin: '0 auto', padding: isMobile ? 16 : 28 }}>
+        <button onClick={() => setPage('home')}
+          style={{ fontSize: 13, color: 'var(--warm-gray)', fontWeight: 600, background: 'transparent', marginBottom: 14 }}>
+          ← Back to home
+        </button>
+        <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginBottom: 6 }}>Track Your Order</h1>
+        <p style={{ fontSize: 13, color: 'var(--warm-gray)', marginBottom: 18 }}>
+          Orders you placed on this device. Sign up to keep your full order history across devices.
+        </p>
+        {guestOrders.length === 0 ? (
+          <div style={{ background: 'var(--white)', borderRadius: 12, padding: 30, boxShadow: 'var(--shadow)', textAlign: 'center', color: 'var(--warm-gray)', fontSize: 14 }}>
+            No orders on this device yet.<br />
+            <span style={{ fontSize: 12 }}>Placed one elsewhere or need help? <a href="https://wa.me/233504082555?text=Hi!%20I%20would%20like%20to%20track%20my%20SDGMart%20order." target="_blank" rel="noopener" style={{ color: 'var(--sage-dark)', fontWeight: 700 }}>WhatsApp us</a> with your order code.</span>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {guestOrders.map(o => (
+              <div key={o.id} style={{ background: 'var(--white)', borderRadius: 12, padding: '14px 16px', boxShadow: 'var(--shadow)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: 140 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{o.code}</div>
+                  <div style={{ fontSize: 12, color: 'var(--warm-gray)' }}>{new Date(o.at).toLocaleString()} · GHS {Number(o.total || 0).toFixed(2)}</div>
+                </div>
+                <button onClick={() => openTracking(o.id)}
+                  style={{ background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '8px 16px', fontWeight: 700, fontSize: 12 }}>
+                  Track →
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+};
+
+// Wrapper: route guests to the local-orders view, members to full history.
+// (Separate components so each keeps a consistent hook order.)
+const MyOrdersPage = (props) => {
+  let isGuest = true;
+  try {
+    const u = JSON.parse(sessionStorage.getItem('sdgmart_user') || 'null');
+    isGuest = !(u && u.token && u.role !== 'guest');
+  } catch (_) {}
+  return isGuest ? <GuestOrdersView {...props} /> : <SignedInOrdersView {...props} />;
+};
+
+const SignedInOrdersView = ({ setPage, openTracking, setCart }) => {
   const isMobile = useMobile();
   const [orders, setOrders] = React.useState(null);
   const [recurring, setRecurring] = React.useState(null);

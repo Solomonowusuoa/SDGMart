@@ -23,7 +23,7 @@ const OutOfStockBlock = ({ product }) => {
 };
 
 // ProductPage — full product detail
-const ProductPage = ({ product, onAdd, setPage, setSelectedCategory }) => {
+const ProductPage = ({ product, onAdd, setPage, setSelectedCategory, onView }) => {
   const [qty, setQty] = React.useState(1);
   const [added, setAdded] = React.useState(false);
   const isMobile = useMobile();
@@ -118,10 +118,6 @@ const ProductPage = ({ product, onAdd, setPage, setSelectedCategory }) => {
                 <div style={{ fontSize: 11, color: 'var(--warm-gray)', marginTop: 2 }}>{daysLeft} days remaining</div>
               </div>
             )}
-            <div style={{ background: 'rgba(0,0,0,.06)', borderRadius: 8, padding: '10px 14px' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>In Stock</div>
-              <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--sage-dark)', marginTop: 2 }}>{product.stock} units</div>
-            </div>
           </div>
 
           <p style={{ marginTop: 20, fontSize: 15, color: 'var(--warm-gray)', lineHeight: 1.7 }}>{product.description}</p>
@@ -146,7 +142,7 @@ const ProductPage = ({ product, onAdd, setPage, setSelectedCategory }) => {
           )}
           {(product.stock || 0) > 0 && (product.stock || 0) < 10 && (
             <div style={{ marginTop: 10, color: 'var(--accent-red)', fontSize: 12, fontWeight: 700 }}>
-              ⚠ Only {product.stock} left in stock
+              ⚠ Almost sold out — order soon
             </div>
           )}
 
@@ -166,7 +162,7 @@ const ProductPage = ({ product, onAdd, setPage, setSelectedCategory }) => {
         <section style={{ marginTop: 56 }}>
           <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, marginBottom: 20 }}>More from <em>{product.category}</em></h2>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))', gap: 16 }}>
-            {related.map(p => <ProductCard key={p.id} product={p} onAdd={onAdd} onView={() => {}} compact />)}
+            {related.map(p => <ProductCard key={p.id} product={p} onAdd={onAdd} onView={onView || (() => {})} compact />)}
           </div>
         </section>
       )}

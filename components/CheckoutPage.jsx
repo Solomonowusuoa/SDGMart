@@ -70,8 +70,13 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // Birthday free gift (eligible only during the user's birth month)
   const [bdayGifts, setBdayGifts] = React.useState({ eligible: false, products: [] });
   const [chosenGift, setChosenGift] = React.useState(null);
-  // Saved-address book for one-tap checkout
+  // Saved-address book for one-tap checkout. When a default/last-used address
+  // auto-fills, step 1 collapses to just name + phone + an "using your saved
+  // address" note (appliedAddress) — the full fields return via "Change".
   const [savedAddresses, setSavedAddresses] = React.useState([]);
+  const [appliedAddress, setAppliedAddress] = React.useState(null);
+  const [editingAddress, setEditingAddress] = React.useState(false);
+  const compactAddress = !!(appliedAddress && !editingAddress && !familyMode);
   React.useEffect(() => {
     if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
     apiFetch('/api/me/addresses').then(r => r.ok ? r.json() : []).then(list => {
@@ -85,6 +90,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
           address: preferred.address || f.address,
           location: preferred.location || f.location,
         }));
+        setAppliedAddress(preferred);
       }
     }).catch(() => {});
   }, []);
@@ -95,6 +101,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
       address: a.address || '',
       location: a.location || null,
     }));
+    setAppliedAddress(a);
   };
   // Map is optional — collapsed by default so Leaflet isn't loaded for everyone.
   const [mapOpen, setMapOpen] = React.useState(false);
@@ -317,9 +324,19 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // After an order is created (paid or COD): set up recurring, refresh the
   // user, show the success screen, clear the cart. `serverId` is the real DB
   // order id used for the display code + tracking.
-  const finishOrder = async (snap, serverId) => {
+  const finishOrder = async (snap, serverId, trackToken) => {
     const code = serverId != null ? window.orderCode(serverId) : orderId;
     if (serverId != null) { setPlacedOrderId(serverId); setOrderId(code); }
+    // Guests have no My Orders — remember this order locally (with its signed
+    // track token) so they can still follow it after closing the app.
+    const isGuest = !currentUser || !currentUser.id || currentUser.role === 'guest';
+    if (isGuest && serverId != null && trackToken) {
+      try {
+        const list = JSON.parse(localStorage.getItem('sdgmart_guest_orders') || '[]');
+        list.unshift({ id: serverId, code, token: trackToken, total: snap.total, at: new Date().toISOString() });
+        localStorage.setItem('sdgmart_guest_orders', JSON.stringify(list.slice(0, 10)));
+      } catch (_) {}
+    }
     if (downloadReceipt) generateReceipt(snap, code);
     if (autoReorder && currentUser && currentUser.id && currentUser.role !== 'guest') {
       try {
@@ -355,9 +372,9 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     try {
       const r = await apiFetch('/api/orders', { method: 'POST', body: JSON.stringify(buildDraft(snap)) });
       const d = await r.json();
-      if (d && d.id != null) serverId = d.id;
+      if (d && d.id != null) { serverId = d.id; var codTrackToken = d.trackToken; }
     } catch (_) { /* proceed even if backend is unreachable */ }
-    await finishOrder(snap, serverId);
+    await finishOrder(snap, serverId, typeof codTrackToken !== 'undefined' ? codTrackToken : null);
   };
 
   // Load the Paystack inline popup script on demand.
@@ -390,7 +407,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
             const vr = await apiFetch('/api/paystack/verify', { method: 'POST', body: JSON.stringify({ reference: initData.reference, draft }) });
             const vd = await vr.json();
             if (!vr.ok) { alert(vd.error || 'We could not confirm your payment. If you were charged, contact us on WhatsApp.'); setPaying(false); return; }
-            await finishOrder(snap, vd && vd.id != null ? vd.id : null);
+            await finishOrder(snap, vd && vd.id != null ? vd.id : null, (vd && vd.trackToken) || null);
           } catch (_) { alert('Payment confirmed but the order could not be saved — please contact us on WhatsApp.'); }
           finally { setPaying(false); }
         },
@@ -603,8 +620,8 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                 </div>
               )}
 
-              {/* Saved-address quick picker */}
-              {savedAddresses.length > 0 && (
+              {/* Saved-address quick picker (hidden while the compact saved-address note is shown) */}
+              {!compactAddress && savedAddresses.length > 0 && (
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>
                     Deliver to one of your saved addresses
@@ -642,6 +659,24 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14 }}>
                 <CheckoutField {...fieldProps('name')} label="Your Name" placeholder="Kwame Asante" />
                 <CheckoutField {...fieldProps('phone')} label="Your phone (Call)" placeholder="+233 50 123 4567" />
+                {compactAddress && (
+                  <div style={{ flex: '1 1 100%', background: 'var(--cream)', border: '1.5px solid var(--cream-dark)', borderRadius: 10, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 18 }}>📍</span>
+                    <div style={{ flex: 1, minWidth: 180 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>
+                        Delivering to {appliedAddress.label}{appliedAddress.isDefault ? ' (your default address)' : ''}
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 2 }}>
+                        {appliedAddress.neighborhood}{appliedAddress.address ? ` · ${appliedAddress.address}` : ''}
+                      </div>
+                    </div>
+                    <button type="button" onClick={() => setEditingAddress(true)}
+                      style={{ fontSize: 12, fontWeight: 700, color: 'var(--sage-dark)', background: 'var(--white)', border: '1.5px solid var(--cream-dark)', borderRadius: 8, padding: '7px 14px' }}>
+                      Change / add details
+                    </button>
+                  </div>
+                )}
+                {!compactAddress && (
                 <div style={{ flex: '1 1 100%' }}>
                   <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '.05em' }}>Neighborhood</label>
                   <select value={form.neighborhood} onChange={e => { set('neighborhood', e.target.value); clearErr('neighborhood'); if (e.target.value !== '__other__') set('customNeighborhood', ''); }}
@@ -661,15 +696,23 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                   )}
                   {errors.neighborhood && <div style={{ fontSize: 11, color: 'var(--accent-red)', marginTop: 3 }}>{errors.neighborhood}</div>}
                 </div>
+                )}
+                {!compactAddress && (
+                <>
                 <CheckoutField {...fieldProps('address')} label="Delivery Address / Landmark" placeholder="e.g. Blue gate opposite Lamashegu market" />
                 {errors.address && <div style={{ fontSize: 11, color: 'var(--accent-red)', marginTop: -6, marginBottom: 8 }}>{errors.address}</div>}
+                </>
+                )}
               </div>
 
+              {!compactAddress && (
               <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--warm-gray)', margin: '6px 0', fontWeight: 600 }}>
                 — type a landmark above, <em>or</em> pin your spot on the map below —
               </div>
+              )}
 
               {/* Pin exact spot on the map (lazy-loads the map) */}
+              {!compactAddress && (
               <div style={{ marginTop: 4 }}>
                 {!mapOpen ? (
                   <button type="button" onClick={() => setMapOpen(true)}
@@ -702,6 +745,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                   </div>
                 )}
               </div>
+              )}
 
               {familyMode && (
                 <div style={{ marginTop: 24, paddingTop: 24, borderTop: '1.5px dashed var(--cream-dark)' }}>

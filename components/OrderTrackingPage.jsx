@@ -22,7 +22,14 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage, setCart }) => {
 
   const poll = React.useCallback(async () => {
     try {
-      const r = await apiFetch(`/api/orders/${orderId}/tracking`);
+      // Guests authenticate with the signed track token saved at checkout.
+      let tokenQs = '';
+      try {
+        const g = JSON.parse(localStorage.getItem('sdgmart_guest_orders') || '[]');
+        const mine = g.find(o => String(o.id) === String(orderId));
+        if (mine && mine.token) tokenQs = `?t=${encodeURIComponent(mine.token)}`;
+      } catch (_) {}
+      const r = await apiFetch(`/api/orders/${orderId}/tracking${tokenQs}`);
       if (!r.ok) { setErr('Could not load tracking info.'); return; }
       const t = await r.json();
       setData(t);

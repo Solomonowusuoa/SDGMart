@@ -61,7 +61,16 @@ const App = () => {
   const [selectedCategory, setSelectedCategory] = React.useState(null);
   const [selectedProduct, setSelectedProduct] = React.useState(null);
   const [trackingOrderId, setTrackingOrderId] = React.useState(null);
-  const [cart, setCart] = React.useState([]);
+  // Cart persists across reloads, sign-outs, and sessions (localStorage).
+  const [cart, setCart] = React.useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('sdgmart_cart') || '[]');
+      return Array.isArray(saved) ? saved : [];
+    } catch (_) { return []; }
+  });
+  React.useEffect(() => {
+    try { localStorage.setItem('sdgmart_cart', JSON.stringify(cart)); } catch (_) {}
+  }, [cart]);
   const [cartOpen, setCartOpen] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState('');
 
@@ -140,6 +149,7 @@ const App = () => {
   const viewProduct = (product) => {
     setSelectedProduct(product);
     setPage('product');
+    setSearchQuery(''); // done searching — clear so browsing isn't stuck filtered
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -186,7 +196,7 @@ const App = () => {
   const logout = async () => {
     try { await apiFetch('/api/auth/logout', { method: 'POST' }); } catch (_) {}
     setCurrentUser(null);
-    setCart([]);
+    // Cart intentionally survives sign-out (persisted in localStorage).
     setPage('home');
   };
 
@@ -315,6 +325,7 @@ const App = () => {
           onAdd={addToCart}
           setPage={navigateTo}
           setSelectedCategory={setSelectedCategory}
+          onView={viewProduct}
         />
       )}
       {page === 'cart' && (

@@ -60,7 +60,12 @@ const Header = ({ cart, page, setPage, setSelectedCategory, searchQuery, setSear
         <div style={{ flex: 1, position: 'relative' }}>
           <input
             value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
+            onChange={e => {
+              const v = e.target.value;
+              setSearchQuery(v);
+              // Live search: jump to the (filtered) product grid on first keystroke
+              if (v.trim() && page !== 'category') setPage('category');
+            }}
             onKeyDown={e => { if (e.key === 'Enter' && searchQuery.trim()) setPage('category'); }}
             placeholder="Search groceries..."
             style={{
@@ -74,6 +79,12 @@ const Header = ({ cart, page, setPage, setSelectedCategory, searchQuery, setSear
           <svg style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', opacity: .5 }} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={isV2 ? '#fff' : 'var(--warm-black)'} strokeWidth="2">
             <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
           </svg>
+          {searchQuery && (
+            <button onClick={() => setSearchQuery('')} title="Clear search"
+              style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', width: 24, height: 24, borderRadius: '50%', background: isV2 ? 'rgba(255,255,255,.2)' : 'var(--cream-dark)', color: isV2 ? '#fff' : 'var(--warm-gray)', fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              ×
+            </button>
+          )}
         </div>
 
         {/* Nav links — desktop only */}

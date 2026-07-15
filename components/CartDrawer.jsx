@@ -21,9 +21,17 @@ const CartDrawer = ({ cart, setCart, setPage, onClose }) => {
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 
         {/* Header */}
-        <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--cream-dark)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--cream-dark)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
           <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700 }}>Your Cart ({cart.reduce((s,i)=>s+i.qty,0)})</h2>
-          <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--cream)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, color: 'var(--warm-gray)' }}>×</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {cart.length > 0 && (
+              <button onClick={() => { if (window.confirm('Remove all items from your cart?')) setCart([]); }}
+                style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-red)', background: 'rgba(192,57,43,.08)', borderRadius: 8, padding: '6px 12px' }}>
+                Clear all
+              </button>
+            )}
+            <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--cream)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, color: 'var(--warm-gray)' }}>×</button>
+          </div>
         </div>
 
         {/* Items */}
