@@ -139,7 +139,7 @@ const ProductPage = ({ product, onAdd, setPage, setSelectedCategory, onView }) =
                 <button onClick={() => setQty(q => Math.max(1, q - 1))}
                   style={{ width: 40, height: 44, fontSize: 20, fontWeight: 700, color: 'var(--warm-gray)', background: 'var(--cream)' }}>−</button>
                 <span style={{ width: 44, textAlign: 'center', fontWeight: 700, fontSize: 16 }}>{qty}</span>
-                <button onClick={() => setQty(q => Math.min((product.stock || 99), q + 1))}
+                <button onClick={() => setQty(q => Math.min(window.SHOW_STOCK === true ? (product.stock || 99) : 99, q + 1))}
                   style={{ width: 40, height: 44, fontSize: 20, fontWeight: 700, color: 'var(--sage)', background: 'var(--cream)' }}>+</button>
               </div>
               <button onClick={handleAdd}
@@ -148,9 +148,11 @@ const ProductPage = ({ product, onAdd, setPage, setSelectedCategory, onView }) =
               </button>
             </div>
           )}
-          {(product.stock || 0) > 0 && (product.stock || 0) < 10 && (
+          {/* Low-stock urgency only in own-stock mode — while partners supply,
+              stock counts aren't real so no scarcity messaging at all. */}
+          {window.SHOW_STOCK === true && (product.stock || 0) > 0 && (product.stock || 0) < 10 && (
             <div style={{ marginTop: 10, color: 'var(--accent-red)', fontSize: 12, fontWeight: 700 }}>
-              {window.SHOW_STOCK === true ? `⚠ Only ${product.stock} left in stock` : '⚠ Almost sold out — order soon'}
+              ⚠ Only {product.stock} left in stock
             </div>
           )}
 
