@@ -285,4 +285,63 @@ const IOSInstallHint = () => {
   );
 };
 
-Object.assign(window, { Header, WhatsAppFloat, IOSInstallHint });
+// First-sign-in nudge: prompts customers to complete their profile (phone +
+// saved address) so checkout auto-fills. Shows once per user per device —
+// and only when something is actually missing; complete profiles never see it.
+const ProfileNudge = ({ currentUser, setPage }) => {
+  const [show, setShow] = React.useState(false);
+  React.useEffect(() => {
+    if (!currentUser || !currentUser.id || currentUser.role !== 'customer') return;
+    const key = 'sdg-profile-nudge-' + currentUser.id;
+    try { if (localStorage.getItem(key)) return; } catch (_) {}
+    let cancelled = false;
+    (async () => {
+      try {
+        let complete = !!(currentUser.phone && String(currentUser.phone).trim());
+        if (complete) {
+          const r = await apiFetch('/api/me/addresses');
+          const list = r.ok ? await r.json() : [];
+          complete = Array.isArray(list) && list.length > 0;
+        }
+        if (complete) { try { localStorage.setItem(key, 'complete'); } catch (_) {} return; }
+        // Delay so we don't collide with the first page paint / install banner
+        setTimeout(() => { if (!cancelled) setShow(true); }, 2500);
+      } catch (_) {}
+    })();
+    return () => { cancelled = true; };
+  }, [currentUser && currentUser.id]);
+  if (!show) return null;
+  const dismiss = () => {
+    try { localStorage.setItem('sdg-profile-nudge-' + currentUser.id, String(Date.now())); } catch (_) {}
+    setShow(false);
+  };
+  const goProfile = () => { dismiss(); setPage('account'); };
+  return (
+    <div role="dialog" aria-label="Complete your profile"
+      style={{
+        position: 'fixed', left: 12, right: 12, bottom: 18, zIndex: 9999,
+        maxWidth: 520, margin: '0 auto',
+        background: 'var(--sage-dark, #1A1A1A)', color: '#fff', borderRadius: 16,
+        padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12,
+        boxShadow: '0 16px 48px rgba(0,0,0,.45)',
+        animation: 'sdg-nudge-rise .4s cubic-bezier(.16,1,.3,1)',
+      }}>
+      <style>{`@keyframes sdg-nudge-rise{from{transform:translateY(140%);opacity:0}to{transform:translateY(0);opacity:1}}`}</style>
+      <span style={{ fontSize: 26, flexShrink: 0 }}>👤</span>
+      <div style={{ flex: 1, fontSize: 13, lineHeight: 1.4 }}>
+        <div style={{ fontWeight: 700, marginBottom: 2 }}>Make checkout one tap</div>
+        <div style={{ opacity: .85, fontSize: 12 }}>
+          Save your phone & delivery address once in your profile — we'll fill them in for every order.
+        </div>
+      </div>
+      <button onClick={goProfile}
+        style={{ background: '#fff', color: '#1A1A1A', borderRadius: 8, padding: '9px 14px', fontWeight: 700, fontSize: 12, flexShrink: 0, cursor: 'pointer' }}>
+        Complete profile
+      </button>
+      <button onClick={dismiss} aria-label="Dismiss"
+        style={{ background: 'rgba(255,255,255,.15)', color: '#fff', borderRadius: 6, width: 28, height: 28, fontSize: 14, padding: 0, lineHeight: 1, flexShrink: 0, cursor: 'pointer' }}>✕</button>
+    </div>
+  );
+};
+
+Object.assign(window, { Header, WhatsAppFloat, IOSInstallHint, ProfileNudge });

@@ -382,6 +382,7 @@ const App = () => {
       {/* Hide WhatsApp float on checkout — it covers the totals + Confirm button on mobile */}
       {page !== 'checkout' && <WhatsAppFloat />}
       <IOSInstallHint />
+      <ProfileNudge currentUser={currentUser} setPage={navigateTo} />
 
       <TweaksPanel>
         <TweakSection title="Theme">
