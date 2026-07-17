@@ -96,7 +96,7 @@ Enable Birthday Gifts (above) · run `supabase-schema-referrals.sql` if not done
 6. `supabase-schema-paystack.sql` (orders.paid, orders.paystack_ref, pending_payments)
 7. **`supabase-schema-referrals.sql`** ← **USER STILL NEEDS TO RUN THIS** (users.referred_by, referral_credited, referrals table)
 8. **`supabase-schema-feedback.sql`** ✅ run 2026-07-12 (issue_reports.order_id nullable; general FeedbackBox verified end-to-end)
-9. **`supabase-schema-delivered-at.sql`** ← **USER STILL NEEDS TO RUN THIS** (orders.delivered_at — powers exact tracking-code expiry + the "Completed at" line on the tracking page, which never worked because the column was missing. Until it's run, the rider delivered-flow still works and code expiry falls back to delivery_date + 1 day.)
+9. **`supabase-schema-delivered-at.sql`** ✅ run 2026-07-12 (orders.delivered_at — exact tracking-code expiry + fixes "Completed at" on the tracking page)
 
 ## 5. Day-to-day workflow
 1. Edit files locally.

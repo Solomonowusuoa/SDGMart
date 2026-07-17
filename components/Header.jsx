@@ -89,7 +89,9 @@ const Header = ({ cart, page, setPage, setSelectedCategory, searchQuery, setSear
 
         {/* Nav links — desktop only */}
         <nav style={{ display: 'flex', gap: 4, alignItems: 'center', marginLeft: 8 }} className="desktop-nav">
-          {[['Home','home'],['Categories','category'],['Squad 🤝','squad']].map(([label, pg]) => (
+          {[['Home','home'],['Categories','category'],['Squad 🤝','squad'],
+            // Signed-in users get the "📦 My Orders" pill instead (same page)
+            ...(!(currentUser && currentUser.id) ? [['Track Order 🛵','orders']] : [])].map(([label, pg]) => (
             <button key={pg} onClick={() => { setPage(pg); if (pg==='category') setSelectedCategory(null); }}
               style={{ padding: '7px 14px', borderRadius: 20, fontSize: 13, fontWeight: 600,
                 background: page === pg ? 'var(--sage)' : 'transparent',
@@ -161,7 +163,7 @@ const Header = ({ cart, page, setPage, setSelectedCategory, searchQuery, setSear
       {/* Mobile menu */}
       {isMobile && menuOpen && (
         <div style={{ background: isV2 ? '#2E3B1E' : 'var(--white)', borderTop: `1px solid ${isV2 ? 'rgba(255,255,255,.1)' : 'var(--cream-dark)'}`, padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {[['🏠 Home','home'],['📦 Categories','category'],['🤝 Squad','squad'],...(currentUser && currentUser.id ? [['📦 My Orders','orders'],['👤 My Profile','account']] : [])].map(([label, pg]) => (
+          {[['🏠 Home','home'],['📦 Categories','category'],['🤝 Squad','squad'],...(currentUser && currentUser.id ? [['📦 My Orders','orders'],['👤 My Profile','account']] : [['🛵 Track Order','orders']])].map(([label, pg]) => (
             <button key={pg} onClick={() => { setPage(pg); if (pg==='category') setSelectedCategory(null); setMenuOpen(false); }}
               style={{ textAlign: 'left', padding: '12px 16px', borderRadius: 10, fontSize: 15, fontWeight: 600,
                 background: page === pg ? 'var(--sage)' : 'transparent',
