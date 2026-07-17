@@ -1084,6 +1084,20 @@ app.get('/api/orders/:id/tracking', async (req, res) => {
     if (!tokenOk && !req.user) return res.status(401).json({ error: 'Sign in required' });
     const t = await db.orders.getWithTracking(req.params.id);
     if (!t) return res.status(404).json({ error: 'Order not found' });
+    // Guest links stop working 7 days after delivery, so an old shared link
+    // can't expose the customer's name/address forever. Signed-in owners are
+    // unaffected (they authenticate normally below).
+    if (tokenOk && !req.user && t.order.status === 'delivered') {
+      // Prefer the exact delivered_at stamp; fall back to the scheduled
+      // delivery date (+1 day slack) for orders delivered before the
+      // delivered_at column existed.
+      const basis = t.order.deliveredAt
+        ? new Date(t.order.deliveredAt).getTime()
+        : (t.order.deliveryDate ? new Date(t.order.deliveryDate).getTime() + 86400000 : null);
+      if (basis && Date.now() - basis > 7 * 86400000) {
+        return res.status(410).json({ error: 'This tracking code has expired (order was delivered more than 7 days ago).' });
+      }
+    }
     if (!tokenOk) {
       const isOwner = String(t.order.userId) === String(req.user.id);
       const isRider = String(t.order.riderId) === String(req.user.id);

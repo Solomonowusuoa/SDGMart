@@ -417,7 +417,14 @@ const orders = {
   async setStatus(id, status, riderId = null) {
     const patch = { status };
     if (riderId != null) patch.rider_id = riderId;
-    return await orders.update(id, patch);
+    const o = await orders.update(id, patch);
+    // Stamp the delivery time (separate best-effort write so the status
+    // update above still succeeds if supabase-schema-delivered-at.sql
+    // hasn't been run yet).
+    if (status === 'delivered') {
+      try { await sb.from('orders').update({ delivered_at: new Date().toISOString() }).eq('id', id); } catch (_) {}
+    }
+    return o;
   },
   // Admin manually assigns (or reassigns) an order to a specific rider.
   // Pass riderId=null to unassign and send the order back to the queue.

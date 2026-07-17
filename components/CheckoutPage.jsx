@@ -133,6 +133,10 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   });
   const [errors, setErrors] = React.useState({});
   const [orderPlaced, setOrderPlaced] = React.useState(false);
+  // Signed track token for the placed order — powers the shareable/storable
+  // tracking code on the success screen (works on any device).
+  const [placedTrackToken, setPlacedTrackToken] = React.useState(null);
+  const [codeCopied, setCodeCopied] = React.useState(false);
   // orderId is a placeholder code for the pre-placement preview; after the
   // order is created it's replaced with the real SDG-<id> code. placedOrderId
   // holds the numeric DB id used for tracking.
@@ -327,6 +331,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   const finishOrder = async (snap, serverId, trackToken) => {
     const code = serverId != null ? window.orderCode(serverId) : orderId;
     if (serverId != null) { setPlacedOrderId(serverId); setOrderId(code); }
+    if (trackToken) setPlacedTrackToken(trackToken);
     // Guests have no My Orders — remember this order locally (with its signed
     // track token) so they can still follow it after closing the app.
     const isGuest = !currentUser || !currentUser.id || currentUser.role === 'guest';
@@ -438,9 +443,18 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   if (orderPlaced) {
     const normalizedWa = normalizeWaNumber(waNumber || form.phone);
     const waValid = normalizedWa.length >= 11; // e.g. 233 + 9 digits
+    // Portable tracking code (order code + signed token): works on any device
+    // via the Track Your Order page, and as a direct link.
+    const trackingCode = placedTrackToken && placedOrderId != null ? `${orderId}-${placedTrackToken}` : null;
+    const trackingUrl = trackingCode ? `${window.location.origin}/?track=${placedOrderId}&t=${placedTrackToken}` : null;
     const waHref = waValid
-      ? `https://wa.me/${normalizedWa}?text=${buildWhatsAppMsg()}`
+      ? `https://wa.me/${normalizedWa}?text=${buildWhatsAppMsg()}${trackingCode ? encodeURIComponent(`\n\nTracking code (keep this to track on any device): ${trackingCode}\nTrack live: ${trackingUrl}`) : ''}`
       : '#';
+    const copyTrackingCode = async () => {
+      try { await navigator.clipboard.writeText(`${trackingCode} — track live: ${trackingUrl}`); }
+      catch (_) { window.prompt('Copy your tracking code:', trackingCode); }
+      setCodeCopied(true); setTimeout(() => setCodeCopied(false), 2000);
+    };
     return (
     <div style={{ maxWidth: 520, margin: '60px auto', padding: '0 24px', textAlign: 'center' }}>
       <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', padding: '40px 32px', boxShadow: 'var(--shadow-lg)' }}>
@@ -465,9 +479,27 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
           );
         })()}
 
-        <div style={{ background: 'var(--cream)', borderRadius: 10, padding: '16px', marginTop: 22, textAlign: 'left' }}>
+        {trackingCode && (
+          <div style={{ background: '#FFF8E1', border: '1px solid #F0DCA0', borderRadius: 10, padding: '14px 16px', marginTop: 22, textAlign: 'left' }}>
+            <div style={{ fontSize: 12, color: '#7A5A00', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>
+              🔑 Your tracking code — save it!
+            </div>
+            <div style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 700, background: 'var(--white)', borderRadius: 8, padding: '10px 12px', wordBreak: 'break-all', border: '1px solid var(--cream-dark)' }}>
+              {trackingCode}
+            </div>
+            <div style={{ fontSize: 11, color: '#7A5A00', marginTop: 6, lineHeight: 1.5 }}>
+              Enter this on the <strong>Track Order</strong> page from any device or phone to follow your delivery. It stops working 7 days after delivery.
+            </div>
+            <button onClick={copyTrackingCode}
+              style={{ marginTop: 10, width: '100%', background: 'var(--warm-black, #1A1A1A)', color: '#fff', borderRadius: 8, padding: '10px', fontWeight: 700, fontSize: 13 }}>
+              {codeCopied ? '✓ Copied!' : '📋 Copy tracking code'}
+            </button>
+          </div>
+        )}
+
+        <div style={{ background: 'var(--cream)', borderRadius: 10, padding: '16px', marginTop: 16, textAlign: 'left' }}>
           <div style={{ fontSize: 12, color: 'var(--warm-gray)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>
-            Send a copy of this order to your WhatsApp
+            Send a copy of this order (incl. tracking code) to your WhatsApp
           </div>
           <input
             type="tel"
@@ -490,7 +522,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
           style={{ marginTop: 10, width: '100%', background: '#1A1A1A', color: '#fff', borderRadius: 10, padding: '12px', fontWeight: 700, fontSize: 14 }}>
           📄 Download PDF Receipt
         </button>
-        {currentUser && currentUser.id && openTracking && placedOrderId != null && (
+        {openTracking && placedOrderId != null && (
           <button onClick={() => openTracking(placedOrderId)}
             style={{ marginTop: 10, width: '100%', background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '12px', fontWeight: 700, fontSize: 14 }}>
             🛵 Track this order

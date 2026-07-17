@@ -3,8 +3,42 @@
 // localStorage (saved with a signed track token at checkout) instead.
 const GuestOrdersView = ({ setPage, openTracking }) => {
   const isMobile = useMobile();
+  const [codeInput, setCodeInput] = React.useState('');
+  const [codeErr, setCodeErr] = React.useState('');
+  const [checking, setChecking] = React.useState(false);
   let guestOrders = [];
   try { guestOrders = JSON.parse(localStorage.getItem('sdgmart_guest_orders') || '[]'); } catch (_) {}
+
+  // Accept a portable tracking code ("SDG-00030-<token>", with or without the
+  // full link around it), verify it against the server, remember it on this
+  // device, then open live tracking.
+  const trackByCode = async () => {
+    setCodeErr('');
+    const m = codeInput.trim().match(/SDG-?0*(\d+)[-\s]+([0-9a-f]{16,24})/i)
+      || codeInput.trim().match(/[?&]track=(\d+)&t=([0-9a-f]{16,24})/i);
+    if (!m) { setCodeErr('That doesn\'t look like a tracking code. It looks like: SDG-00030-a1b2c3d4e5… (from your order confirmation or WhatsApp).'); return; }
+    const id = parseInt(m[1], 10), token = m[2].toLowerCase();
+    setChecking(true);
+    try {
+      const r = await fetch(`/api/orders/${id}/tracking?t=${encodeURIComponent(token)}`);
+      if (r.status === 410) { setCodeErr('This tracking code has expired (order delivered more than 7 days ago).'); return; }
+      if (!r.ok) { setCodeErr('Tracking code not recognised — check for typos, or WhatsApp us for help.'); return; }
+      try {
+        const list = JSON.parse(localStorage.getItem('sdgmart_guest_orders') || '[]').filter(o => String(o.id) !== String(id));
+        list.unshift({ id, code: window.orderCode(id), token, at: new Date().toISOString() });
+        localStorage.setItem('sdgmart_guest_orders', JSON.stringify(list.slice(0, 10)));
+      } catch (_) {}
+      openTracking(id);
+    } catch (_) { setCodeErr('Network error — please try again.'); }
+    finally { setChecking(false); }
+  };
+
+  const copyCode = async (o) => {
+    const full = `${o.code}-${o.token}`;
+    try { await navigator.clipboard.writeText(full); alert('Tracking code copied:\n' + full); }
+    catch (_) { window.prompt('Copy your tracking code:', full); }
+  };
+
   return (
       <div style={{ maxWidth: 720, margin: '0 auto', padding: isMobile ? 16 : 28 }}>
         <button onClick={() => setPage('home')}
@@ -15,6 +49,30 @@ const GuestOrdersView = ({ setPage, openTracking }) => {
         <p style={{ fontSize: 13, color: 'var(--warm-gray)', marginBottom: 18 }}>
           Orders you placed on this device. Sign up to keep your full order history across devices.
         </p>
+
+        {/* Track by code — works on ANY device, not just the ordering one */}
+        <div style={{ background: 'var(--white)', borderRadius: 12, padding: '16px 18px', boxShadow: 'var(--shadow)', marginBottom: 18 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>
+            🔑 Have a tracking code?
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input
+              value={codeInput}
+              onChange={e => { setCodeInput(e.target.value); if (codeErr) setCodeErr(''); }}
+              onKeyDown={e => { if (e.key === 'Enter') trackByCode(); }}
+              placeholder="e.g. SDG-00030-a1b2c3d4e5f6…"
+              style={{ flex: '1 1 220px', padding: '11px 14px', borderRadius: 10, border: '1.5px solid var(--cream-dark)', fontSize: 13, fontFamily: 'monospace', outline: 'none', background: 'var(--white)' }}
+            />
+            <button onClick={trackByCode} disabled={checking}
+              style={{ background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '11px 20px', fontWeight: 700, fontSize: 13, opacity: checking ? .6 : 1 }}>
+              {checking ? 'Checking…' : 'Track'}
+            </button>
+          </div>
+          {codeErr && <div style={{ fontSize: 12, color: 'var(--accent-red)', marginTop: 8, lineHeight: 1.5 }}>{codeErr}</div>}
+          <div style={{ fontSize: 11, color: 'var(--warm-gray)', marginTop: 8 }}>
+            The code is on your order confirmation screen and in the WhatsApp copy of your order. It works on any device until 7 days after delivery.
+          </div>
+        </div>
         {guestOrders.length === 0 ? (
           <div style={{ background: 'var(--white)', borderRadius: 12, padding: 30, boxShadow: 'var(--shadow)', textAlign: 'center', color: 'var(--warm-gray)', fontSize: 14 }}>
             No orders on this device yet.<br />
@@ -28,6 +86,10 @@ const GuestOrdersView = ({ setPage, openTracking }) => {
                   <div style={{ fontWeight: 700, fontSize: 14 }}>{o.code}</div>
                   <div style={{ fontSize: 12, color: 'var(--warm-gray)' }}>{new Date(o.at).toLocaleString()} · GHS {Number(o.total || 0).toFixed(2)}</div>
                 </div>
+                <button onClick={() => copyCode(o)} title="Copy tracking code (use it on any device)"
+                  style={{ background: 'var(--cream)', color: 'var(--sage-dark)', borderRadius: 8, padding: '8px 12px', fontWeight: 700, fontSize: 12 }}>
+                  📋 Code
+                </button>
                 <button onClick={() => openTracking(o.id)}
                   style={{ background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '8px 16px', fontWeight: 700, fontSize: 12 }}>
                   Track →

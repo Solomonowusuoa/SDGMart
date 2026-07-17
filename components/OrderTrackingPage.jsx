@@ -22,15 +22,31 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage, setCart }) => {
 
   const poll = React.useCallback(async () => {
     try {
-      // Guests authenticate with the signed track token saved at checkout.
-      let tokenQs = '';
+      // Guests authenticate with the signed track token — from localStorage
+      // (saved at checkout / code entry) or from a shared ?track=..&t=.. link.
+      let token = '';
       try {
         const g = JSON.parse(localStorage.getItem('sdgmart_guest_orders') || '[]');
         const mine = g.find(o => String(o.id) === String(orderId));
-        if (mine && mine.token) tokenQs = `?t=${encodeURIComponent(mine.token)}`;
+        if (mine && mine.token) token = mine.token;
       } catch (_) {}
-      const r = await apiFetch(`/api/orders/${orderId}/tracking${tokenQs}`);
+      if (!token) {
+        const urlT = new URLSearchParams(window.location.search).get('t');
+        if (urlT && new URLSearchParams(window.location.search).get('track') === String(orderId)) token = urlT;
+      }
+      const r = await apiFetch(`/api/orders/${orderId}/tracking${token ? `?t=${encodeURIComponent(token)}` : ''}`);
+      if (r.status === 410) { setErr('This tracking code has expired (order delivered more than 7 days ago).'); return; }
       if (!r.ok) { setErr('Could not load tracking info.'); return; }
+      // Arrived via a shared link on a new device → remember the order here too.
+      if (token) {
+        try {
+          const list = JSON.parse(localStorage.getItem('sdgmart_guest_orders') || '[]');
+          if (!list.some(o => String(o.id) === String(orderId))) {
+            list.unshift({ id: Number(orderId), code: window.orderCode(orderId), token, at: new Date().toISOString() });
+            localStorage.setItem('sdgmart_guest_orders', JSON.stringify(list.slice(0, 10)));
+          }
+        } catch (_) {}
+      }
       const t = await r.json();
       setData(t);
       // Trigger notifications on transitions
