@@ -502,12 +502,30 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
     apiFetch('/api/admin/riders').then(r => r.ok ? r.json() : []).then(setRiders).catch(() => {});
   }, []);
   React.useEffect(() => { if (adminTab === 'riders') { loadRiders(); const t = setInterval(loadRiders, 10000); return () => clearInterval(t); } }, [adminTab, loadRiders]);
-  // Riders are also needed in the Orders tab for manual assignment
-  React.useEffect(() => { if (adminTab === 'orders') loadRiders(); }, [adminTab, loadRiders]);
+  // Riders are also needed in the Orders tab (manual assignment) and Routes tab (bulk assignment)
+  React.useEffect(() => { if (adminTab === 'orders' || adminTab === 'routes') loadRiders(); }, [adminTab, loadRiders]);
 
   const assignOrderToRider = async (orderId, riderId) => {
     await apiFetch(`/api/admin/orders/${orderId}/assign`, { method: 'POST', body: JSON.stringify({ riderId: riderId || null }) });
     setOrders(prev => prev.map(o => o.id === orderId ? { ...o, riderId: riderId || null, status: riderId ? 'assigned' : 'queued' } : o));
+  };
+
+  // ── Route Batching: bulk-assign every order in a neighborhood group to one rider ──
+  const [riderPickerFor, setRiderPickerFor] = React.useState(null); // neighborhood key, or null
+  const [bulkAssigning, setBulkAssigning] = React.useState(false);
+  // Straight-line distance (km) — same haversine formula the server uses for
+  // nearest-rider auto-assignment, reused here just to help the admin pick.
+  const distKm = (a, b) => {
+    if (!a || !b || a.lat == null || a.lng == null || b.lat == null || b.lng == null) return null;
+    const R = 6371;
+    const dLat = (b.lat - a.lat) * Math.PI / 180, dLng = (b.lng - a.lng) * Math.PI / 180;
+    const x = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
+  };
+  const bulkAssignNeighborhood = async (nOrders, riderId) => {
+    setBulkAssigning(true);
+    try { await Promise.all(nOrders.map(o => assignOrderToRider(o.id, riderId))); }
+    finally { setBulkAssigning(false); setRiderPickerFor(null); }
   };
   const createRider = async () => {
     setRiderErr('');
@@ -989,14 +1007,47 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
             <p style={{ color: 'var(--warm-gray)', fontSize: 14, marginBottom: 24 }}>Pending orders grouped by neighborhood for efficient delivery routing.</p>
             {Object.entries(byNeighborhood).length === 0 ? (
               <div style={{ textAlign: 'center', padding: '60px 0', color: 'var(--warm-gray)' }}>No pending orders</div>
-            ) : Object.entries(byNeighborhood).map(([neighborhood, nOrders]) => (
-              <div key={neighborhood} style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', padding: '20px 24px', boxShadow: 'var(--shadow)', marginBottom: 16 }}>
+            ) : Object.entries(byNeighborhood).map(([neighborhood, nOrders]) => {
+              // Reference point for "nearest" hints — the first order in this
+              // group that actually has a pinned map location (a customer who
+              // only typed a landmark won't have one; that's fine, just no km shown).
+              const refLoc = (nOrders.find(o => o.location) || {}).location;
+              const online = riders.filter(r => r.online);
+              return (
+              <div key={neighborhood} style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', padding: '20px 24px', boxShadow: 'var(--shadow)', marginBottom: 16, position: 'relative' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
                   <div>
                     <h3 style={{ fontWeight: 700, fontSize: 17 }}>📍 {neighborhood}</h3>
                     <div style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 2 }}>{nOrders.length} order{nOrders.length > 1 ? 's' : ''} · GHS {nOrders.reduce((s,o)=>s+o.total,0).toFixed(2)} total</div>
                   </div>
-                  <button style={{ background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '8px 16px', fontWeight: 700, fontSize: 12 }}>Assign Rider</button>
+                  <div style={{ position: 'relative' }}>
+                    <button onClick={() => setRiderPickerFor(riderPickerFor === neighborhood ? null : neighborhood)}
+                      disabled={bulkAssigning}
+                      style={{ background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '8px 16px', fontWeight: 700, fontSize: 12, opacity: bulkAssigning ? .6 : 1 }}>
+                      Assign Rider {riderPickerFor === neighborhood ? '▴' : '▾'}
+                    </button>
+                    {riderPickerFor === neighborhood && (
+                      <div style={{ position: 'absolute', top: '110%', right: 0, background: 'var(--white)', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.18)', border: '1px solid var(--cream-dark)', minWidth: 220, zIndex: 20, overflow: 'hidden' }}>
+                        {online.length === 0 ? (
+                          <div style={{ padding: '14px 16px', fontSize: 12, color: 'var(--warm-gray)' }}>No riders currently online.</div>
+                        ) : (
+                          [...online]
+                            .sort((a, b) => (distKm(refLoc, a) ?? 1e9) - (distKm(refLoc, b) ?? 1e9))
+                            .map(r => {
+                              const km = distKm(refLoc, r);
+                              return (
+                                <button key={r.id} onClick={() => bulkAssignNeighborhood(nOrders, r.id)}
+                                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 16px', fontSize: 13, fontWeight: 600, background: 'transparent', borderTop: '1px solid var(--cream-dark)' }}
+                                  onMouseEnter={e => e.currentTarget.style.background = 'var(--cream)'}
+                                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                                  🛵 {r.name} <span style={{ color: 'var(--warm-gray)', fontWeight: 400 }}>{km != null ? `· ${km.toFixed(1)}km away` : ''}</span>
+                                </button>
+                              );
+                            })
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 {nOrders.map(o => (
                   <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 14px', background: 'var(--cream)', borderRadius: 8, marginBottom: 6, fontSize: 13 }}>
@@ -1006,7 +1057,8 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                   </div>
                 ))}
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
