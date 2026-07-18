@@ -45,7 +45,7 @@ User chose a **full wipe** of placeholder products → load the real catalog →
 - **Admin → 🔁 Retention tab**: `GET /api/admin/retention` (last-6-months active/returning/new + rate; lapsed = no order in 30+ days, capped 500) + `POST /api/admin/retention/notify` (win-back push, editable message, only reaches 🔔 push subscribers). Logic verified read-only against prod data; **tab UI not yet eyeballed (needs admin login)**.
 
 ### Still pending at launch
-Enable Birthday Gifts (above) · run `supabase-schema-referrals.sql` if not done · **Paystack live keys** + live webhook + account activation · **Cloudflare orange-cloud flip** (Full-strict first, then purge cache each deploy — §13) · post-deploy test order · clean **test data** in Supabase (throwaway customers `sdgtest-…@example.com` userId 6 and `sdgtest-firstorder@example.com` + test orders ~ids 20–23).
+✅ Paystack LIVE keys active (verified on prod 2026-07-12: `pk_live_`, enabled; webhook already → sdg-mart.com since §11.0 — confirm account activation + settlement bank + do one small real payment test). ✅ referrals SQL confirmed run. Remaining: Enable Birthday Gifts (above; note test customer's June birthday has passed — set a July birthday on a test account to e2e-test) · **Cloudflare orange-cloud flip** (Full-strict first, then purge cache each deploy — §13) · GA4: mark `purchase` as Key event + import to Google Ads · eyeball Admin → 🔁 Retention tab (built, needs admin eyes) · post-deploy smoke test incl. **real iPhone test** (Paystack popup, Google sign-in, install, tracking) · Render Starter + Supabase Pro upgrades right before launch · clean **test data** in Supabase (throwaway customers `sdgtest-…@example.com` userId 6 and `sdgtest-firstorder@example.com` userId 9 + its address + test orders ~ids 20–23) · ⚠️ recommended pre-launch code item: **recurring-orders cron** (customers can enable auto-reorder but NO job places due orders).
 
 ---
 
@@ -94,7 +94,7 @@ Enable Birthday Gifts (above) · run `supabase-schema-referrals.sql` if not done
 4. `supabase-schema-ops.sql` (users.referral_count, error_logs)
 5. `supabase-rls-fix.sql` (enable RLS everywhere)
 6. `supabase-schema-paystack.sql` (orders.paid, orders.paystack_ref, pending_payments)
-7. **`supabase-schema-referrals.sql`** ← **USER STILL NEEDS TO RUN THIS** (users.referred_by, referral_credited, referrals table)
+7. **`supabase-schema-referrals.sql`** ✅ confirmed run (verified 2026-07-12: referrals table + users.referred_by exist)
 8. **`supabase-schema-feedback.sql`** ✅ run 2026-07-12 (issue_reports.order_id nullable; general FeedbackBox verified end-to-end)
 9. **`supabase-schema-delivered-at.sql`** ✅ run 2026-07-12 (orders.delivered_at — exact tracking-code expiry + fixes "Completed at" on the tracking page)
 
