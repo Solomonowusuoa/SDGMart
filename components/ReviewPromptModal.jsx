@@ -1,5 +1,6 @@
-// ReviewPromptModal — shows when a signed-in user has delivered items not yet
-// reviewed. Star rating + optional message. Dismissible (won't re-show for 7d).
+// ReviewPromptModal — shows when a signed-in user has delivered ORDERS not
+// yet reviewed (one rating per order, not per item). Star rating + optional
+// message. Dismissible (won't re-show for 7d).
 const ReviewPromptModal = ({ currentUser }) => {
   const [pending, setPending] = React.useState([]);
   const [idx, setIdx] = React.useState(0);
@@ -25,7 +26,7 @@ const ReviewPromptModal = ({ currentUser }) => {
     if (rating < 1) return;
     await apiFetch('/api/me/reviews', {
       method: 'POST',
-      body: JSON.stringify({ productId: cur.productId, orderId: cur.orderId, rating, message }),
+      body: JSON.stringify({ orderId: cur.orderId, rating, message }),
     });
     setRating(0); setMessage('');
     if (idx + 1 >= pending.length) finish();
@@ -52,9 +53,12 @@ const ReviewPromptModal = ({ currentUser }) => {
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
       <div style={{ background: 'var(--white)', borderRadius: 14, padding: 22, maxWidth: 420, width: '100%' }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 4 }}>
-          {idx + 1} of {pending.length} · How did we do?
+          {pending.length > 1 ? `${idx + 1} of ${pending.length} · ` : ''}How did we do?
         </div>
-        <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, marginBottom: 14 }}>Rate <em>{cur.name}</em></h2>
+        <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Rate order <em>{window.orderCode(cur.orderId)}</em></h2>
+        {cur.itemsSummary && (
+          <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginBottom: 12 }}>{cur.itemsSummary}</div>
+        )}
         <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
           {[1, 2, 3, 4, 5].map(n => (
             <button key={n} onClick={() => setRating(n)} type="button"

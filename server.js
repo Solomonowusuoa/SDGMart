@@ -91,6 +91,18 @@ const ALLOWED_ORIGINS = ['https://sdg-mart.com', 'https://www.sdg-mart.com', 'ht
 app.use(cors({
   origin(origin, cb) { cb(null, !origin || ALLOWED_ORIGINS.includes(origin)); },
 }));
+// Send the legacy Render host to the custom domain so old bookmarks, shared
+// links, and home-screen installs land on sdg-mart.com. GET pages only:
+// /healthz stays (UptimeRobot's keep-awake ping must hit Render directly) and
+// /api/* stays (Paystack webhooks POST here; the installed-PWA's service
+// worker on the onrender origin still needs its API).
+app.use((req, res, next) => {
+  if (req.hostname === 'sdgmart.onrender.com' && req.method === 'GET'
+      && !req.path.startsWith('/api/') && req.path !== '/healthz') {
+    return res.redirect(301, 'https://sdg-mart.com' + req.originalUrl);
+  }
+  next();
+});
 // Capture the raw body so we can verify the Paystack webhook signature.
 app.use(express.json({ limit: '3mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 
@@ -1262,9 +1274,17 @@ app.get('/api/me/pending-reviews', requireAuth, async (req, res) => {
 });
 app.post('/api/me/reviews', requireAuth, async (req, res) => {
   const { productId, orderId, rating, message } = req.body || {};
-  if (!productId || !rating) return res.status(400).json({ error: 'productId and rating required' });
-  try { res.json(await db.reviews.create({ userId: req.user.id, productId, orderId, rating, message })); }
-  catch (e) { res.status(400).json({ error: e.message }); }
+  if (!rating || (!productId && !orderId)) return res.status(400).json({ error: 'rating and orderId (or productId) required' });
+  try {
+    // Whole-order review (the current flow) vs legacy per-product review.
+    if (!productId) {
+      // Only the order's owner can review it.
+      const o = await db.orders.get(orderId);
+      if (!o || String(o.userId) !== String(req.user.id)) return res.status(403).json({ error: 'Not your order' });
+      return res.json(await db.reviews.createForOrder({ userId: req.user.id, orderId, rating, message }));
+    }
+    res.json(await db.reviews.create({ userId: req.user.id, productId, orderId, rating, message }));
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // ── Issue reports (delivered-order complaints) ───────────────────────────

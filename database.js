@@ -748,21 +748,34 @@ const reviews = {
     if (error) throw error;
     return rowOut(data);
   },
-  // Returns the items still pending review from the user's recent delivered orders
+  // Order-level review ("how was your order?") — product_id NULL marks it.
+  // Requires supabase-schema-order-reviews.sql (product_id made nullable).
+  async createForOrder({ userId, orderId, rating, message }) {
+    const { data, error } = await sb.from('reviews').insert({
+      user_id: userId, product_id: null, order_id: orderId,
+      rating: Math.max(1, Math.min(5, parseInt(rating))),
+      message: (message || '').slice(0, 800),
+    }).select().single();
+    if (error) throw error;
+    return rowOut(data);
+  },
+  // Returns recent delivered ORDERS the user hasn't reviewed yet (one prompt
+  // per order — replaced the old per-product prompts). Any review row on the
+  // order (order-level OR a legacy per-product one) counts as reviewed.
   async pendingForUser(userId) {
-    const { data: ordrs } = await sb.from('orders').select('*').eq('user_id', userId).eq('status', 'delivered').order('created_at', { ascending: false }).limit(5);
+    const { data: ordrs } = await sb.from('orders').select('id, items, created_at').eq('user_id', userId).eq('status', 'delivered').order('created_at', { ascending: false }).limit(5);
     if (!ordrs || !ordrs.length) return [];
     const orderIds = ordrs.map(o => o.id);
-    const { data: existing } = await sb.from('reviews').select('product_id, order_id').eq('user_id', userId).in('order_id', orderIds);
-    const reviewed = new Set((existing || []).map(r => `${r.order_id}:${r.product_id}`));
-    const pending = [];
-    for (const o of ordrs) {
+    const { data: existing } = await sb.from('reviews').select('order_id').eq('user_id', userId).in('order_id', orderIds);
+    const reviewed = new Set((existing || []).map(r => r.order_id));
+    return ordrs.filter(o => !reviewed.has(o.id)).map(o => {
       const items = Array.isArray(o.items) ? o.items : [];
-      for (const it of items) {
-        if (!reviewed.has(`${o.id}:${it.id}`)) pending.push({ orderId: o.id, productId: it.id, name: it.name });
-      }
-    }
-    return pending.slice(0, 5); // cap at 5 items at a time
+      const names = items.filter(i => !i.birthdayGift).map(i => i.name);
+      return {
+        orderId: o.id,
+        itemsSummary: names.slice(0, 3).join(', ') + (names.length > 3 ? ` +${names.length - 3} more` : ''),
+      };
+    }).slice(0, 3); // at most 3 order prompts at a time
   },
 };
 
