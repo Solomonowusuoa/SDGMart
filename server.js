@@ -614,6 +614,89 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
   };
 }
 
+// ── Recurring orders (auto-reorder) ──────────────────────────────────────
+// Places any recurring order whose next_run_at has arrived, reusing the same
+// createOrderFromBody path as a normal Cash-on-Delivery checkout (so pricing,
+// promos, loyalty, the 12pm cutoff, and first-order-free all apply exactly
+// as they would if the customer checked out by hand). Runs once/day from
+// runDailyJobs (see below) — there's no real cron on this host.
+function serverOrderCode(id) { return 'SDG-' + String(id).replace(/\D/g, '').padStart(5, '0'); }
+async function runRecurringOrders() {
+  const today = new Date().toISOString().slice(0, 10);
+  let due = [];
+  try {
+    const { data, error } = await db.sb.from('recurring_orders')
+      .select('*').eq('active', true).lte('next_run_at', today);
+    if (error) throw error;
+    due = db.rowsOut(data || []);
+  } catch (e) {
+    console.warn('runRecurringOrders: query failed:', e.message);
+    return;
+  }
+  if (!due.length) return;
+
+  let products = [];
+  try { products = await db.products.list(); } catch (e) { console.warn('runRecurringOrders: products.list failed:', e.message); return; }
+  const byId = new Map(products.map((p) => [p.id, p]));
+
+  for (const r of due) {
+    try {
+      const user = await db.users.get(r.userId);
+      if (!user) { // account deleted — stop retrying this row forever
+        await db.recurring.setActive(r.id, r.userId, false).catch(() => {});
+        continue;
+      }
+
+      // Drop items no longer sold or marked "Sold out" (stock 0 is the
+      // deliberate unavailable-flag in BOTH partner-supply and own-stock
+      // mode — see the product-page stock-display toggle work).
+      const validItems = [];
+      const skippedNames = [];
+      for (const it of (r.items || [])) {
+        const p = byId.get(it.id);
+        if (!p || (p.stock || 0) <= 0) { skippedNames.push((p && p.name) || it.name || `#${it.id}`); continue; }
+        validItems.push({ id: it.id, qty: it.qty || 1 });
+      }
+
+      // Advance the schedule regardless of outcome — a bad run must not
+      // retry forever and spam the customer daily.
+      const next = new Date();
+      next.setDate(next.getDate() + Math.max(1, Number(r.cadenceDays) || 14));
+      await db.sb.from('recurring_orders').update({ next_run_at: next.toISOString().slice(0, 10) }).eq('id', r.id);
+
+      if (!validItems.length) {
+        await pushToUser(user.id, {
+          title: '⏸ Auto-reorder skipped',
+          body: 'None of your saved items are available right now, so we skipped this round. We\'ll try again next time — or reorder manually anytime.',
+          url: '/',
+        });
+        continue;
+      }
+
+      const info = r.deliveryInfo || {};
+      // Auto-reorder is always Cash on Delivery — there's no saved card/MoMo
+      // to charge automatically (Paystack only supports one-off popups), even
+      // if the original order was paid online.
+      const draft = {
+        customer: user.name || '', phone: user.phone || '',
+        neighborhood: info.neighborhood || '', address: info.address || '',
+        items: validItems, payMethod: 'cash', location: info.location || null,
+      };
+      const result = await createOrderFromBody(user, draft, {});
+      const skippedNote = skippedNames.length ? ` (skipped ${skippedNames.length} unavailable item${skippedNames.length === 1 ? '' : 's'})` : '';
+      await pushToUser(user.id, {
+        title: '🔁 Auto-reorder placed',
+        body: `Your recurring order ${serverOrderCode(result.id)} was placed — pay on delivery${skippedNote}.`,
+        url: `/?track=${result.id}`,
+        tag: `order-${result.id}`,
+      });
+    } catch (e) {
+      console.warn(`runRecurringOrders: row ${r.id} failed:`, e.message);
+      db.errorLog.record({ message: 'recurring order failed: ' + e.message, stack: e.stack || '', path: `recurring_orders/${r.id}`, method: 'CRON', userId: r.userId });
+    }
+  }
+}
+
 app.post('/api/orders', async (req, res) => {
   try {
     const result = await createOrderFromBody(req.user, req.body, { paid: false });
@@ -978,6 +1061,7 @@ async function runDailyJobs() {
       await pushToUser(u.id, { title: `🎂 Happy Birthday${first ? ', ' + first : ''}!`, body: 'Your free birthday gift is waiting — shop today and pick a treat on us. 🎁', url: '/' });
       await db.sb.from('users').update({ birthday_notified_year: year }).eq('id', u.id);
     }
+    await runRecurringOrders();
   } catch (e) { console.warn('runDailyJobs failed:', e.message); }
   finally { _dailyJobRunning = false; }
 }
