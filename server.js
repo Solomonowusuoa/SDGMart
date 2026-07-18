@@ -1653,6 +1653,15 @@ app.delete('/api/me/recurring/:id', requireAuth, async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Service worker must never be cached long — browsers poll it to discover new
+// app versions, so a cached sw.js delays every update rollout. (express.static
+// below would serve it with no Cache-Control, letting Cloudflare default-cache
+// it for hours.)
+app.get('/sw.js', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache');
+  res.sendFile(path.join(__dirname, 'sw.js'));
+});
+
 // ── Legal pages ──────────────────────────────────────────────────────────
 app.get('/privacy', (req, res) => res.sendFile(path.join(__dirname, 'privacy.html')));
 app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, 'terms.html')));

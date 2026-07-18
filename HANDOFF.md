@@ -49,8 +49,16 @@ User chose a **full wipe** of placeholder products → load the real catalog →
 - **FeedbackBox** (`components/FeedbackBox.jsx`): "Spotted a problem? Tell us." card in the HomePage footer + Account page — in-app send (`POST /api/feedback`, rate-limited 5/10min) lands in Admin → Issues as "💬 General feedback (from <name>)"; WhatsApp button always available. Migration run + **verified end-to-end 2026-07-12** (insert → admin join with sender name → test row cleaned up).
 - **Admin → 🔁 Retention tab**: `GET /api/admin/retention` (last-6-months active/returning/new + rate; lapsed = no order in 30+ days, capped 500) + `POST /api/admin/retention/notify` (win-back push, editable message, only reaches 🔔 push subscribers). Logic verified read-only against prod data; **tab UI not yet eyeballed (needs admin login)**.
 
-### Still pending at launch
-✅ Paystack LIVE keys active (verified on prod 2026-07-12: `pk_live_`, enabled; webhook already → sdg-mart.com since §11.0 — confirm account activation + settlement bank + do one small real payment test). ✅ referrals SQL confirmed run. Remaining: Enable Birthday Gifts (above; note test customer's June birthday has passed — set a July birthday on a test account to e2e-test) · **Cloudflare orange-cloud flip** (Full-strict first, then purge cache each deploy — §13) · GA4: mark `purchase` as Key event + import to Google Ads · eyeball Admin → 🔁 Retention tab (built, needs admin eyes) · post-deploy smoke test incl. **real iPhone test** (Paystack popup, Google sign-in, install, tracking) · Render Starter + Supabase Pro upgrades right before launch · clean **test data** in Supabase (throwaway customers `sdgtest-…@example.com` userId 6 and `sdgtest-firstorder@example.com` userId 9 + its address + test orders ~ids 20–23). ✅ recurring-orders cron shipped (see LATEST STATE above) — no longer blocking.
+### Still pending at launch (updated 2026-07-18)
+Done: ✅ Paystack LIVE (`pk_live_` verified on prod) · ✅ referrals SQL · ✅ recurring-orders cron · ✅ **Cloudflare orange-cloud flip LIVE** (verified: `Server: cloudflare` + CF-RAY on sdg-mart.com) · ✅ Retention tab eyeballed by user (figures look right) · ✅ GA4 key-event setup done by user · ✅ all migrations through §4.10.
+**Remaining, in order:**
+1. ⚠️ **Cloudflare cache config (NEW, important — orange cloud made it live):** CF's zone-level **Browser Cache TTL is overriding origin headers to 4h** (observed: bundle served `max-age=14400` despite origin sending 300, products.js despite `no-cache`) → stale app for up to 4h after deploys. Fix in dashboard: **Caching → Configuration → Browser Cache TTL → "Respect Existing Headers"**, then **Purge Everything** once. Optional belt-and-braces: Cache Rule bypassing `/app.bundle.js`, `/data/products.js`, `/sw.js`. (Code side done: sw.js now served `no-cache`; bundle already `max-age=300`; products.js `no-cache`.) **Until fixed: purge CF cache after every deploy.**
+2. **Paystack final confirmation:** account activated + settlement bank set + ONE small real payment test on prod (now live keys — real money).
+3. **Enable Birthday Gifts** (Admin → 🎂 → ON + pick products; test customer's June birthday passed — set a July birthday on a test account to e2e-test).
+4. **Post-deploy smoke test** incl. **real iPhone test** (Paystack popup, Google sign-in, home-screen install, tracking).
+5. **Catalog population** — the big one: user fills Keep? column in `SDGMart-catalog-triage.xlsx` → then import (script ready), source images, update `categories` + `ESSENTIALS` in server.js.
+6. **Render Starter + Supabase Pro upgrades** right before launch (no code changes needed; set Supabase spend cap to allow overages).
+7. **Clean test data** in Supabase: users `sdgtest-…@example.com` (id 6) + `sdgtest-firstorder@example.com` (id 9, incl. its saved address + any leftover reviews), test orders ~ids 20–23.
 
 ---
 
@@ -102,7 +110,7 @@ User chose a **full wipe** of placeholder products → load the real catalog →
 7. **`supabase-schema-referrals.sql`** ✅ confirmed run (verified 2026-07-12: referrals table + users.referred_by exist)
 8. **`supabase-schema-feedback.sql`** ✅ run 2026-07-12 (issue_reports.order_id nullable; general FeedbackBox verified end-to-end)
 9. **`supabase-schema-delivered-at.sql`** ✅ run 2026-07-12 (orders.delivered_at — exact tracking-code expiry + fixes "Completed at" on the tracking page)
-10. **`supabase-schema-order-reviews.sql`** ← **USER STILL NEEDS TO RUN THIS** (reviews.product_id nullable + one-order-review-per-user index. Until it's run, order-review submissions fail silently server-side and the prompt will re-appear — harmless but nagging.)
+10. **`supabase-schema-order-reviews.sql`** ✅ run 2026-07-18 (verified by probe insert — order-level reviews fully live)
 
 ## 5. Day-to-day workflow
 1. Edit files locally.
