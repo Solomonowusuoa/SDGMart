@@ -885,6 +885,16 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                       <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 2 }}>Secure checkout via Paystack. Enter your MoMo number, approve with your PIN, done.</div>
                     </button>
                   )}
+                  {paystackEnabled && form.payMethod === 'paystack' && (
+                    <div style={{ display: 'flex', gap: 8, background: '#FFF8E1', border: '1px solid #F0DCA0', borderRadius: 10, padding: '10px 12px' }}>
+                      <span style={{ fontSize: 15 }}>💡</span>
+                      <div style={{ fontSize: 12, color: '#7A5A00', lineHeight: 1.5 }}>
+                        Approving with mobile money? If the OTP code doesn't arrive by SMS (network can be slow),
+                        wait about a minute on the payment screen — a <strong>“Get OTP via WhatsApp”</strong> option
+                        appears as a reliable backup. Don't close the window while you wait.
+                      </div>
+                    </div>
+                  )}
                   <button onClick={() => set('payMethod', 'cash')}
                     style={{ textAlign: 'left', padding: '14px 16px', borderRadius: 10, border: `2px solid ${form.payMethod === 'cash' ? 'var(--sage)' : 'var(--cream-dark)'}`, background: form.payMethod === 'cash' ? 'rgba(0,0,0,.06)' : 'var(--white)', transition: 'all .15s' }}>
                     <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--warm-black)' }}>💵 Cash on Delivery</div>

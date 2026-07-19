@@ -1162,7 +1162,11 @@ app.get('/api/me/orders', requireAuth, async (req, res) => {
   try {
     const { data, error } = await db.sb.from('orders').select('*').eq('user_id', req.user.id).order('created_at', { ascending: false });
     if (error) throw error;
-    res.json(db.rowsOut(data));
+    // Attach each order's shareable tracking token (deterministic HMAC) so the
+    // customer can copy/share a track-on-any-device link (e.g. give a Family
+    // Mode recipient the link without an account).
+    const out = db.rowsOut(data).map(o => ({ ...o, trackToken: orderTrackToken(o.id) }));
+    res.json(out);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

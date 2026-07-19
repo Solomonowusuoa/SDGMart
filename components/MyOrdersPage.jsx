@@ -171,6 +171,19 @@ const SignedInOrdersView = ({ setPage, openTracking, setCart }) => {
     setPage('checkout');
   };
 
+  // Copy a shareable, works-on-any-device tracking code + live link. Handy for
+  // Family Mode: send it to whoever's receiving the delivery.
+  const shareTrackingCode = async (o) => {
+    const code = `${window.orderCode(o.id)}-${o.trackToken}`;
+    const url = `${window.location.origin}/?track=${o.id}&t=${o.trackToken}`;
+    const text = `Track my SDGMart order ${window.orderCode(o.id)} live: ${url}\n(or enter code ${code} on the Track Order page)`;
+    try {
+      if (navigator.share) { await navigator.share({ title: 'Track my SDGMart order', text }); return; }
+      await navigator.clipboard.writeText(text);
+      alert('Tracking link copied — paste it to whoever should follow the delivery.');
+    } catch (_) { window.prompt('Copy your tracking link:', text); }
+  };
+
   const downloadReceipt = (o) => {
     if (!window.generateReceiptPDF) { alert('PDF engine still loading — try again in a moment.'); return; }
     const items = Array.isArray(o.items) ? o.items : [];
@@ -304,6 +317,12 @@ const SignedInOrdersView = ({ setPage, openTracking, setCart }) => {
                   style={{ fontSize: 11, fontWeight: 700, padding: '6px 10px', borderRadius: 6, background: 'var(--cream)', color: 'var(--warm-black)' }}>
                   📄 Receipt
                 </button>
+                {o.trackToken && o.status !== 'delivered' && o.status !== 'cancelled' && (
+                  <button onClick={() => shareTrackingCode(o)} title="Copy a track-on-any-device link to share"
+                    style={{ fontSize: 11, fontWeight: 700, padding: '6px 10px', borderRadius: 6, background: 'var(--cream)', color: 'var(--sage-dark)' }}>
+                    🔑 Share tracking
+                  </button>
+                )}
                 {canCancel(o) && (
                   <button onClick={() => cancelOrder(o.id)}
                     style={{ fontSize: 11, fontWeight: 700, padding: '6px 10px', borderRadius: 6, background: 'rgba(192,57,43,.08)', color: 'var(--accent-red)' }}>
