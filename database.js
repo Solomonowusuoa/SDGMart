@@ -156,7 +156,13 @@ const users = {
     let referrer = null;
     if (refCode) {
       referrer = await users.findByRefCode(refCode);
-      if (referrer) squadCode = referrer.squadCode || referrer.refCode;
+      if (referrer) {
+        const code = referrer.squadCode || referrer.refCode;
+        // Squads are capped at 5 members. A 6th signup still records the
+        // referral (referred_by below) but starts their own squad.
+        const memberCount = (await squads.members(code)).length;
+        if (memberCount < 5) squadCode = code;
+      }
     }
     if (!squadCode) {
       // New user owns their own squad
@@ -245,8 +251,10 @@ const squads = {
     // ── Squad goal logic ─────────────────────────────────────────────────
     // When every squad member's totalSpent has hit GHS 500 (the target),
     // each member is rewarded with GHS 25 (= 5% of the target) added
-    // straight to their loyalty_balance. Totals reset to 0 so the squad
-    // can chase the goal again.
+    // straight to their loyalty_balance. Spend OVER 500 rolls over into the
+    // next round: a member at 730 restarts the new round at 230, not 0 —
+    // early finishers don't lose the extra shopping they did while waiting
+    // for squadmates.
     let squadBonus = 0;
     if (u.squadCode) {
       const members = await squads.members(u.squadCode);
@@ -256,17 +264,21 @@ const squads = {
       if (allHit) {
         squadBonus = 25; // 5% of 500
         // Award every member individually so we can add to their existing balance
+        let myRollover = 0;
         for (const m of members) {
+          const effectiveTotal = String(m.id) === String(userId) ? newTotal : Number(m.totalSpent || 0);
+          const rollover = Math.max(0, effectiveTotal - 500);
+          if (String(m.id) === String(userId)) myRollover = rollover;
           const newBal = Number(m.loyaltyBalance || 0) + 25
             + (String(m.id) === String(userId) ? loyaltyEarned : 0);
           await sb.from('users').update({
-            total_spent: 0,
+            total_spent: rollover,
             loyalty_balance: newBal,
             discount_pending: false, // clear any legacy flag
           }).eq('id', m.id);
         }
         // Return the awarding user's fresh balance so the UI updates right away
-        return { totalSpent: 0, loyaltyEarned: loyaltyEarned + 25, loyaltyBalance: Number(u.loyaltyBalance || 0) + loyaltyEarned + 25, squadGoalHit: true };
+        return { totalSpent: myRollover, loyaltyEarned: loyaltyEarned + 25, loyaltyBalance: Number(u.loyaltyBalance || 0) + loyaltyEarned + 25, squadGoalHit: true };
       }
     }
     return { totalSpent: newTotal, loyaltyEarned, loyaltyBalance: newLoyalty, squadGoalHit: false };

@@ -293,19 +293,34 @@ const ProfileNudge = ({ currentUser, setPage }) => {
   React.useEffect(() => {
     if (!currentUser || !currentUser.id || currentUser.role !== 'customer') return;
     const key = 'sdg-profile-nudge-' + currentUser.id;
-    try { if (localStorage.getItem(key)) return; } catch (_) {}
+    try {
+      const flag = localStorage.getItem(key);
+      if (flag === 'complete') return;
+      // Shown (or dismissed) recently → don't nag again for 7 days
+      if (flag && Date.now() - Number(flag) < 7 * 24 * 60 * 60 * 1000) return;
+    } catch (_) {}
     let cancelled = false;
     (async () => {
       try {
         let complete = !!(currentUser.phone && String(currentUser.phone).trim());
         if (complete) {
-          const r = await apiFetch('/api/me/addresses');
-          const list = r.ok ? await r.json() : [];
+          // Explicit token: right after sign-in the sessionStorage copy that
+          // apiFetch reads may not be written yet (child effects run before
+          // parent effects), which made this check 401 and the nudge appear
+          // for COMPLETE profiles on every sign-in.
+          const r = await fetch('/api/me/addresses', { headers: { Authorization: 'Bearer ' + (currentUser.token || '') } });
+          if (!r.ok) return; // can't verify → stay quiet rather than mis-nag
+          const list = await r.json();
           complete = Array.isArray(list) && list.length > 0;
         }
         if (complete) { try { localStorage.setItem(key, 'complete'); } catch (_) {} return; }
-        // Delay so we don't collide with the first page paint / install banner
-        setTimeout(() => { if (!cancelled) setShow(true); }, 2500);
+        // Delay so we don't collide with the first page paint / install banner.
+        // Showing counts as "seen" — ignoring it won't re-nag for 7 days.
+        setTimeout(() => {
+          if (cancelled) return;
+          try { localStorage.setItem(key, String(Date.now())); } catch (_) {}
+          setShow(true);
+        }, 2500);
       } catch (_) {}
     })();
     return () => { cancelled = true; };

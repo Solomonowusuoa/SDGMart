@@ -3,7 +3,7 @@
 //   updates during development are picked up on reload.
 // - Listens for `push` events and shows native OS notifications.
 // - On notification click, focuses an existing tab or opens the target URL.
-const CACHE_NAME = 'sdgmart-v66-order-reviews-domain-redirect';
+const CACHE_NAME = 'sdgmart-v67-nudge-fix-squad-rollover';
 const STATIC_ASSETS = [
   '/SDGMart.html',
   '/manifest.json',

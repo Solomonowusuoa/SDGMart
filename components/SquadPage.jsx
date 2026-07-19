@@ -106,8 +106,13 @@ const SquadPage = ({ setPage, currentUser }) => {
           <div>
             <div style={{ fontSize: 13, color: 'var(--warm-gray)', fontWeight: 600, marginBottom: 4 }}>Your Spend Toward Goal</div>
             <div style={{ fontFamily: 'var(--font-head)', fontSize: 30, fontWeight: 700, color: 'var(--warm-black)' }}>
-              GHS {(me.totalSpent || 0).toFixed(0)} <span style={{ fontSize: 16, color: 'var(--warm-gray)', fontWeight: 400 }}>/ {GOAL}</span>
+              GHS {Math.min(me.totalSpent || 0, GOAL).toFixed(0)} <span style={{ fontSize: 16, color: 'var(--warm-gray)', fontWeight: 400 }}>/ {GOAL}</span>
             </div>
+            {(me.totalSpent || 0) > GOAL && (
+              <div style={{ fontSize: 12, color: 'var(--sage-dark)', fontWeight: 600, marginTop: 4 }}>
+                +GHS {((me.totalSpent || 0) - GOAL).toFixed(0)} banked — rolls into the next round 🎉
+              </div>
+            )}
           </div>
           {(me.totalSpent || 0) >= GOAL && <span style={{ fontSize: 22 }}>✅</span>}
         </div>
@@ -118,7 +123,7 @@ const SquadPage = ({ setPage, currentUser }) => {
 
       {/* Squad members */}
       <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', padding: '24px 28px', boxShadow: 'var(--shadow)', marginBottom: 20 }}>
-        <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, marginBottom: 16 }}>Squad Members ({squad.members.length})</h2>
+        <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, marginBottom: 16 }}>Squad Members ({squad.members.length}/5)</h2>
 
         {squad.members.length === 1 && (
           <div style={{ background: 'var(--cream)', borderRadius: 10, padding: '14px 16px', fontSize: 13, color: 'var(--warm-gray)', marginBottom: 16, lineHeight: 1.6 }}>
@@ -140,7 +145,7 @@ const SquadPage = ({ setPage, currentUser }) => {
                       {m.name} {m.isYou && <span style={{ color: 'var(--sage)', fontSize: 11 }}>(You)</span>}
                     </span>
                     <span style={{ fontSize: 13, fontWeight: 700, color: (m.totalSpent || 0) >= GOAL ? 'var(--sage-dark)' : 'var(--warm-gray)' }}>
-                      GHS {(m.totalSpent || 0).toFixed(0)}
+                      GHS {Math.min(m.totalSpent || 0, GOAL).toFixed(0)}{(m.totalSpent || 0) > GOAL ? ` (+${((m.totalSpent || 0) - GOAL).toFixed(0)})` : ''}
                     </span>
                   </div>
                   <div style={{ background: 'var(--cream-dark)', borderRadius: 30, height: 6, overflow: 'hidden' }}>
