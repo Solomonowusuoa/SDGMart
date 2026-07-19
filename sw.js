@@ -3,12 +3,13 @@
 //   updates during development are picked up on reload.
 // - Listens for `push` events and shows native OS notifications.
 // - On notification click, focuses an existing tab or opens the target URL.
-const CACHE_NAME = 'sdgmart-v68-paystack-note-share-tracking';
+const CACHE_NAME = 'sdgmart-v69-ios-icon-squad';
 const STATIC_ASSETS = [
   '/SDGMart.html',
   '/manifest.json',
-  '/icons/icon-192.png',
-  '/icons/icon-512.png',
+  '/icons/icon-192.png?v=69',
+  '/icons/icon-512.png?v=69',
+  '/icons/apple-touch-icon.png?v=69',
 ];
 
 self.addEventListener('install', (event) => {

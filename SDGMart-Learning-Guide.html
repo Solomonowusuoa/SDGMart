@@ -338,8 +338,8 @@ GET  /api/admin/retention   → the admin retention report</code></pre>
 <p>"Squads" are a group-buying incentive: invite friends with your referral link, and when <b>every</b> squad member's spending crosses GHS&nbsp;500, everyone gets a GHS&nbsp;25 loyalty reward. It's a growth engine — customers recruit customers.</p>
 <h4>The rollover fix we made</h4>
 <p>Originally, when a squad hit the goal, everyone's counter reset to zero — so a member who'd reached GHS&nbsp;730 while waiting for slower friends <i>lost</i> the extra 230. Now that overflow <b>rolls into the next round</b>: they restart at 230, not 0. It rewards the eager shopper instead of punishing them, and it's simply fairer.</p>
-<h4>The 5-member cap</h4>
-<p>Squads are limited to 5 members. A 6th person using your link still counts as your referral (you get credited) but starts their own squad. This keeps the "everyone must hit 500" goal achievable rather than impossible with a huge group.</p>
+<h4>No hard size cap</h4>
+<p>Squads have no upper size limit — everyone who signs up with your link joins your squad. (An earlier 5-member cap was removed so squads can grow freely.) The trade-off to keep in mind: the group reward needs <i>every</i> member to reach GHS 500, so a bigger squad makes the shared goal harder to hit.</p>
 <div class="why"><div class="lbl">Design lesson</div>Incentive systems have to be tuned so the goal feels reachable and effort feels rewarded. Both fixes came from thinking through the <i>human</i> experience of a real squad, not just the code.</div>
 
 <!-- ============ 21 ============ -->

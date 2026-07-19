@@ -123,7 +123,7 @@ const SquadPage = ({ setPage, currentUser }) => {
 
       {/* Squad members */}
       <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', padding: '24px 28px', boxShadow: 'var(--shadow)', marginBottom: 20 }}>
-        <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, marginBottom: 16 }}>Squad Members ({squad.members.length}/5)</h2>
+        <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, marginBottom: 16 }}>Squad Members ({squad.members.length})</h2>
 
         {squad.members.length === 1 && (
           <div style={{ background: 'var(--cream)', borderRadius: 10, padding: '14px 16px', fontSize: 13, color: 'var(--warm-gray)', marginBottom: 16, lineHeight: 1.6 }}>
@@ -163,7 +163,7 @@ const SquadPage = ({ setPage, currentUser }) => {
       <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', padding: '24px 28px', boxShadow: 'var(--shadow)' }}>
         <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Invite Friends → Earn GHS 5 Each</h2>
         <p style={{ fontSize: 13, color: 'var(--warm-gray)', marginBottom: 14, lineHeight: 1.6 }}>
-          When a friend signs up with your code <strong style={{ color: 'var(--warm-black)' }}>and makes their first purchase</strong>, you get <strong style={{ color: 'var(--warm-black)' }}>GHS 5 credit</strong>. Credits stack — invite as many as you like.
+          When a friend signs up with your code <strong style={{ color: 'var(--warm-black)' }}>and makes their first purchase of at least GHS 50</strong>, you get <strong style={{ color: 'var(--warm-black)' }}>GHS 5 credit</strong>. Credits stack — invite as many as you like.
         </p>
         <p style={{ fontSize: 13, color: 'var(--warm-gray)', marginBottom: 14, lineHeight: 1.6 }}>
           Your code: <strong style={{ color: '#000', letterSpacing: '.06em' }}>{squad.referralCode}</strong>

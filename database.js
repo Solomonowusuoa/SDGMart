@@ -157,11 +157,9 @@ const users = {
     if (refCode) {
       referrer = await users.findByRefCode(refCode);
       if (referrer) {
-        const code = referrer.squadCode || referrer.refCode;
-        // Squads are capped at 5 members. A 6th signup still records the
-        // referral (referred_by below) but starts their own squad.
-        const memberCount = (await squads.members(code)).length;
-        if (memberCount < 5) squadCode = code;
+        // Join the referrer's squad — no upper cap, so squads can grow past 5.
+        // (The referral is still recorded via referred_by below regardless.)
+        squadCode = referrer.squadCode || referrer.refCode;
       }
     }
     if (!squadCode) {

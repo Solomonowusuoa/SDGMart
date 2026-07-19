@@ -239,7 +239,10 @@ function ensureIcons() {
   const iconsDir = path.join(__dirname, 'icons');
   if (!fs.existsSync(iconsDir)) fs.mkdirSync(iconsDir);
   // Only generate icons that are missing — avoid rewriting 3 files on every boot.
-  const gen = [['icon-192.png', () => createIconPNG(192)], ['icon-512.png', () => createIconPNG(512)], ['icon.svg', createIconSVG]];
+  const gen = [['icon-192.png', () => createIconPNG(192)], ['icon-512.png', () => createIconPNG(512)],
+    // Dedicated iOS home-screen icon (180×180). Separate filename so refreshing
+    // the design forces iOS to re-fetch instead of reusing a hard-cached old one.
+    ['apple-touch-icon.png', () => createIconPNG(180)], ['icon.svg', createIconSVG]];
   for (const [name, make] of gen) {
     const fp = path.join(iconsDir, name);
     if (!fs.existsSync(fp)) fs.writeFileSync(fp, make());
