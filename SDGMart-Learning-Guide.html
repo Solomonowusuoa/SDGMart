@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SDGMart — How It All Works (Learning Guide)</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --ink:#e7e9ee; --muted:#9aa3b2;
+    --line:#2a2f3a; --accent:#5eb98a; --accent2:#6aa9e0; --gold:#d9a441; --red:#e0736b; --violet:#b28ae0;
+    --code:#12141a;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{display:flex;max-width:1280px;margin:0 auto;gap:0}
+  /* Sidebar */
+  nav.toc{position:sticky;top:0;align-self:flex-start;height:100vh;overflow-y:auto;width:280px;flex-shrink:0;
+    padding:26px 18px 60px;border-right:1px solid var(--line);background:var(--panel)}
+  nav.toc h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:22px 0 8px}
+  nav.toc a{display:block;color:var(--ink);text-decoration:none;padding:5px 10px;border-radius:7px;font-size:14px;opacity:.82}
+  nav.toc a:hover{background:var(--panel2);opacity:1}
+  nav.toc .brand{font-size:19px;font-weight:800;color:#fff;margin-bottom:2px}
+  nav.toc .brand span{color:var(--accent)}
+  nav.toc .sub{font-size:12px;color:var(--muted);margin-bottom:6px}
+  /* Content */
+  main{flex:1;min-width:0;padding:40px 48px 120px;max-width:900px}
+  h1{font-size:34px;line-height:1.2;margin:0 0 6px;color:#fff}
+  h2{font-size:26px;margin:54px 0 14px;color:#fff;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:20px;margin:34px 0 10px;color:#fff}
+  h4{font-size:16px;margin:22px 0 6px;color:var(--accent)}
+  p{margin:12px 0}
+  a{color:var(--accent2)}
+  code{background:var(--code);padding:2px 6px;border-radius:5px;font-family:"SFMono-Regular",Consolas,monospace;font-size:13.5px;color:#dfe4ec}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:16px;overflow-x:auto;font-family:"SFMono-Regular",Consolas,monospace;font-size:13px;line-height:1.55}
+  pre code{background:none;padding:0}
+  .lead{font-size:18px;color:var(--muted)}
+  .tag{display:inline-block;background:var(--panel2);border:1px solid var(--line);color:var(--muted);font-size:12px;padding:3px 9px;border-radius:20px;margin:2px 4px 2px 0}
+  /* Callout boxes */
+  .box,.why,.alt,.warn,.analogy,.con{border-radius:12px;padding:14px 18px;margin:18px 0;border:1px solid var(--line);background:var(--panel)}
+  .box .lbl,.why .lbl,.alt .lbl,.warn .lbl,.analogy .lbl,.con .lbl{font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px}
+  .why{border-left:4px solid var(--accent)} .why .lbl{color:var(--accent)}
+  .alt{border-left:4px solid var(--accent2)} .alt .lbl{color:var(--accent2)}
+  .warn{border-left:4px solid var(--gold)} .warn .lbl{color:var(--gold)}
+  .analogy{border-left:4px solid var(--violet);background:var(--panel2)} .analogy .lbl{color:var(--violet)}
+  .con{border-left:4px solid var(--red)} .con .lbl{color:var(--red)}
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14.5px}
+  th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:#fff}
+  .pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px}
+  .pill.pro{background:rgba(94,185,138,.15);color:var(--accent)}
+  .pill.con{background:rgba(224,115,107,.15);color:var(--red)}
+  /* Flow diagram */
+  .flow{display:flex;flex-wrap:wrap;align-items:stretch;gap:0;margin:20px 0}
+  .node{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;min-width:120px;flex:1}
+  .node b{color:#fff;display:block;font-size:14px}
+  .node small{color:var(--muted);font-size:12px}
+  .arrow{display:flex;align-items:center;justify-content:center;color:var(--accent);font-size:22px;padding:0 6px;flex-shrink:0}
+  ul,ol{margin:12px 0;padding-left:24px} li{margin:5px 0}
+  .kbd{font-family:monospace;background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:12.5px}
+  hr{border:none;border-top:1px solid var(--line);margin:40px 0}
+  .footer-note{color:var(--muted);font-size:13px;margin-top:60px;border-top:1px solid var(--line);padding-top:20px}
+  @media(max-width:900px){nav.toc{display:none}main{padding:24px 18px 80px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc">
+  <div class="brand">SDG<span>Mart</span></div>
+  <div class="sub">How it all works — a plain-language guide</div>
+  <h2>Start here</h2>
+  <a href="#big-picture">1 · The big picture</a>
+  <a href="#journey">2 · A click's journey</a>
+  <h2>The pieces</h2>
+  <a href="#frontend">3 · The app (frontend)</a>
+  <a href="#backend">4 · The server (backend)</a>
+  <a href="#database">5 · The database</a>
+  <a href="#storage">6 · File storage</a>
+  <h2>Getting online</h2>
+  <a href="#hosting">7 · Hosting (Render)</a>
+  <a href="#dns">8 · Domains &amp; DNS</a>
+  <a href="#cloudflare">9 · Cloudflare &amp; proxies</a>
+  <a href="#ssl">10 · HTTPS &amp; SSL</a>
+  <a href="#caching">11 · Caching (3 layers)</a>
+  <h2>How it's built</h2>
+  <a href="#spa">12 · Single-page app</a>
+  <a href="#bundling">13 · The bundling trick</a>
+  <a href="#auth">14 · Accounts &amp; sessions</a>
+  <a href="#pricing">15 · Trust nothing: pricing</a>
+  <a href="#tokens">16 · Stateless tokens</a>
+  <a href="#jobs">17 · Scheduled jobs</a>
+  <a href="#payments">18 · Payments &amp; webhooks</a>
+  <a href="#pwa">19 · PWA &amp; push</a>
+  <h2>Feature deep-dives</h2>
+  <a href="#squads">20 · Squads &amp; loyalty</a>
+  <a href="#recurring">21 · Recurring orders</a>
+  <h2>Reference</h2>
+  <a href="#security">22 · Security model</a>
+  <a href="#glossary">23 · Glossary</a>
+  <a href="#grow">24 · How it could grow</a>
+</nav>
+
+<main>
+<h1>SDGMart — How It All Works</h1>
+<p class="lead">A friendly, top-to-bottom tour of everything we built: the code, the choices behind it, the trade-offs, and every piece of technical machinery (domains, proxies, caches, payments) explained in plain language. Read it in order the first time; use the sidebar as a reference after.</p>
+<p>
+  <span class="tag">Same-day grocery delivery</span><span class="tag">Tamale, Ghana</span>
+  <span class="tag">Web app + installable PWA</span><span class="tag">Live at sdg-mart.com</span>
+</p>
+
+<!-- ============ 1 ============ -->
+<h2 id="big-picture">1 · The big picture</h2>
+<p>SDGMart is a <b>web application</b> — software that runs in a web browser instead of being installed like a phone app. A customer opens <code>sdg-mart.com</code>, browses groceries, places an order, and pays; a rider delivers it; an admin manages the whole thing from a dashboard.</p>
+<p>Under the hood there are really only <b>four kinds of machine</b> doing the work, and everything else is plumbing that connects them:</p>
+<table>
+  <tr><th>Piece</th><th>What it is (analogy)</th><th>In SDGMart</th></tr>
+  <tr><td><b>The app</b> (frontend)</td><td>The <i>storefront</i> — what the customer sees and touches</td><td>React code that runs in the browser</td></tr>
+  <tr><td><b>The server</b> (backend)</td><td>The <i>shopkeeper in the back office</i> — makes decisions, guards the rules</td><td>Node/Express (<code>server.js</code>)</td></tr>
+  <tr><td><b>The database</b></td><td>The <i>filing cabinet</i> — remembers everything permanently</td><td>Supabase (a Postgres database)</td></tr>
+  <tr><td><b>File storage</b></td><td>The <i>photo album</i> — holds images, which are too big for the filing cabinet</td><td>Supabase Storage</td></tr>
+</table>
+<div class="analogy"><div class="lbl">Analogy</div>Think of a restaurant. The <b>frontend</b> is the dining room and menu. The <b>backend</b> is the kitchen and the manager who decides what's allowed. The <b>database</b> is the reservation book and recipe binder. <b>File storage</b> is the wall of framed photos. Customers only ever see the dining room — everything important and trustworthy happens in the back.</p></div>
+
+<!-- ============ 2 ============ -->
+<h2 id="journey">2 · A click's journey (the whole system in one trip)</h2>
+<p>When a customer in Tamale taps "Place order," here's the actual path those bytes travel. Understanding this one diagram explains 80% of the technical vocabulary.</p>
+<div class="flow">
+  <div class="node"><b>📱 Phone</b><small>Customer's browser</small></div>
+  <div class="arrow">→</div>
+  <div class="node"><b>🌍 DNS</b><small>"Where is sdg-mart.com?"</small></div>
+  <div class="arrow">→</div>
+  <div class="node"><b>🛡 Cloudflare</b><small>Proxy / shield / CDN</small></div>
+  <div class="arrow">→</div>
+  <div class="node"><b>⚙️ Render</b><small>Runs our server.js</small></div>
+  <div class="arrow">→</div>
+  <div class="node"><b>🗄 Supabase</b><small>Database + photos</small></div>
+</div>
+<ol>
+  <li><b>DNS</b> is the internet's phone book. The phone asks "what's the address of <code>sdg-mart.com</code>?" and gets back a number (an IP address). <a href="#dns">(§8)</a></li>
+  <li><b>Cloudflare</b> sits in front as a security guard and speed booster. The request hits Cloudflare first, not our server directly. <a href="#cloudflare">(§9)</a></li>
+  <li><b>Render</b> is the computer that actually runs our code (<code>server.js</code>). It figures out what the request wants. <a href="#hosting">(§7)</a></li>
+  <li><b>Supabase</b> is where the server reads and writes permanent data — the order gets saved here. <a href="#database">(§5)</a></li>
+  <li>Then everything travels back the same way, and the customer sees "Order received!"</li>
+</ol>
+<p>Every section below zooms into one stop on this trip.</p>
+
+<!-- ============ 3 ============ -->
+<h2 id="frontend">3 · The app the customer sees (frontend)</h2>
+<p>The frontend is built with <b>React</b> — the most popular tool for building interactive web interfaces. Instead of one giant file, the screen is broken into reusable <b>components</b>: <code>HomePage</code>, <code>CheckoutPage</code>, <code>CartDrawer</code>, <code>ProductPage</code>, and so on. Each is a self-contained Lego brick that knows how to draw one part of the screen.</p>
+<div class="why"><div class="lbl">Why React</div>A grocery app is highly interactive — the cart updates live, search filters as you type, the map moves. Doing that with plain HTML would mean manually rewriting the page on every change. React lets you describe "what the screen should look like for this data," and it figures out the minimal update. It's the industry default, so help and libraries are abundant.</div>
+<div class="alt"><div class="lbl">Alternatives we could have used</div>
+  <ul>
+    <li><b>Vue / Svelte</b> — similar idea, smaller communities. Svelte produces slightly faster code; React wins on ecosystem.</li>
+    <li><b>Plain HTML + a little JavaScript</b> — fine for a brochure site, painful for a live cart and map.</li>
+    <li><b>A native phone app (iOS/Android)</b> — best performance and app-store presence, but you'd build and maintain <i>two</i> separate apps plus the website. For a young business, one web app that installs to the home screen (a "PWA," <a href="#pwa">§19</a>) is far cheaper and reaches everyone instantly.</li>
+  </ul>
+</div>
+<h3>The unusual choice: "global-window" components, no build step in the browser</h3>
+<p>Most React projects use a heavy toolchain (imports, modules, a bundler config). SDGMart deliberately skips that. Each component file just defines its component and attaches it to the browser's global <code>window</code> object:</p>
+<pre><code>const CheckoutPage = ({ cart, setCart }) => { /* ...draw checkout... */ };
+Object.assign(window, { CheckoutPage });  // now any file can use it</code></pre>
+<p>They reference each other as plain global names. React itself is loaded from a <b>CDN</b> (a public copy hosted on the internet) rather than installed.</p>
+<div class="why"><div class="lbl">Why this way</div>It keeps the project dead-simple to reason about — no module-resolution config, no framework magic. For a solo builder, "just a bunch of files that see each other" is easy to hold in your head. The trade-off (managing which name is defined where) is handled by keeping the file list small and ordered.</div>
+
+<!-- ============ 4 ============ -->
+<h2 id="backend">4 · The server / back office (backend)</h2>
+<p>The backend is a single <b>Node.js</b> program using the <b>Express</b> framework, all in <code>server.js</code>. Node lets you write server software in JavaScript (the same language as the browser code), so one language covers the whole project. Express is a thin helper for answering web requests.</p>
+<p>The server's job is to answer <b>API requests</b>. An API ("Application Programming Interface") is just a set of URLs the frontend can call to get things done. Examples from SDGMart:</p>
+<pre><code>POST /api/orders            → create an order
+GET  /api/me/orders         → list the signed-in customer's orders
+POST /api/paystack/init     → start a payment
+GET  /api/admin/retention   → the admin retention report</code></pre>
+<div class="analogy"><div class="lbl">Analogy</div>The frontend is a customer at a counter; the API is the <i>menu of things they're allowed to ask for</i>. The customer can't walk into the kitchen (the database) directly — they can only order from the menu, and the shopkeeper (server) decides whether to honour each request.</div>
+<div class="why"><div class="lbl">Why one single server file / one process</div>SDGMart runs as <b>one</b> Node process. That's the simplest possible shape: easy to deploy, easy to debug, cheap to host. It comfortably handles a town-sized business. The main thing to remember is that anything the server keeps "in memory" (like our speed caches, <a href="#caching">§11</a>) lives only in that one process — which is fine until you run multiple copies.</div>
+<div class="alt"><div class="lbl">Alternatives</div><b>Microservices</b> (many small servers, one per job) are what huge companies use — more scalable, far more complex. <b>"Serverless" functions</b> (tiny snippets that spin up per request) avoid managing a server but complicate things like our in-memory caches and background jobs. For SDGMart's scale, one modest server is the right call.</div>
+
+<!-- ============ 5 ============ -->
+<h2 id="database">5 · The filing cabinet (database)</h2>
+<p>Permanent data lives in <b>Supabase</b>, which is a hosted <b>PostgreSQL</b> ("Postgres") database plus some extras. Postgres is a <b>relational database</b>: data lives in tables (like spreadsheets) with rows and columns, and tables can reference each other.</p>
+<table>
+  <tr><th>Table</th><th>Holds</th></tr>
+  <tr><td><code>users</code></td><td>customer &amp; admin accounts</td></tr>
+  <tr><td><code>orders</code></td><td>every order placed</td></tr>
+  <tr><td><code>products</code></td><td>the catalogue</td></tr>
+  <tr><td><code>sessions</code></td><td>who's currently logged in</td></tr>
+  <tr><td><code>reviews</code>, <code>referrals</code>, <code>recurring_orders</code>…</td><td>one table per feature</td></tr>
+</table>
+<p>All database access is funneled through one file, <code>database.js</code>. The rest of the code never talks to Postgres directly — it calls tidy helpers like <code>db.orders.create(...)</code> or <code>db.users.get(id)</code>.</p>
+<div class="why"><div class="lbl">Why funnel everything through one file</div>If every corner of the app wrote its own database queries, a change to how orders are stored would mean hunting through the whole codebase. With one <code>database.js</code>, all data logic lives in one place — safer, and easy to find.</div>
+<div class="why"><div class="lbl">Why Supabase specifically</div>It gives you a real, reliable Postgres database <i>plus</i> file storage, authentication tools, and auto-generated APIs, on a generous free tier — without you having to run and back up a database server yourself. It's "batteries included," which is ideal for moving fast.</div>
+<div class="alt"><div class="lbl">Alternatives</div>
+  <ul>
+    <li><b>Firebase</b> (Google) — similar all-in-one, but uses a "NoSQL" document model that's less natural for orders-and-relationships data.</li>
+    <li><b>Raw Postgres / MySQL on a server</b> — full control, but now you're a database administrator (backups, updates, security) too.</li>
+    <li><b>MongoDB</b> (NoSQL) — flexible, but relational data (a customer <i>has</i> orders which <i>have</i> items) is exactly what Postgres does best.</li>
+  </ul>
+</div>
+<h4>A key security detail: the "service key"</h4>
+<p>The server connects to Supabase using a powerful <b>service key</b> that bypasses row-level permissions. That's safe <i>only because the key lives on the server</i>, never in the browser. The customer's app can never touch the database directly — it must go through the server's API, which enforces the rules. This is the backbone of the whole security model. <a href="#security">(§22)</a></p>
+
+<!-- ============ 6 ============ -->
+<h2 id="storage">6 · The photo album (file storage)</h2>
+<p>Databases are great for text and numbers but bad at big binary files like images. So product photos live in <b>Supabase Storage</b> — a place designed to hold files and serve them over the web. The database just stores a short text <b>link</b> to each photo (in the product's <code>img</code> column).</p>
+<div class="why"><div class="lbl">Why images are compressed to ~900px before upload</div>A photo straight from a phone can be 5&nbsp;MB. Shrinking it to ~900 pixels / ~100&nbsp;KB makes pages load fast on Tamale mobile networks and keeps you inside the storage &amp; bandwidth (<a href="#glossary">"egress"</a>) limits. We also added <code>loading="lazy"</code> so the browser only downloads a photo when you scroll to it — critical once the catalogue has hundreds of items.</div>
+
+<!-- ============ 7 ============ -->
+<h2 id="hosting">7 · Where the server lives (Render)</h2>
+<p>Our <code>server.js</code> has to run on a computer that's always on and reachable from the internet. That computer is rented from <b>Render</b>, a hosting platform. Render's best trick: it watches our GitHub code repository, and <b>every time we push new code, it automatically rebuilds and redeploys</b> — no manual uploading.</p>
+<h4>What "build" and "deploy" mean here</h4>
+<ol>
+  <li><b>Build:</b> Render downloads the latest code from GitHub, installs the dependencies (<code>npm install</code>), and gets everything ready.</li>
+  <li><b>Deploy:</b> Render starts <code>server.js</code>, which — at startup — bundles all the frontend files together (see <a href="#bundling">§13</a>) and begins answering requests.</li>
+</ol>
+<div class="warn"><div class="lbl">Real example from this project</div>Two deploys once failed with <code>git 403</code>. That error happened during the <i>download-from-GitHub</i> step — Render's permission to read the repo had temporarily lapsed. It had nothing to do with our code (which built fine) or Cloudflare; a retry fixed it. Lesson: a "build failed" can be about <i>fetching</i> the code, not the code itself — always read which step failed.</div>
+<div class="alt"><div class="lbl">Alternatives</div><b>Heroku</b> (the original of this style, now paid), <b>Railway</b>/<b>Fly.io</b> (similar to Render), <b>a raw virtual server</b> from AWS/DigitalOcean (cheapest at scale, but you manage everything yourself), or <b>Vercel/Netlify</b> (superb for frontends, awkward for a long-running server with background jobs like ours).</div>
+
+<!-- ============ 8 ============ -->
+<h2 id="dns">8 · Domains &amp; DNS (the internet's phone book)</h2>
+<p>Every computer on the internet has an <b>IP address</b> — a number like <code>216.24.57.1</code>. Humans can't remember numbers, so we use <b>domain names</b> like <code>sdg-mart.com</code>. <b>DNS</b> (Domain Name System) is the global phone book that translates the name into the number.</p>
+<p>You manage this translation with <b>DNS records</b>. The ones that matter:</p>
+<table>
+  <tr><th>Record</th><th>Means</th><th>Example use</th></tr>
+  <tr><td><b>A</b></td><td>name → an IP address (a number)</td><td>point a domain straight at a server</td></tr>
+  <tr><td><b>CNAME</b></td><td>name → <i>another name</i></td><td><code>www</code> → <code>sdgmart.onrender.com</code></td></tr>
+  <tr><td><b>TXT</b></td><td>free-text notes, used for verification</td><td>proving to Google/Resend you own the domain</td></tr>
+</table>
+<div class="why"><div class="lbl">The "@" you couldn't find</div><code>@</code> is DNS shorthand for "the bare domain itself" (<code>sdg-mart.com</code> with nothing in front). Cloudflare doesn't show a literal "@" — it just lists that row by the domain name. So the row named <code>sdg-mart.com</code> <i>is</i> your "@" record. The <code>www</code> row is the subdomain. Those two point at Render; the Google/Resend TXT records are unrelated verification notes and are left alone.</div>
+
+<!-- ============ 9 ============ -->
+<h2 id="cloudflare">9 · Cloudflare &amp; proxies (the shield in front)</h2>
+<p>A <b>proxy</b> is a middleman that stands between the visitor and your server. Instead of the customer's phone talking to Render directly, it talks to <b>Cloudflare</b>, and Cloudflare talks to Render. In the Cloudflare dashboard this is the difference between the <b>grey cloud</b> (DNS-only: Cloudflare just gives out the address and steps aside) and the <b>orange cloud</b> (proxied: all traffic flows <i>through</i> Cloudflare).</p>
+<div class="flow">
+  <div class="node"><b>Grey cloud</b><small>Phone → Render directly. Cloudflare only answered "where is it?"</small></div>
+  <div class="arrow">vs</div>
+  <div class="node"><b>Orange cloud</b><small>Phone → Cloudflare → Render. Cloudflare shields &amp; speeds every request.</small></div>
+</div>
+<p>Turning on the orange cloud gives you three things for free:</p>
+<ul>
+  <li><b>CDN (speed):</b> Cloudflare has servers worldwide. It keeps copies of your unchanging files (images, the app bundle) at a location near the visitor — so a shopper in Tamale gets them from nearby, not from Render's distant server. "CDN" = Content Delivery Network.</li>
+  <li><b>DDoS protection (safety):</b> if someone floods your site with fake traffic to knock it over, Cloudflare's huge network absorbs it before it reaches your small server.</li>
+  <li><b>Hides your origin (safety):</b> attackers see Cloudflare's address, not Render's, so they can't target your server directly.</li>
+</ul>
+<div class="warn"><div class="lbl">The ordering trap we navigated</div>You must set the SSL mode to <b>Full (strict)</b> <i>before</i> flipping to orange. Flip to orange while SSL is on "Flexible" and you get an endless redirect loop — the site goes down. Sequence matters: SSL setting first, cloud colour second.</div>
+<div class="why"><div class="lbl">Why "proxy" also matters for privacy/DDoS in general</div>Because all traffic passes through one controlled checkpoint, you can add rules there (block bad countries, rate-limit abusers, cache aggressively) without touching your app. It's a single place to defend and optimise.</div>
+
+<!-- ============ 10 ============ -->
+<h2 id="ssl">10 · HTTPS &amp; SSL (the padlock)</h2>
+<p>The little padlock in the address bar means the connection is <b>encrypted</b> with <b>SSL/TLS</b>. Without it, someone on the same Wi-Fi could read everything sent — including passwords and payment details. With it, the data is scrambled so only the server can read it. Every serious site (and every payment provider) requires HTTPS.</p>
+<p>"<b>Full (strict)</b>" — the Cloudflare setting — means: encrypt the visitor→Cloudflare hop <i>and</i> the Cloudflare→Render hop, and insist Render has a valid certificate. It's the most secure of Cloudflare's options and is safe because Render issues real certificates automatically.</p>
+<div class="analogy"><div class="lbl">Analogy</div>HTTP is a postcard — anyone handling it can read it. HTTPS is a sealed, tamper-proof envelope that only the recipient can open.</div>
+
+<!-- ============ 11 ============ -->
+<h2 id="caching">11 · Caching — the three layers (and why it bit us)</h2>
+<p><b>Caching</b> means keeping a ready-made copy of something so you don't rebuild or refetch it every time. It's the single biggest source of "why isn't my change showing up?" confusion, because there are <b>three separate caches</b> in SDGMart's path, each owned by someone different:</p>
+<table>
+  <tr><th>Layer</th><th>Who owns it</th><th>What it stores</th></tr>
+  <tr><td>1. Server memory</td><td>our <code>server.js</code></td><td>the built app bundle, the catalogue, top-sellers — for speed under load</td></tr>
+  <tr><td>2. Cloudflare edge</td><td>Cloudflare</td><td>copies of files near visitors</td></tr>
+  <tr><td>3. Browser cache</td><td>the visitor's phone</td><td>files already downloaded once</td></tr>
+</table>
+<h4>Layer 1 — in the server</h4>
+<p>The catalogue file (<code>/data/products.js</code>) is loaded by <i>every</i> visitor on <i>every</i> page. Rebuilding it from the database each time was slow (~700&nbsp;ms) and buckled under load. So the server now keeps the finished file in memory for 60 seconds, and admin edits instantly clear that cache. Result in load testing: from crashing at 20 simultaneous visitors to <b>~4,100 requests/second</b>.</p>
+<div class="con"><div class="lbl">The trade-off to remember</div>This cache lives inside the <i>one</i> server process. If you ever run several copies of the server, each would have its own cache and they could briefly disagree. Fine on one machine (today's setup); something to redesign only if you scale out.</div>
+<h4>Layers 2 &amp; 3 — the "stale for 4 hours" incident</h4>
+<p>When we turned on Cloudflare's orange cloud, a Cloudflare setting was silently overriding our server's instructions and telling browsers "keep this app code for 4 hours." So after a deploy, customers could keep running old code for up to 4 hours. We fixed it by setting Cloudflare to <b>"Respect Existing Headers"</b> — meaning Cloudflare obeys the cache duration our server sends (5 minutes for the app, "always check" for the catalogue and service worker) instead of overriding it.</p>
+<div class="why"><div class="lbl">Why "purge everything after each deploy" wasn't enough</div>Purging clears Cloudflare's copy (layer 2) but <b>cannot reach the copies already sitting on customers' phones</b> (layer 3). Those phones won't ask for a fresh copy until <i>their own</i> timer expires. The only real fix is at the instruction ("header") level, so phones are told a short duration in the first place. That's why the settings change — not a purge habit — was the correct solution.</div>
+
+<!-- ============ 12 ============ -->
+<h2 id="spa">12 · Why it's a "single-page app" (and the trade-off)</h2>
+<p>SDGMart is a <b>Single-Page Application (SPA)</b>. The browser loads the app <i>once</i>, and from then on, moving between "pages" (home → product → checkout) just redraws the screen with JavaScript — no full reload. It feels instant, like a phone app.</p>
+<table>
+  <tr><th>&nbsp;</th><th>Single-page app (what we have)</th><th>Multi-page (traditional)</th></tr>
+  <tr><td>Feel</td><td><span class="pill pro">Fast, app-like</span></td><td>Each click reloads the whole page</td></tr>
+  <tr><td>Search engines (SEO)</td><td><span class="pill con">Harder — one URL</span></td><td><span class="pill pro">Each page indexable</span></td></tr>
+  <tr><td>Sharing a link to one product</td><td><span class="pill con">Needs extra work</span></td><td><span class="pill pro">Natural</span></td></tr>
+  <tr><td>Analytics per section</td><td><span class="pill con">Needs manual events</span></td><td><span class="pill pro">Automatic</span></td></tr>
+</table>
+<div class="why"><div class="lbl">How we got the best of both</div>Rather than rebuild as multi-page, we added <b>real URLs inside the SPA</b> (<code>/shop</code>, <code>/checkout</code>, <code>/order-confirmed</code>…). The app still never fully reloads, but the address bar changes and each section has a shareable link — which also gave Google Analytics a proper page to track and Google Ads a real "order complete" address to count as a sale. Small change, most of the multi-page benefit, none of the rebuild.</div>
+
+<!-- ============ 13 ============ -->
+<h2 id="bundling">13 · The bundling trick (esbuild)</h2>
+<p>Browsers can't directly run the modern, JSX-flavoured React code we write — and loading 20 separate files would be slow. So at server startup, a tool called <b>esbuild</b> stitches all the component files into one optimised file, <code>/app.bundle.js</code>, translated into plain browser-friendly JavaScript. The browser downloads just that one file (plus React from a CDN).</p>
+<div class="why"><div class="lbl">Why build once at startup, on the server</div>Doing the translation in the browser (an older approach called "Babel in the browser") made every visitor's phone do the work — slow. Building once on the server means the heavy lifting happens a single time, and every visitor gets the fast, finished result. The bundle is rebuilt only when a source file actually changes.</div>
+<div class="alt"><div class="lbl">Alternatives</div>Big projects use <b>Webpack</b> or <b>Vite</b> with a separate build step during deployment. esbuild is dramatically faster and, done at startup, keeps the whole pipeline in one place with zero extra config — a good fit for this project's "keep it simple" philosophy.</div>
+
+<!-- ============ 14 ============ -->
+<h2 id="auth">14 · Accounts &amp; staying logged in (sessions)</h2>
+<p>When you log in, the server checks your password (which is stored <b>hashed</b> — scrambled one-way so even we can't read it) and, if correct, creates a <b>session</b>: a long random <b>token</b> saved in the <code>sessions</code> table with a 7-day expiry. Your browser keeps that token and sends it with every request, in a header that says <code>Authorization: Bearer &lt;token&gt;</code>. The server looks it up to know who you are.</p>
+<div class="analogy"><div class="lbl">Analogy</div>The token is a <b>coat-check ticket</b>. Logging in hands you a numbered ticket; the matching stub stays with the server. Every future request, you flash the ticket and the server knows it's you — without you re-stating your name and password each time. Lose the ticket (log out) and it's torn up.</div>
+<div class="why"><div class="lbl">Why random tokens instead of sending the password each time</div>The password travels exactly once (at login). After that, only the meaningless random token moves around — so even if a single request were somehow exposed, your actual password isn't in it, and the token can be revoked (deleted) without changing your password.</div>
+
+<!-- ============ 15 ============ -->
+<h2 id="pricing">15 · "Trust nothing from the browser" — server-side pricing</h2>
+<p>This is the most important security idea in the whole app. The browser code can be <i>edited by anyone</i> — a tech-savvy customer could change the price of an item to GHS&nbsp;0.01 before checking out. So the server <b>never trusts the prices the browser sends</b>. When an order comes in, the server recomputes everything from scratch — real prices from the database, valid promos, the customer's actual loyalty balance, delivery fee — in a function called <code>computeOrderPricing</code>. That server-computed total is what gets charged and stored.</p>
+<div class="why"><div class="lbl">The golden rule</div>The frontend is for <i>convenience and display</i>; the backend is the <i>source of truth</i>. Anything that affects money or permissions must be decided on the server, because the browser can be tampered with. This single principle prevents a whole category of fraud.</div>
+<p>The same principle appears everywhere: whether an order qualifies for free delivery, whether a birthday gift is valid, whether a guest can view a tracking page — all decided server-side, never taken on the browser's word.</p>
+
+<!-- ============ 16 ============ -->
+<h2 id="tokens">16 · Clever stateless tokens (guest order tracking)</h2>
+<p>Guests (people who order without an account) still need to track their order later, even from a different phone. We could have stored a random secret code in the database for every order — but there's a neater way that stores <b>nothing extra</b>.</p>
+<p>Each order gets a <b>tracking token</b> computed with <b>HMAC</b> — a mathematical "signature" that mixes the order's ID with a secret key only the server knows:</p>
+<pre><code>token = HMAC-SHA256(secret, "track:" + orderId)   → first 20 characters</code></pre>
+<p>To check a token, the server just recomputes it and compares. If they match, it's genuine. It's like a tamper-proof wax seal: only someone with the secret stamp could have produced it, and there's nothing to store or look up.</p>
+<div class="why"><div class="lbl">Why this is elegant</div><b>Zero database changes</b>, no lookups, unguessable (20 hex characters ≈ 80 bits of randomness), and it survives server restarts because it's pure maths. The customer's phone keeps the token; a shared link carries it. We added a rule that it stops working 7 days after delivery, so an old shared link can't reveal someone's address forever.</div>
+<div class="con"><div class="lbl">Honest limitation</div>Because it's derived from the Supabase key, rotating that key would invalidate outstanding guest links. A future improvement is a dedicated <code>TRACK_TOKEN_SECRET</code> so the two are independent.</div>
+
+<!-- ============ 17 ============ -->
+<h2 id="jobs">17 · Scheduled work without a scheduler (the /healthz trick)</h2>
+<p>Some jobs must run daily — send birthday wishes, place due recurring orders. Normally you'd use a <b>cron job</b> (a system timer). Render's free tier doesn't include one, so SDGMart uses a clever substitute.</p>
+<p>An external monitoring service (<b>UptimeRobot</b>) already pings <code>/healthz</code> every few minutes to keep the free server awake. That endpoint runs the daily jobs — but guarded by a "last run date" marker so the actual work happens <b>at most once per day</b>, no matter how many pings arrive.</p>
+<div class="analogy"><div class="lbl">Analogy</div>It's like a shopkeeper who checks a wall calendar every time the doorbell rings: "Have I done today's opening tasks yet? No? Do them and tick the box. Already ticked? Ignore." The doorbell (the ping) is frequent; the tasks happen once a day.</div>
+<div class="alt"><div class="lbl">Alternatives</div>A proper <b>cron service</b> (Render's paid tier, or a separate scheduler) is cleaner and fires at an exact time. The <code>/healthz</code> trick is a pragmatic zero-cost stand-in that's served the project well; worth upgrading if timing ever needs to be precise.</div>
+
+<!-- ============ 18 ============ -->
+<h2 id="payments">18 · Payments &amp; webhooks (Paystack)</h2>
+<p>SDGMart never handles card or mobile-money details itself — that would require heavy security certification. Instead it uses <b>Paystack</b>, a Ghanaian-friendly payment provider. At checkout, Paystack opens its own secure popup; the customer pays there; SDGMart only learns the result.</p>
+<p>The flow uses a <b>webhook</b> — a way for Paystack to call <i>us</i> when something happens (rather than us constantly asking "is it paid yet?"):</p>
+<div class="flow">
+  <div class="node"><b>1. init</b><small>Server asks Paystack to start a payment</small></div>
+  <div class="arrow">→</div>
+  <div class="node"><b>2. popup</b><small>Customer pays in Paystack's secure window</small></div>
+  <div class="arrow">→</div>
+  <div class="node"><b>3. webhook</b><small>Paystack calls our server: "paid!"</small></div>
+  <div class="arrow">→</div>
+  <div class="node"><b>4. order</b><small>Server creates the paid order</small></div>
+</div>
+<div class="why"><div class="lbl">Why a webhook AND a "verify" step</div>Two independent confirmations make it robust: if the customer's browser confirms, great; if their tab closes mid-payment, the webhook still tells us and the order is created anyway. The server checks Paystack's cryptographic signature on the webhook so nobody can fake a "paid" message.</div>
+<div class="warn"><div class="lbl">The OTP note we added</div>The one-time password (OTP) for mobile money is sent by the customer's <i>bank/telco</i>, not by SDGMart — so if their network is slow, the SMS lags. We added an on-screen note telling customers to wait about a minute for Paystack's "get OTP via WhatsApp" backup. It's a real-world UX fix for a Ghana-specific network reality.</div>
+
+<!-- ============ 19 ============ -->
+<h2 id="pwa">19 · Installable app &amp; notifications (PWA + Web Push)</h2>
+<p>SDGMart is a <b>PWA (Progressive Web App)</b> — a website that can be "installed" to a phone's home screen and then behaves like a native app (full-screen, its own icon, works partly offline). The magic ingredients are a <code>manifest.json</code> (name, icon, colours) and a <b>service worker</b> (<code>sw.js</code>) — a small script the browser runs in the background even when the site isn't open.</p>
+<p>The service worker also enables <b>Web Push</b> notifications ("Your rider is on the way!"). These use <b>VAPID</b> keys, a standard that lets a server send a notification to a specific browser securely.</p>
+<div class="con"><div class="lbl">The iPhone caveat worth knowing</div>On iPhone, push notifications only work if the customer <b>installs the app to their home screen first</b> (Apple's rule). In plain Safari they get no pushes. That's why nudging installation matters most for iPhone users — it's the gateway to notifications. Android has no such restriction.</div>
+
+<!-- ============ 20 ============ -->
+<h2 id="squads">20 · Feature deep-dive: Squads &amp; loyalty</h2>
+<p>"Squads" are a group-buying incentive: invite friends with your referral link, and when <b>every</b> squad member's spending crosses GHS&nbsp;500, everyone gets a GHS&nbsp;25 loyalty reward. It's a growth engine — customers recruit customers.</p>
+<h4>The rollover fix we made</h4>
+<p>Originally, when a squad hit the goal, everyone's counter reset to zero — so a member who'd reached GHS&nbsp;730 while waiting for slower friends <i>lost</i> the extra 230. Now that overflow <b>rolls into the next round</b>: they restart at 230, not 0. It rewards the eager shopper instead of punishing them, and it's simply fairer.</p>
+<h4>The 5-member cap</h4>
+<p>Squads are limited to 5 members. A 6th person using your link still counts as your referral (you get credited) but starts their own squad. This keeps the "everyone must hit 500" goal achievable rather than impossible with a huge group.</p>
+<div class="why"><div class="lbl">Design lesson</div>Incentive systems have to be tuned so the goal feels reachable and effort feels rewarded. Both fixes came from thinking through the <i>human</i> experience of a real squad, not just the code.</div>
+
+<!-- ============ 21 ============ -->
+<h2 id="recurring">21 · Feature deep-dive: recurring orders</h2>
+<p>Customers can set up an auto-reorder ("my usual, every 2 weeks"). The interface and data existed for a while, but nothing actually <i>placed</i> the orders — so we built the job that does. Each day (via the <code>/healthz</code> trick, <a href="#jobs">§17</a>) it finds recurring orders that are due and places them through the <b>exact same code path as a normal checkout</b> — so pricing, promos, loyalty, and the delivery cutoff all behave identically.</p>
+<p>It handles the messy real-world cases carefully:</p>
+<ul>
+  <li>Items that are sold out or no longer exist are <b>dropped</b>, with a "we skipped this round" notification if that empties the order.</li>
+  <li>It's always <b>Cash on Delivery</b> — there's no stored card to auto-charge (Paystack is popup-only, needs the customer present).</li>
+  <li>The next date advances <b>even if a run fails</b>, so a broken order can't retry forever and spam the customer daily.</li>
+  <li>Each order is wrapped in error handling, so one failure doesn't stop the others.</li>
+</ul>
+<div class="why"><div class="lbl">Design lesson</div>Automated jobs run unattended, so they must fail <i>gracefully</i> and <i>quietly move on</i>. Half of this feature is the happy path; the other half is "what if the product's gone / the run errors / it's not due yet" — and that half is what makes it trustworthy.</div>
+
+<!-- ============ 22 ============ -->
+<h2 id="security">22 · The security model in one picture</h2>
+<p>Every protection in SDGMart follows from one principle: <b>the browser is untrusted; the server is the guardian.</b></p>
+<table>
+  <tr><th>Protection</th><th>How it works</th></tr>
+  <tr><td>Prices can't be faked</td><td>Server recomputes every total from the database (<a href="#pricing">§15</a>)</td></tr>
+  <tr><td>Database can't be touched directly</td><td>Powerful key lives only on the server; browser must go through the API (<a href="#database">§5</a>)</td></tr>
+  <tr><td>Passwords can't leak</td><td>Stored hashed (one-way scrambled); only a random token travels after login (<a href="#auth">§14</a>)</td></tr>
+  <tr><td>Guest tracking can't be guessed</td><td>Unguessable signed token, expires after delivery (<a href="#tokens">§16</a>)</td></tr>
+  <tr><td>Fake "payment done" messages</td><td>Webhook signature checked cryptographically (<a href="#payments">§18</a>)</td></tr>
+  <tr><td>Source code &amp; secrets stay hidden</td><td>Server blocks direct download of code/config files; secrets live in environment variables, never in the repo</td></tr>
+  <tr><td>Traffic is encrypted &amp; shielded</td><td>HTTPS everywhere + Cloudflare in front (<a href="#ssl">§10</a>, <a href="#cloudflare">§9</a>)</td></tr>
+</table>
+
+<!-- ============ 23 ============ -->
+<h2 id="glossary">23 · Plain-language glossary</h2>
+<table>
+  <tr><th>Term</th><th>In one sentence</th></tr>
+  <tr><td><b>Frontend</b></td><td>The part that runs in the browser — what the customer sees and clicks.</td></tr>
+  <tr><td><b>Backend / server</b></td><td>The program on a remote computer that makes decisions and guards the data.</td></tr>
+  <tr><td><b>API</b></td><td>The menu of URLs the frontend can call to get things done.</td></tr>
+  <tr><td><b>Database</b></td><td>Permanent, structured storage — the filing cabinet.</td></tr>
+  <tr><td><b>DNS</b></td><td>The internet's phone book: turns <code>sdg-mart.com</code> into a numeric address.</td></tr>
+  <tr><td><b>IP address</b></td><td>A computer's numeric address on the internet.</td></tr>
+  <tr><td><b>DNS record (A / CNAME / TXT)</b></td><td>An entry that maps a name to a number / another name / a text note.</td></tr>
+  <tr><td><b>Proxy</b></td><td>A middleman server that traffic passes through (Cloudflare).</td></tr>
+  <tr><td><b>CDN</b></td><td>A network of worldwide servers that keep nearby copies of files for speed.</td></tr>
+  <tr><td><b>DDoS</b></td><td>An attack that floods a site with fake traffic to knock it offline.</td></tr>
+  <tr><td><b>HTTPS / SSL / TLS</b></td><td>Encryption for web traffic — the padlock.</td></tr>
+  <tr><td><b>Caching</b></td><td>Keeping a ready-made copy so you don't rebuild/refetch every time.</td></tr>
+  <tr><td><b>Egress</b></td><td>Data leaving a server toward users; usually metered and capped (images dominate it).</td></tr>
+  <tr><td><b>SPA</b></td><td>Single-Page App: loads once, then redraws without full reloads.</td></tr>
+  <tr><td><b>PWA</b></td><td>A website installable to the home screen that behaves like a native app.</td></tr>
+  <tr><td><b>Service worker</b></td><td>A background browser script enabling offline use and push notifications.</td></tr>
+  <tr><td><b>Session / token</b></td><td>A coat-check ticket proving you're logged in.</td></tr>
+  <tr><td><b>Hashing</b></td><td>One-way scrambling (used for passwords) that can't be reversed.</td></tr>
+  <tr><td><b>HMAC</b></td><td>A signature that proves data is genuine using a secret key.</td></tr>
+  <tr><td><b>Webhook</b></td><td>One service calling another to say "this just happened" (Paystack → us).</td></tr>
+  <tr><td><b>Cron job</b></td><td>A task that runs automatically on a schedule.</td></tr>
+  <tr><td><b>Environment variable</b></td><td>A secret setting (keys, passwords) kept outside the code.</td></tr>
+  <tr><td><b>Deploy</b></td><td>Publishing new code so it goes live.</td></tr>
+  <tr><td><b>Repository (repo)</b></td><td>The project's code, version-tracked on GitHub.</td></tr>
+</table>
+
+<!-- ============ 24 ============ -->
+<h2 id="grow">24 · How SDGMart could grow (and what to watch)</h2>
+<ul>
+  <li><b>Traffic grows:</b> upgrade Render (bigger machine, so requests don't queue) and Supabase (more bandwidth for images + automatic backups). Neither needs code changes.</li>
+  <li><b>If you ever run multiple server copies:</b> the in-memory caches (<a href="#caching">§11</a>) would need to move to a shared store like Redis, since each copy currently caches independently.</li>
+  <li><b>Precise scheduling:</b> replace the <code>/healthz</code> daily-job trick with a real cron service if timing ever needs to be exact.</li>
+  <li><b>Search &amp; discovery:</b> as the catalogue grows to hundreds of items, a few dedicated, indexable product pages would help Google send you shoppers.</li>
+  <li><b>Resilience:</b> a dedicated tracking-token secret, automated tests, and an error-monitoring service (a Sentry hook already exists) are natural next hardening steps.</li>
+</ul>
+
+<div class="footer-note">
+  <p><b>SDGMart — Learning Guide.</b> Generated as a plain-language companion to the codebase. Every mechanism described here is live in the project today: <code>server.js</code> (backend), <code>database.js</code> (data layer), <code>components/*.jsx</code> (frontend), <code>sw.js</code> (service worker), hosted on Render, fronted by Cloudflare, data in Supabase, payments via Paystack. Pair this with <code>HANDOFF.md</code> for the running project log.</p>
+  <p>Tip: open this file in any browser (double-click it). It's fully self-contained — no internet needed.</p>
+</div>
+
+</main>
+</div>
+</body>
+</html>
