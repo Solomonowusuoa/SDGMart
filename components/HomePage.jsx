@@ -435,16 +435,20 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
           </h2>
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(auto-fill,minmax(180px,1fr))', gap: 14 }}>
             {window.CATEGORIES.map((cat, i) => {
+              // Self-hosted (formerly hot-linked from Unsplash) so they load same-origin
+              // from sdg-mart.com — fixes old browsers (e.g. Windows 7) that couldn't reach
+              // the external CDN. Saved at the same 600px/q80 as before (identical quality).
+              // Order matches window.CATEGORIES; served from /icons via express.static.
               const catImages = [
-                'https://images.unsplash.com/photo-1517686469429-8bdb88b9f907?w=600&q=80', // Cereals - oats/grains
-                'https://images.unsplash.com/photo-1550583724-b2692b85b150?w=600&q=80', // Dairy - milk bottles
-                'https://images.unsplash.com/photo-1563453392212-326f5e854473?w=600&q=80', // Detergents - cleaning
-                'https://images.unsplash.com/photo-1586201375761-83865001e31c?w=600&q=80', // Rice & Grains
-                'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=600&q=80', // Cooking Oil - olive oil
-                'https://images.unsplash.com/photo-1621939514649-280e2ee25f60?w=600&q=80', // Snacks - chips
-                'https://images.unsplash.com/photo-1534483509719-3feaee7c30da?w=600&q=80', // Canned Foods
-                'https://images.unsplash.com/photo-1556679343-c7306c1976bc?w=600&q=80', // Drinks - cold beverages
-                'https://images.unsplash.com/photo-1551024506-0bccd828d307?w=600&q=80', // Desserts
+                '/icons/categories/cereals.jpg',     // Cereals
+                '/icons/categories/dairy.jpg',       // Dairy
+                '/icons/categories/detergents.jpg',  // Detergents
+                '/icons/categories/rice.jpg',        // Rice & Grains
+                '/icons/categories/cooking-oil.jpg', // Cooking Oil
+                '/icons/categories/snacks.jpg',      // Snacks
+                '/icons/categories/canned.jpg',      // Canned Foods
+                '/icons/categories/drinks.jpg',      // Drinks
+                '/icons/categories/desserts.jpg',    // Desserts
               ];
               return (
                 <button key={cat} onClick={() => { setSelectedCategory(cat); setPage('category'); }}
