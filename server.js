@@ -10,6 +10,18 @@ const zlib = require('zlib');
 const fs = require('fs');
 const db = require('./database');
 
+// ── Sentry (optional error monitoring) — only active when SENTRY_DSN is set.
+// No-op otherwise, so local/dev runs need nothing. On Render, create a Sentry
+// project, set SENTRY_DSN in the dashboard, and the errors below forward there.
+let Sentry = null;
+if (process.env.SENTRY_DSN) {
+  try {
+    Sentry = require('@sentry/node');
+    Sentry.init({ dsn: process.env.SENTRY_DSN, environment: process.env.NODE_ENV || 'production', tracesSampleRate: 0 });
+    console.log('🛡  Sentry error monitoring enabled');
+  } catch (e) { console.warn('Sentry init skipped:', e.message); Sentry = null; }
+}
+
 // ── Resend (transactional email) ─────────────────────────────────────────
 // RESEND_API_KEY = your key from https://resend.com/api-keys
 // RESEND_FROM_EMAIL = sender address (default: onboarding@resend.dev for
@@ -1029,6 +1041,19 @@ app.get('/api/squads/:userId', requireAuth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Persistent cart (signed-in; a customer's cart follows them across devices) ──
+app.get('/api/me/cart', requireAuth, async (req, res) => {
+  try { res.json({ items: await db.carts.get(req.user.id) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/me/cart', requireAuth, async (req, res) => {
+  try {
+    const items = Array.isArray(req.body && req.body.items) ? req.body.items.slice(0, 100) : [];
+    await db.carts.save(req.user.id, items);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Web Push ─────────────────────────────────────────────────────────────
 let webpush = null;
 try { webpush = require('web-push'); } catch (_) { console.warn('⚠️  web-push not installed — push notifications disabled'); }
@@ -1712,6 +1737,7 @@ app.get('*', (req, res, next) => {
 // returns a clean 500. Optionally forwards to Sentry if SENTRY_DSN is set.
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err && err.stack ? err.stack : err);
+  if (Sentry) { try { Sentry.captureException(err, { extra: { path: req.originalUrl, method: req.method, userId: req.user ? req.user.id : null } }); } catch (_) {} }
   db.errorLog.record({
     message: err && err.message ? err.message : String(err),
     stack: err && err.stack ? err.stack : '',
@@ -1724,10 +1750,12 @@ app.use((err, req, res, next) => {
 // Process-level safety nets — log crashes instead of dying silently.
 process.on('unhandledRejection', (reason) => {
   console.error('Unhandled promise rejection:', reason);
+  if (Sentry) { try { Sentry.captureException(reason); } catch (_) {} }
   db.errorLog.record({ message: 'unhandledRejection: ' + (reason && reason.message ? reason.message : String(reason)), stack: reason && reason.stack ? reason.stack : '' });
 });
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception:', err);
+  if (Sentry) { try { Sentry.captureException(err); } catch (_) {} }
   db.errorLog.record({ message: 'uncaughtException: ' + err.message, stack: err.stack });
 });
 

@@ -1,3 +1,24 @@
+// Reusable "turn on notifications" card. Renders only when the browser
+// supports notifications AND the user hasn't decided yet (permission
+// 'default'), so it disappears once they allow/deny. On iOS Safari that
+// isn't installed to the home screen, push is unsupported → it hides itself.
+const NotifyOptIn = ({ label }) => {
+  const [perm, setPerm] = React.useState(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
+  if (perm !== 'default') return null;
+  return (
+    <div style={{ background: 'var(--cream)', border: '1px solid var(--cream-dark)', borderRadius: 12, padding: '13px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+      <div style={{ fontSize: 13, color: 'var(--warm-black)', lineHeight: 1.4 }}>🔔 {label || 'Get order updates & first dibs on flash sales'}</div>
+      <button onClick={async () => {
+        try { await window.subscribeToPush(); } catch (_) {}
+        setPerm(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
+      }} style={{ background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', border: 'none', cursor: 'pointer' }}>
+        Enable
+      </button>
+    </div>
+  );
+};
+Object.assign(window, { NotifyOptIn });
+
 // AccountPage — manage profile + saved addresses
 const AccountPage = ({ setPage, currentUser, setCurrentUser }) => {
   const isMobile = useMobile();
@@ -124,6 +145,11 @@ const AccountPage = ({ setPage, currentUser, setCurrentUser }) => {
         {saved && <span style={{ marginLeft: 12, color: 'var(--sage)', fontSize: 13 }}>✓ {saved}</span>}
         {err && <span style={{ marginLeft: 12, color: 'var(--accent-red)', fontSize: 13 }}>{err}</span>}
       </section>
+
+      {/* Notifications opt-in */}
+      <div style={{ marginBottom: 20 }}>
+        <NotifyOptIn label="Turn on notifications for order updates & flash-sale alerts" />
+      </div>
 
       {/* Addresses */}
       <section style={{ background: 'var(--white)', borderRadius: 12, padding: '20px 22px', boxShadow: 'var(--shadow)', marginBottom: 20 }}>

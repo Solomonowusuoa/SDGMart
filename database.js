@@ -1089,12 +1089,27 @@ async function cancelOrder(orderId, userId, reason) {
   return { ok: true };
 }
 
+// ── Persistent cart (signed-in users; syncs across devices) ──────────────
+const carts = {
+  async get(userId) {
+    const { data, error } = await sb.from('carts').select('items').eq('user_id', userId).maybeSingle();
+    if (error) throw error;
+    return data && Array.isArray(data.items) ? data.items : [];
+  },
+  async save(userId, items) {
+    await sb.from('carts').upsert(
+      { user_id: userId, items: Array.isArray(items) ? items : [], updated_at: new Date().toISOString() },
+      { onConflict: 'user_id' }
+    );
+  },
+};
+
 module.exports = {
   sb,
   users, squads, sessions, riders, orders, products,
   addresses, reviews, issueReports, promotions, productRequests, stats,
   metrics, leaderboard, referrals, errorLog, pendingPayments,
-  pushSubs, searchLog, recurring, appConfig,
+  pushSubs, searchLog, recurring, appConfig, carts,
   rowOut, rowsOut,
   hashPassword, verifyPassword, validatePasswordStrength,
   rateCheck, rateClear,

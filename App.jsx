@@ -71,6 +71,36 @@ const App = () => {
   React.useEffect(() => {
     try { localStorage.setItem('sdgmart_cart', JSON.stringify(cart)); } catch (_) {}
   }, [cart]);
+  // Server-persisted cart for signed-in users — on sign-in, merge their saved
+  // cart (so it follows them across devices); then save changes back (debounced).
+  const cartSyncedRef = React.useRef(false);
+  const mergeCarts = (local, server) => {
+    const map = new Map();
+    (Array.isArray(server) ? server : []).forEach(it => { if (it && it.id != null) map.set(it.id, { ...it }); });
+    (Array.isArray(local) ? local : []).forEach(it => {
+      if (!it || it.id == null) return;
+      const ex = map.get(it.id);
+      map.set(it.id, ex ? { ...it, qty: Math.max(it.qty || 1, ex.qty || 1) } : { ...it });
+    });
+    return [...map.values()];
+  };
+  React.useEffect(() => {
+    const signedIn = currentUser && currentUser.id && currentUser.role !== 'guest' && currentUser.token;
+    if (!signedIn) { cartSyncedRef.current = false; return; }
+    if (cartSyncedRef.current) return;
+    cartSyncedRef.current = true;
+    apiFetch('/api/me/cart').then(r => r.ok ? r.json() : null).then(d => {
+      if (d && Array.isArray(d.items) && d.items.length) setCart(prev => mergeCarts(prev, d.items));
+    }).catch(() => {});
+  }, [currentUser]);
+  React.useEffect(() => {
+    const signedIn = currentUser && currentUser.id && currentUser.role !== 'guest' && currentUser.token;
+    if (!signedIn || !cartSyncedRef.current) return;
+    const t = setTimeout(() => {
+      apiFetch('/api/me/cart', { method: 'PUT', body: JSON.stringify({ items: cart }) }).catch(() => {});
+    }, 800);
+    return () => clearTimeout(t);
+  }, [cart, currentUser]);
   const [cartOpen, setCartOpen] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState('');
 

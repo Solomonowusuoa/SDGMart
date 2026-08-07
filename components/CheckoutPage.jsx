@@ -479,6 +479,10 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
           );
         })()}
 
+        <div style={{ marginTop: 16 }}>
+          {window.NotifyOptIn && <window.NotifyOptIn label="Get notified the moment your rider sets off" />}
+        </div>
+
         {trackingCode && (
           <div style={{ background: '#FFF8E1', border: '1px solid #F0DCA0', borderRadius: 10, padding: '14px 16px', marginTop: 22, textAlign: 'left' }}>
             <div style={{ fontSize: 12, color: '#7A5A00', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>
