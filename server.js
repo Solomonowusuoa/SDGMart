@@ -631,6 +631,12 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
     if (loc) await db.addresses.markLastUsed(userId, loc, neighborhood);
   }
   db.stats.invalidateDelivered();
+  // Ping admins so a new order is never missed.
+  notifyAdmins({
+    title: '🛒 New order #' + created.id,
+    body: (customer || 'Customer') + ' · GHS ' + pricing.total + (neighborhood ? ' · ' + neighborhood : ''),
+    url: '/admin', tag: 'admin-order-' + created.id,
+  }).catch(() => {});
   return {
     ok: true, id: created.id, total: pricing.total,
     deliveryDate: deliveryDateStr, deliverySlot, priority,
@@ -1074,6 +1080,15 @@ async function pushToUser(userId, payload) {
   } catch (e) { console.warn('pushToUser failed:', e.message); }
 }
 
+// Notify every admin's subscribed devices of an event needing attention.
+// Fire-and-forget from handlers so it never slows a customer's request down.
+async function notifyAdmins(payload) {
+  try {
+    const { data } = await db.sb.from('users').select('id').eq('role', 'admin');
+    await Promise.all((data || []).map((a) => pushToUser(a.id, payload)));
+  } catch (e) { console.warn('notifyAdmins failed:', e.message); }
+}
+
 // Lightweight daily job runner. There is no cron on this host, so it runs
 // opportunistically on /healthz pings (UptimeRobot hits it every 5 min) and is
 // guarded by an app_config date-marker so the work happens at most once a day.
@@ -1328,6 +1343,7 @@ app.post('/api/me/orders/:id/report-issue', requireAuth, async (req, res) => {
   if (!description) return res.status(400).json({ error: 'Please describe the issue' });
   try {
     const rep = await db.issueReports.create({ orderId: o.id, userId: req.user.id, issueType, description });
+    notifyAdmins({ title: '⚠️ Order issue reported', body: 'Order #' + o.id + ': ' + String(description).slice(0, 80), url: '/admin', tag: 'admin-issue-' + o.id }).catch(() => {});
     res.json(rep);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1339,7 +1355,9 @@ app.post('/api/feedback', requireAuth, async (req, res) => {
   const rate = db.rateCheck(`feedback:${req.user.id}`, { windowMs: 10 * 60 * 1000, max: 5 });
   if (!rate.allowed) return res.status(429).json({ error: 'Too many messages — please try again later' });
   try {
-    res.json(await db.issueReports.create({ orderId: null, userId: req.user.id, issueType: 'feedback', description }));
+    const fb = await db.issueReports.create({ orderId: null, userId: req.user.id, issueType: 'feedback', description });
+    notifyAdmins({ title: '💬 New feedback', body: String(description).slice(0, 90), url: '/admin', tag: 'admin-feedback' }).catch(() => {});
+    res.json(fb);
   } catch (e) {
     console.error('feedback save failed:', e.message);
     res.status(500).json({ error: 'Could not send right now — please use the WhatsApp button instead.' });
@@ -1546,6 +1564,7 @@ app.post('/api/product-requests', async (req, res) => {
       userId: req.user ? req.user.id : null,
       name, whatsappNumber, callNumber, contactWhatsapp, contactCall, productName, notes,
     });
+    notifyAdmins({ title: '🔍 Product request', body: (name || 'Someone') + ' wants: ' + String(productName).slice(0, 70), url: '/admin', tag: 'admin-request' }).catch(() => {});
     res.json({ ok: true, id: r.id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

@@ -589,6 +589,11 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
         {adminTab === 'overview' && (
           <div>
             <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginBottom: 24 }}>Dashboard Overview</h1>
+            {window.NotifyOptIn && (
+              <div style={{ marginBottom: 20 }}>
+                <window.NotifyOptIn label="Enable admin alerts — get pinged instantly on new orders, requests & feedback" />
+              </div>
+            )}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 18, marginBottom: 32 }}>
               {[
                 ['Total Revenue', `GHS ${revenue.toFixed(2)}`, '💰', 'var(--sage)'],
