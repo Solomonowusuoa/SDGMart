@@ -64,10 +64,7 @@ const FeedbackBox = ({ dark }) => {
 
   return (
     <div style={{ background: 'var(--white)', borderRadius: 12, padding: '20px 22px', boxShadow: 'var(--shadow)', color: 'var(--warm-black)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-        <span style={{ fontSize: 22 }}>💬</span>
-        <h3 style={{ fontFamily: 'var(--font-head)', fontSize: 18, fontWeight: 700, margin: 0 }}>Spotted a problem? Tell us.</h3>
-      </div>
+      <h3 style={{ fontFamily: 'var(--font-head)', fontSize: 18, fontWeight: 700, margin: '0 0 8px' }}>Spotted a problem? Tell us.</h3>
       <p style={{ fontSize: 13, color: 'var(--warm-gray)', lineHeight: 1.6, marginBottom: 14 }}>
         Your feedback matters deeply to us — every message is read by our team and taken
         seriously. It's how we keep growing and serving Tamale better, so please don't hold back.
@@ -75,7 +72,7 @@ const FeedbackBox = ({ dark }) => {
 
       {state === 'sent' ? (
         <div style={{ background: 'var(--cream)', borderRadius: 10, padding: '14px 16px', fontSize: 14 }}>
-          🙏 <strong>Thank you!</strong> We've received your message and will look into it.
+          <strong>Thank you!</strong> We've received your message and will look into it.
           <button onClick={() => { setMsg(''); setState('idle'); }}
             style={{ display: 'block', marginTop: 8, fontSize: 12, fontWeight: 700, color: 'var(--sage-dark)', background: 'transparent', padding: 0 }}>
             Send another
