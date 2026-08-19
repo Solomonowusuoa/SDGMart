@@ -385,8 +385,8 @@ app.get('/data/products.js', async (req, res) => {
     const productsList = (await db.products.list()).map(p => ({ ...p, bestseller: !!p.bestseller, img: p.img || null }));
     const counts = await getOrderItemCounts();
     const TOP_IDS_BY_ORDERS = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => Number(id));
-    const categories = ["Cereals","Dairy","Detergents","Rice & Grains","Cooking Oil","Snacks","Canned Foods","Drinks","Desserts"];
-    const essentials = [1, 5, 13, 17, 9, 29, 25, 22, 3];
+    const categories = ["Rice & Grains","Cooking Oil","Canned & Sauces","Spices & Seasoning","Dairy & Eggs","Drinks","Snacks & Biscuits","Breakfast & Cereals","Baking & Sugar","Coffee, Tea & Cocoa","Fruits & Vegetables","Staples (Tubers & Fufu)","Meat, Poultry & Seafood","Toiletries & Personal Care"];
+    const essentials = [46, 45, 37, 132, 79, 140, 141, 78, 99];
     const neighborhoods = ["Tamale Central","Kalpohin","Lamashegu","Sagnarigu","Nyohini","Choggu","Vittin","Tishigu","Gumbihini","Jisonayili"];
     // Customer-facing freshness/expiry display is off by default; admin can flip it on.
     const showFreshness = !!(await db.appConfig.get('show_freshness'));

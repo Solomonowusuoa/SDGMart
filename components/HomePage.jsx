@@ -439,21 +439,23 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
               // from sdg-mart.com — fixes old browsers (e.g. Windows 7) that couldn't reach
               // the external CDN. Saved at the same 600px/q80 as before (identical quality).
               // Order matches window.CATEGORIES; served from /icons via express.static.
-              const catImages = [
-                '/icons/categories/cereals.jpg',     // Cereals
-                '/icons/categories/dairy.jpg',       // Dairy
-                '/icons/categories/detergents.jpg',  // Detergents
-                '/icons/categories/rice.jpg',        // Rice & Grains
-                '/icons/categories/cooking-oil.jpg', // Cooking Oil
-                '/icons/categories/snacks.jpg',      // Snacks
-                '/icons/categories/canned.jpg',      // Canned Foods
-                '/icons/categories/drinks.jpg',      // Drinks
-                '/icons/categories/desserts.jpg',    // Desserts
-              ];
+              // Photos for the categories we have images for; the rest render as
+              // clean dark tiles (source more category images later to fill these in).
+              const CAT_IMAGES = {
+                'Rice & Grains': '/icons/categories/rice.jpg',
+                'Cooking Oil': '/icons/categories/cooking-oil.jpg',
+                'Canned & Sauces': '/icons/categories/canned.jpg',
+                'Dairy & Eggs': '/icons/categories/dairy.jpg',
+                'Drinks': '/icons/categories/drinks.jpg',
+                'Snacks & Biscuits': '/icons/categories/snacks.jpg',
+                'Breakfast & Cereals': '/icons/categories/cereals.jpg',
+              };
+              const catImg = CAT_IMAGES[cat];
               return (
                 <button key={cat} onClick={() => { setSelectedCategory(cat); setPage('category'); }}
                   style={{
                     position: 'relative', borderRadius: 'var(--radius-lg)',
+                    background: 'var(--sage-dark, #1A1A1A)',
                     overflow: 'hidden', aspectRatio: '4/3',
                     border: 'none', cursor: 'pointer', padding: 0,
                     transition: 'transform .2s, box-shadow .2s',
@@ -461,10 +463,10 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
                   onMouseEnter={e => { e.currentTarget.style.transform='translateY(-4px) scale(1.02)'; e.currentTarget.style.boxShadow='var(--shadow-lg)'; }}
                   onMouseLeave={e => { e.currentTarget.style.transform='none'; e.currentTarget.style.boxShadow='none'; }}>
                   {/* Photo */}
-                  <img src={catImages[i]} alt={cat} loading="lazy" decoding="async"
+                  {catImg && <img src={catImg} alt={cat} loading="lazy" decoding="async"
                     style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', transition: 'transform .3s' }}
                     onError={e => { e.target.style.display='none'; }}
-                  />
+                  />}
                   {/* Gradient overlay */}
                   <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(20,20,10,.72) 0%, rgba(20,20,10,.1) 55%, transparent 100%)' }} />
                   {/* Label */}
