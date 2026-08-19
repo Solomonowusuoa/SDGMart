@@ -1,65 +1,65 @@
-// CartDrawer — slide-in cart panel
+// CartDrawer — slide-in cart panel (design refresh)
 const CartDrawer = ({ cart, setCart, setPage, onClose }) => {
-  const total = cart.reduce((s, i) => s + i.price * i.qty, 0);
+  const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
+  const count = cart.reduce((s, i) => s + i.qty, 0);
+  const delivery = subtotal >= 150 ? 0 : 10;
 
   const updateQty = (id, delta) => {
     setCart(prev => prev.map(i => i.id === id ? { ...i, qty: Math.max(0, i.qty + delta) } : i).filter(i => i.qty > 0));
   };
   const remove = (id) => setCart(prev => prev.filter(i => i.id !== id));
 
+  const label = { fontFamily: 'var(--f-label)', fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', cursor: 'pointer' };
+
   return (
     <>
-      {/* Overlay */}
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.45)', zIndex: 200, backdropFilter: 'blur(2px)' }} />
-
-      {/* Drawer */}
-      <div style={{
-        position: 'fixed', top: 0, right: 0, height: '100vh', width: 420, maxWidth: '95vw',
-        background: 'var(--white)', zIndex: 201, boxShadow: '-8px 0 40px rgba(0,0,0,.18)',
-        display: 'flex', flexDirection: 'column', animation: 'slideIn .25s ease-out',
-      }}>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(17,17,17,.42)', zIndex: 200 }} />
+      <div style={{ position: 'fixed', top: 0, right: 0, height: '100vh', width: 400, maxWidth: '95vw', background: 'var(--panel)', zIndex: 201,
+        borderLeft: '1px solid var(--border-input)', display: 'flex', flexDirection: 'column', fontFamily: 'var(--f-ui)', color: 'var(--ink)', animation: 'slideIn .25s ease-out' }}>
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 
         {/* Header */}
-        <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--cream-dark)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-          <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700 }}>Your Cart ({cart.reduce((s,i)=>s+i.qty,0)})</h2>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '22px 24px', borderBottom: '1px solid var(--rule)' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+            <span style={{ fontFamily: 'var(--f-display)', fontSize: 22, fontWeight: 700, letterSpacing: '-.028em' }}>Your Cart</span>
+            <span style={{ fontFamily: 'var(--f-display)', fontSize: 16, fontWeight: 800, color: 'var(--accent)' }}>{count}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             {cart.length > 0 && (
               <button onClick={() => { if (window.confirm('Remove all items from your cart?')) setCart([]); }}
-                style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-red)', background: 'rgba(192,57,43,.08)', borderRadius: 8, padding: '6px 12px' }}>
-                Clear all
-              </button>
+                style={{ ...label, background: 'none', border: 'none', fontSize: 12, color: 'var(--accent)' }}>Clear all</button>
             )}
-            <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--cream)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, color: 'var(--warm-gray)' }}>×</button>
+            <button onClick={onClose} aria-label="Close cart" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--rd-faint)', fontSize: 16, lineHeight: 1, padding: 0 }}>✕</button>
           </div>
         </div>
 
         {/* Items */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
+        <div style={{ flex: 1, overflowY: 'auto' }}>
           {cart.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '60px 16px', color: 'var(--warm-gray)' }}>
-              <div style={{ fontSize: 48 }}>☀️</div>
-              <div style={{ fontWeight: 700, marginTop: 12, fontSize: 15 }}>Your cart is dustier than harmattan</div>
-              <div style={{ fontSize: 13, marginTop: 6, lineHeight: 1.5, maxWidth: 280, margin: '6px auto 0' }}>Drop something in to cool it down.</div>
+            <div style={{ padding: '64px 28px', textAlign: 'center' }}>
+              <div style={{ fontFamily: 'var(--f-serif)', fontStyle: 'italic', fontSize: 26, color: 'var(--ink)', lineHeight: 1.2 }}>Your cart is empty.</div>
+              <div style={{ fontSize: 13.5, color: 'var(--rd-muted)', marginTop: 10, lineHeight: 1.6 }}>Add a few essentials and they'll show up here.</div>
+              <button onClick={onClose} style={{ ...label, marginTop: 18, background: 'var(--ink)', color: '#fff', border: 'none', padding: '12px 20px', fontSize: 12.5 }}>Start shopping</button>
             </div>
           ) : cart.map(item => (
-            <div key={item.id} style={{ display: 'flex', gap: 14, padding: '14px 0', borderBottom: '1px solid var(--cream-dark)', alignItems: 'center' }}>
-              {/* Mini product image */}
-              <div style={{ width: 56, height: 56, borderRadius: 10, background: 'var(--cream)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>
-                {['🌾','🥛','🧴','🍚','🫙','🍪','🥫','🥤','🍫'][window.CATEGORIES.indexOf(item.category)] || '📦'}
+            <div key={item.id} style={{ display: 'flex', gap: 14, padding: '20px 24px', borderBottom: '1px solid var(--rule)' }}>
+              <div style={{ width: 64, height: 64, flex: 'none', background: '#fff', border: '1px solid var(--rule-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                {item.img
+                  ? <img src={item.img} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} onError={e => { e.target.style.visibility = 'hidden'; }} />
+                  : <span style={{ width: '100%', height: '100%', background: 'repeating-linear-gradient(135deg,#f4f4f1 0 6px,#eceae5 6px 12px)' }} />}
               </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name}</div>
-                <div style={{ fontSize: 12, color: 'var(--warm-gray)' }}>{item.unit}</div>
-                <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--sage-dark)', marginTop: 2 }}>GHS {(item.price * item.qty).toFixed(2)}</div>
+              <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600, letterSpacing: '-.012em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
+                <div style={{ fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--rd-faint)' }}>{item.unit || 'each'}</div>
+                <div style={{ paddingTop: 2 }}><RPrice amount={item.price * item.qty} size="sm" /></div>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 0, border: '1.5px solid var(--cream-dark)', borderRadius: 8, overflow: 'hidden' }}>
-                  <button onClick={() => updateQty(item.id, -1)} style={{ width: 28, height: 28, fontSize: 16, color: 'var(--warm-gray)', background: 'var(--cream)' }}>−</button>
-                  <span style={{ width: 28, textAlign: 'center', fontWeight: 700, fontSize: 13 }}>{item.qty}</span>
-                  <button onClick={() => updateQty(item.id, 1)} style={{ width: 28, height: 28, fontSize: 14, color: 'var(--sage)', background: 'var(--cream)' }}>+</button>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10, flexShrink: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', border: '1px solid var(--border-input)' }}>
+                  <button onClick={() => updateQty(item.id, -1)} aria-label="Decrease" style={{ padding: '6px 10px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--rd-muted)', fontSize: 14 }}>−</button>
+                  <span style={{ padding: '6px 4px', minWidth: 22, textAlign: 'center', fontFamily: 'var(--f-display)', fontWeight: 700, fontSize: 13 }}>{item.qty}</span>
+                  <button onClick={() => updateQty(item.id, 1)} aria-label="Increase" style={{ padding: '6px 10px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink)', fontSize: 14 }}>+</button>
                 </div>
-                <button onClick={() => remove(item.id)} style={{ fontSize: 11, color: 'var(--accent-red)', fontWeight: 600 }}>Remove</button>
+                <button onClick={() => remove(item.id)} style={{ ...label, background: 'none', border: 'none', fontSize: 11.5, color: 'var(--rd-faint)' }}>Remove</button>
               </div>
             </div>
           ))}
@@ -67,29 +67,22 @@ const CartDrawer = ({ cart, setCart, setPage, onClose }) => {
 
         {/* Footer */}
         {cart.length > 0 && (
-          <div style={{ padding: '20px 24px', borderTop: '1px solid var(--cream-dark)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-              <span style={{ color: 'var(--warm-gray)', fontSize: 14 }}>Subtotal</span>
-              <span style={{ fontWeight: 700, fontSize: 14 }}>GHS {total.toFixed(2)}</span>
+          <div style={{ padding: '22px 24px', borderTop: '1px solid var(--rule)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+              <span style={{ color: 'var(--rd-muted)' }}>Subtotal</span>
+              <span style={{ fontFamily: 'var(--f-display)', fontWeight: 700 }}>GHS {subtotal.toFixed(2)}</span>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-              <span style={{ color: 'var(--warm-gray)', fontSize: 13 }}>Delivery</span>
-              <span style={{ fontSize: 13, color: total >= 150 ? 'var(--sage)' : 'var(--warm-gray)', fontWeight: total >= 150 ? 700 : 400 }}>{total >= 150 ? 'FREE 🎉' : 'GHS 10.00'}</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, paddingBottom: 12, borderBottom: '1px solid var(--rule)' }}>
+              <span style={{ color: 'var(--rd-muted)' }}>Delivery</span>
+              <span style={{ fontFamily: 'var(--f-display)', fontWeight: 700, color: delivery === 0 ? 'var(--wa)' : 'var(--ink)' }}>{delivery === 0 ? 'FREE' : 'GHS 10.00'}</span>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20, paddingTop: 10, borderTop: '1.5px solid var(--cream-dark)' }}>
-              <span style={{ fontWeight: 700, fontSize: 16 }}>Total</span>
-              <span style={{ fontWeight: 700, fontSize: 18, color: 'var(--sage-dark)' }}>GHS {(total + (total >= 150 ? 0 : 10)).toFixed(2)}</span>
+            <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
+              <span style={{ fontFamily: 'var(--f-display)', fontSize: 18, fontWeight: 700, letterSpacing: '-.03em' }}>Total</span>
+              <RPrice amount={subtotal + delivery} size="md" />
             </div>
             <button onClick={() => { onClose(); setPage('checkout'); }}
-              style={{ width: '100%', background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 15, transition: 'background .2s' }}
-              onMouseEnter={e => e.currentTarget.style.background='var(--sage-dark)'}
-              onMouseLeave={e => e.currentTarget.style.background='var(--sage)'}>
-              Proceed to Checkout →
-            </button>
-            <button onClick={onClose}
-              style={{ width: '100%', marginTop: 8, background: 'transparent', color: 'var(--warm-gray)', padding: '10px', fontSize: 13, fontWeight: 600 }}>
-              Continue Shopping
-            </button>
+              style={{ width: '100%', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', padding: 15, fontFamily: 'var(--f-ui)', fontSize: 14, fontWeight: 600 }}>Proceed to Checkout →</button>
+            <button onClick={onClose} style={{ ...label, background: 'none', border: 'none', textAlign: 'center', fontSize: 12.5, color: 'var(--rd-muted)' }}>Continue shopping</button>
           </div>
         )}
       </div>

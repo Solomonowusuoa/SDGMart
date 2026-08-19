@@ -1,139 +1,115 @@
-// CategoryPage
+// CategoryPage — design refresh: hairline grid + sidebar + Sort dropdown
 const CategoryPage = ({ selectedCategory, setSelectedCategory, onAdd, onView, searchQuery }) => {
-  const [sortBy, setSortBy] = React.useState('default');
+  const [sortBy, setSortBy] = React.useState('popular');
+  const [sortOpen, setSortOpen] = React.useState(false);
   const [activeCategory, setActiveCategory] = React.useState(selectedCategory);
-  const [showFilters, setShowFilters] = React.useState(false);
   const isMobile = useMobile();
   const showFreshness = typeof window !== 'undefined' && window.SHOW_FRESHNESS === true;
-  const sortChips = [['default','Default'],['price-asc','↑ Price'],['price-desc','↓ Price'], ...(showFreshness ? [['expiry','Expiry']] : [])];
-  const sortOptions = [['default','Default'],['price-asc','Price: Low to High'],['price-desc','Price: High to Low'], ...(showFreshness ? [['expiry','Expiry: Soonest']] : [])];
+
+  const SORTS = [
+    ['popular', 'Popular'],
+    ['price-asc', 'Price: Low to High'],
+    ['price-desc', 'Price: High to Low'],
+    ['name', 'Name: A–Z'],
+    ...(showFreshness ? [['expiry', 'Expiry: Soonest']] : []),
+  ];
+  const sortLabel = (SORTS.find(s => s[0] === sortBy) || SORTS[0])[1];
 
   React.useEffect(() => { setActiveCategory(selectedCategory); }, [selectedCategory]);
 
-  let filtered = activeCategory
-    ? window.PRODUCTS.filter(p => p.category === activeCategory)
-    : window.PRODUCTS;
-
+  let filtered = activeCategory ? window.PRODUCTS.filter(p => p.category === activeCategory) : window.PRODUCTS;
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
-    filtered = filtered.filter(p =>
-      p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q) || p.description.toLowerCase().includes(q)
-    );
+    filtered = filtered.filter(p => p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q) || (p.description || '').toLowerCase().includes(q));
   }
 
-  // Log search queries (debounced) for the admin analytics dashboard
+  // Log search queries (debounced) for admin analytics
   React.useEffect(() => {
     if (!searchQuery || !searchQuery.trim()) return;
     const t = setTimeout(() => {
-      try {
-        window.apiFetch('/api/search/log', {
-          method: 'POST',
-          body: JSON.stringify({ query: searchQuery.trim(), resultCount: filtered.length }),
-        }).catch(() => {});
-      } catch (_) {}
-    }, 1200); // wait 1.2s after typing stops before logging
+      try { window.apiFetch('/api/search/log', { method: 'POST', body: JSON.stringify({ query: searchQuery.trim(), resultCount: filtered.length }) }).catch(() => {}); } catch (_) {}
+    }, 1200);
     return () => clearTimeout(t);
   }, [searchQuery, filtered.length]);
 
-  if (sortBy === 'price-asc') filtered = [...filtered].sort((a,b) => a.price - b.price);
-  if (sortBy === 'price-desc') filtered = [...filtered].sort((a,b) => b.price - a.price);
-  if (sortBy === 'expiry') filtered = [...filtered].sort((a,b) => new Date(a.bestBefore) - new Date(b.bestBefore));
+  // Sorting (all client-side over the in-memory catalogue)
+  const TOP = window.TOP_IDS_BY_ORDERS || [];
+  const rank = new Map(TOP.map((id, i) => [id, i]));
+  const rankOf = (p) => rank.has(p.id) ? rank.get(p.id) : 1e9;
+  const list = [...filtered];
+  if (sortBy === 'price-asc') list.sort((a, b) => a.price - b.price);
+  else if (sortBy === 'price-desc') list.sort((a, b) => b.price - a.price);
+  else if (sortBy === 'name') list.sort((a, b) => a.name.localeCompare(b.name));
+  else if (sortBy === 'expiry') list.sort((a, b) => new Date(a.bestBefore || 8.64e15) - new Date(b.bestBefore || 8.64e15));
+  else list.sort((a, b) => rankOf(a) - rankOf(b)); // popular
+
+  const title = activeCategory || 'All Products';
+  const catRows = [['All Products', null, window.PRODUCTS.length], ...window.CATEGORIES.map(c => [c, c, window.PRODUCTS.filter(p => p.category === c).length])];
 
   return (
-    <div style={{ maxWidth: 1280, margin: '0 auto', padding: isMobile ? '16px' : '28px 24px' }}>
-      {/* Header */}
-      <div style={{ marginBottom: isMobile ? 16 : 24 }}>
-        <h1 style={{ fontFamily: 'var(--font-head)', fontSize: isMobile ? 22 : 30, fontWeight: 700 }}>
-          {activeCategory ? activeCategory : 'All Products'}
-        </h1>
-        <div style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 4 }}>{filtered.length} items found</div>
-      </div>
+    <div className="rd-gutter" style={{ fontFamily: 'var(--f-ui)', color: 'var(--ink)', paddingTop: isMobile ? 22 : 34, paddingBottom: 56, background: 'var(--panel)', minHeight: '60vh' }}>
+      <style>{`
+        .rd-side{border-left:2px solid transparent;transition:border-color .14s,background .14s;cursor:pointer}
+        .rd-side:hover{border-left-color:var(--accent);background:var(--surface-warm)}
+      `}</style>
 
-      {/* Mobile: horizontal category pills + filter toggle */}
-      {isMobile && (
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ overflowX: 'auto', scrollbarWidth: 'none', marginBottom: 10 }}>
-            <div style={{ display: 'flex', gap: 8, minWidth: 'max-content', paddingBottom: 4 }}>
-              <button onClick={() => { setActiveCategory(null); setSelectedCategory(null); }}
-                style={{ padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap', background: activeCategory === null ? 'var(--sage)' : 'var(--cream-dark)', color: activeCategory === null ? '#fff' : 'var(--warm-black)', border: 'none' }}>
-                All
-              </button>
-              {window.CATEGORIES.map(cat => (
-                <button key={cat} onClick={() => { setActiveCategory(cat); setSelectedCategory(cat); }}
-                  style={{ padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap', background: activeCategory === cat ? 'var(--sage)' : 'var(--cream-dark)', color: activeCategory === cat ? '#fff' : 'var(--warm-black)', border: 'none' }}>
-                  {cat}
-                </button>
-              ))}
-            </div>
-          </div>
-          <button onClick={() => setShowFilters(f => !f)}
-            style={{ fontSize: 13, fontWeight: 600, color: 'var(--sage)', display: 'flex', alignItems: 'center', gap: 4 }}>
-            {showFilters ? '▲ Hide Sort' : '▼ Sort By'}
+      {/* Header + Sort */}
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12, borderBottom: '2px solid var(--ink)', paddingBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, flexWrap: 'wrap' }}>
+          <h1 style={{ margin: 0, fontFamily: 'var(--f-display)', fontSize: isMobile ? 28 : 40, fontWeight: 700, letterSpacing: '-.03em' }}>{title}</h1>
+          <span style={{ fontFamily: 'var(--f-mono)', fontSize: 11.5, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--rd-muted)' }}>{list.length} item{list.length === 1 ? '' : 's'} found</span>
+        </div>
+        <div style={{ position: 'relative', flexShrink: 0 }}>
+          <button onClick={() => setSortOpen(o => !o)}
+            style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid var(--border-input)', background: 'var(--panel)', cursor: 'pointer', padding: '9px 14px', fontFamily: 'var(--f-label)', fontSize: 12.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--ink)' }}>
+            Sort: {sortLabel} <span style={{ fontSize: 10 }}>▾</span>
           </button>
-          {showFilters && (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
-              {sortChips.map(([val, label]) => (
-                <button key={val} onClick={() => { setSortBy(val); setShowFilters(false); }}
-                  style={{ padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: sortBy === val ? 700 : 500, background: sortBy === val ? 'var(--sage)' : 'var(--cream-dark)', color: sortBy === val ? '#fff' : 'var(--warm-black)', border: 'none' }}>
-                  {label}
-                </button>
-              ))}
-            </div>
+          {sortOpen && (
+            <>
+              <div onClick={() => setSortOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+              <div style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 41, minWidth: 200, background: 'var(--panel)', border: '1px solid var(--border-input)', boxShadow: '0 8px 24px rgba(20,20,16,.12)' }}>
+                {SORTS.map(([val, lab]) => (
+                  <button key={val} onClick={() => { setSortBy(val); setSortOpen(false); }}
+                    style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 14px', background: sortBy === val ? 'var(--surface-warm)' : 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--f-ui)', fontSize: 13, fontWeight: sortBy === val ? 600 : 400, color: 'var(--ink)' }}>{lab}</button>
+                ))}
+              </div>
+            </>
           )}
         </div>
-      )}
+      </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '220px 1fr', gap: 32, alignItems: 'start' }}>
-        {/* Sidebar — desktop only */}
+      {/* Body */}
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '248px 1fr', gap: 32, paddingTop: 26, alignItems: 'start' }}>
         {!isMobile && (
-          <aside>
-            <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', padding: '20px', boxShadow: 'var(--shadow)', position: 'sticky', top: 120 }}>
-              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 14, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.06em' }}>Categories</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <button onClick={() => { setActiveCategory(null); setSelectedCategory(null); }}
-                  style={{ textAlign: 'left', padding: '8px 12px', borderRadius: 8, fontSize: 13, fontWeight: activeCategory === null ? 700 : 500, background: activeCategory === null ? 'var(--sage)' : 'transparent', color: activeCategory === null ? '#fff' : 'var(--warm-black)', transition: 'all .15s' }}>
-                  All Products ({window.PRODUCTS.length})
+          <aside style={{ display: 'flex', flexDirection: 'column', gap: 2, position: 'sticky', top: 150 }}>
+            <div style={{ fontFamily: 'var(--f-label)', fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--rd-muted)', paddingBottom: 12 }}>Categories</div>
+            {catRows.map(([name, cat, cnt]) => {
+              const active = activeCategory === cat;
+              return (
+                <button key={name} className="rd-side" onClick={() => { setActiveCategory(cat); setSelectedCategory(cat); }}
+                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '10px 12px', background: active ? 'var(--surface-warm)' : 'none', borderLeftColor: active ? 'var(--accent)' : 'transparent', borderTop: 'none', borderRight: 'none', borderBottom: 'none', textAlign: 'left', fontFamily: 'var(--f-ui)', fontSize: 13.5, fontWeight: active ? 600 : 500, color: 'var(--ink)' }}>
+                  <span>{name}</span>
+                  <span style={{ fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--rd-faint)' }}>{cnt}</span>
                 </button>
-                {window.CATEGORIES.map(cat => (
-                  <button key={cat} onClick={() => { setActiveCategory(cat); setSelectedCategory(cat); }}
-                    style={{ textAlign: 'left', padding: '8px 12px', borderRadius: 8, fontSize: 13, fontWeight: activeCategory === cat ? 700 : 500, background: activeCategory === cat ? 'var(--sage)' : 'transparent', color: activeCategory === cat ? '#fff' : 'var(--warm-black)', transition: 'all .15s' }}>
-                    {cat} ({window.PRODUCTS.filter(p => p.category === cat).length})
-                  </button>
-                ))}
-              </div>
-
-              <div style={{ marginTop: 20, borderTop: '1px solid var(--cream-dark)', paddingTop: 16 }}>
-                <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.06em' }}>Sort By</div>
-                {sortOptions.map(([val, label]) => (
-                  <button key={val} onClick={() => setSortBy(val)}
-                    style={{ display: 'block', textAlign: 'left', width: '100%', padding: '7px 12px', borderRadius: 8, fontSize: 12, fontWeight: sortBy === val ? 700 : 400, background: sortBy === val ? 'var(--cream-dark)' : 'transparent', color: 'var(--warm-black)', marginBottom: 2 }}>
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
+              );
+            })}
           </aside>
         )}
 
-        {/* Product grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2,1fr)' : 'repeat(auto-fill,minmax(190px,1fr))', gap: isMobile ? 12 : 18 }}>
-          {filtered.length === 0 ? (
-            <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '50px 20px', color: 'var(--warm-gray)' }}>
-              <div style={{ fontSize: 40 }}>🤷‍♂️</div>
-              <div style={{ fontWeight: 700, marginTop: 12, fontSize: 16 }}>Nothing matches{searchQuery ? ` "${searchQuery}"` : ''}</div>
-              <div style={{ fontSize: 13, marginTop: 6, marginBottom: 20 }}>
-                {searchQuery ? "We don't stock this yet — but we love a challenge." : "Try a different category."}
-              </div>
-              {searchQuery && (
-                <RequestProductButton prefillProduct={searchQuery}
-                  label="📝 Ask us to find it"
-                  style={{ background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '12px 22px', fontWeight: 700, fontSize: 14, border: 'none' }} />
-              )}
-            </div>
-          ) : filtered.map(p => (
-            <ProductCard key={p.id} product={p} onAdd={onAdd} onView={onView} />
-          ))}
-        </div>
+        {list.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--rd-muted)' }}>
+            <div style={{ fontFamily: 'var(--f-serif)', fontStyle: 'italic', fontSize: 26, color: 'var(--ink)' }}>Nothing matches{searchQuery ? ` “${searchQuery}”` : ''}.</div>
+            <div style={{ fontSize: 13.5, marginTop: 10, marginBottom: 20 }}>{searchQuery ? "We don't stock this yet — but we love a challenge." : 'Try a different category.'}</div>
+            {searchQuery && (
+              <RequestProductButton prefillProduct={searchQuery} label="Ask us to find it"
+                style={{ background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', padding: '13px 22px', fontFamily: 'var(--f-ui)', fontSize: 14, fontWeight: 600 }} />
+            )}
+          </div>
+        ) : (
+          <div className="rd-grid rd-grid-4">
+            {list.map(p => <RCard key={p.id} product={p} onAdd={onAdd} onView={onView} />)}
+          </div>
+        )}
       </div>
     </div>
   );
