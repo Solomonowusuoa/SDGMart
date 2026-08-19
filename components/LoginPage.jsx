@@ -1,13 +1,9 @@
 // LoginPage — first screen. Sign in / Sign up / Continue as guest.
-// Supports email+password and (optionally) Google Sign-In.
+// Supports email+password and (optionally) Google Sign-In. (design refresh)
 const LoginPage = ({ onAuth, onGuest }) => {
   const isMobile = useMobile();
-  // Modes: 'signin' | 'signup' | 'forgot' | 'reset'
-  const [mode, setMode] = React.useState('signin');
-  const [form, setForm] = React.useState({
-    name: '', email: '', phone: '', password: '', refCode: '',
-    newPassword: '', confirmPassword: '',
-  });
+  const [mode, setMode] = React.useState('signin'); // signin | signup | forgot | reset
+  const [form, setForm] = React.useState({ name: '', email: '', phone: '', password: '', refCode: '', newPassword: '', confirmPassword: '' });
   const [err, setErr] = React.useState('');
   const [info, setInfo] = React.useState('');
   const [loading, setLoading] = React.useState(false);
@@ -17,31 +13,18 @@ const LoginPage = ({ onAuth, onGuest }) => {
   const refCodeRef = React.useRef('');
   const resetTokenRef = React.useRef('');
 
-  // Pre-fill referral code from URL ?ref=CODE; switch to reset mode on ?reset=TOKEN
   React.useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const ref = params.get('ref');
-    if (ref) {
-      setMode('signup');
-      setForm(f => ({ ...f, refCode: ref.toUpperCase() }));
-      refCodeRef.current = ref.toUpperCase();
-    }
+    if (ref) { setMode('signup'); setForm(f => ({ ...f, refCode: ref.toUpperCase() })); refCodeRef.current = ref.toUpperCase(); }
     const resetToken = params.get('reset');
-    if (resetToken) {
-      resetTokenRef.current = resetToken;
-      setMode('reset');
-    }
+    if (resetToken) { resetTokenRef.current = resetToken; setMode('reset'); }
   }, []);
 
-  // Fetch server config to learn whether Google sign-in is enabled
   React.useEffect(() => {
-    fetch('/api/auth/config')
-      .then(r => r.json())
-      .then(cfg => { if (cfg.googleClientId) setGoogleClientId(cfg.googleClientId); })
-      .catch(() => {});
+    fetch('/api/auth/config').then(r => r.json()).then(cfg => { if (cfg.googleClientId) setGoogleClientId(cfg.googleClientId); }).catch(() => {});
   }, []);
 
-  // Render the Google button once GIS + the client ID are both ready
   React.useEffect(() => {
     if (!googleClientId || !googleBtnRef.current) return;
     let tries = 0;
@@ -50,31 +33,18 @@ const LoginPage = ({ onAuth, onGuest }) => {
         window.google.accounts.id.initialize({
           client_id: googleClientId,
           callback: async (response) => {
-            setErr('');
-            setLoading(true);
+            setErr(''); setLoading(true);
             try {
-              const r = await fetch('/api/auth/google', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ credential: response.credential, refCode: refCodeRef.current || form.refCode }),
-              });
+              const r = await fetch('/api/auth/google', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ credential: response.credential, refCode: refCodeRef.current || form.refCode }) });
               const data = await r.json();
               if (!r.ok) { setErr(data.error || 'Google sign-in failed'); setLoading(false); return; }
               onAuth({ ...data.user, token: data.token });
-            } catch (_) {
-              setErr('Network error during Google sign-in');
-              setLoading(false);
-            }
+            } catch (_) { setErr('Network error during Google sign-in'); setLoading(false); }
           },
         });
-        // Clear any prior render
         googleBtnRef.current.innerHTML = '';
-        window.google.accounts.id.renderButton(googleBtnRef.current, {
-          theme: 'outline', size: 'large', shape: 'pill', text: mode === 'signin' ? 'signin_with' : 'signup_with', width: 320,
-        });
-      } else if (tries++ < 50) {
-        setTimeout(tryRender, 100);
-      }
+        window.google.accounts.id.renderButton(googleBtnRef.current, { theme: 'outline', size: 'large', shape: 'rectangular', text: mode === 'signin' ? 'signin_with' : 'signup_with', width: 300 });
+      } else if (tries++ < 50) { setTimeout(tryRender, 100); }
     };
     tryRender();
   }, [googleClientId, mode]);
@@ -85,294 +55,150 @@ const LoginPage = ({ onAuth, onGuest }) => {
     setErr(''); setInfo('');
     if (mode === 'forgot') return submitForgot();
     if (mode === 'reset') return submitReset();
-    if (mode === 'signin') {
-      if (!form.email || !form.password) { setErr('Email and password required'); return; }
-    } else {
-      if (!form.name || !form.email || !form.password) { setErr('Name, email and password required'); return; }
-    }
+    if (mode === 'signin') { if (!form.email || !form.password) { setErr('Email and password required'); return; } }
+    else { if (!form.name || !form.email || !form.password) { setErr('Name, email and password required'); return; } }
     setLoading(true);
     try {
       const url = mode === 'signin' ? '/api/auth/login' : '/api/auth/signup';
-      const body = mode === 'signin'
-        ? { email: form.email, password: form.password }
-        : { name: form.name, email: form.email, phone: form.phone, password: form.password, refCode: form.refCode };
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
+      const body = mode === 'signin' ? { email: form.email, password: form.password } : { name: form.name, email: form.email, phone: form.phone, password: form.password, refCode: form.refCode };
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await res.json();
       if (!res.ok) { setErr(data.error || 'Login failed'); setLoading(false); return; }
-      // Email verification is disabled — accounts are usable immediately.
       onAuth({ ...data.user, token: data.token });
-    } catch (e) {
-      setErr('Could not connect. Please check your internet and try again.');
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { setErr('Could not connect. Please check your internet and try again.'); }
+    finally { setLoading(false); }
   };
 
-  // ── Forgot password: email user a reset link ──
   const submitForgot = async () => {
     if (!form.email) { setErr('Enter your email'); return; }
     setLoading(true);
     try {
-      const r = await fetch('/api/auth/forgot-password', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: form.email }),
-      });
+      const r = await fetch('/api/auth/forgot-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: form.email }) });
       const data = await r.json();
-      // For dev convenience: server returns the reset link directly so users
-      // can complete the flow without real email being configured yet.
-      if (data.emailSent) {
-        setInfo(`If an account exists for ${form.email}, a reset link has been emailed. Check your inbox.`);
-      } else if (data.resetLink) {
-        const open = window.confirm(
-          `If an account exists for ${form.email}, a reset link has been generated:\n\n${data.resetLink}\n\nClick OK to open it now (also logged to server console).`
-        );
-        if (open) window.location.href = data.resetLink;
-      } else {
-        setInfo(`If an account exists for ${form.email}, a reset link has been sent.`);
-      }
-    } catch (_) {
-      setErr('Network error — please try again');
-    } finally { setLoading(false); }
+      if (data.emailSent) setInfo(`If an account exists for ${form.email}, a reset link has been emailed. Check your inbox.`);
+      else if (data.resetLink) { const open = window.confirm(`If an account exists for ${form.email}, a reset link has been generated:\n\n${data.resetLink}\n\nClick OK to open it now (also logged to server console).`); if (open) window.location.href = data.resetLink; }
+      else setInfo(`If an account exists for ${form.email}, a reset link has been sent.`);
+    } catch (_) { setErr('Network error — please try again'); }
+    finally { setLoading(false); }
   };
 
-  // ── Reset password: submit new password with the token from URL ──
   const submitReset = async () => {
     if (!form.newPassword || form.newPassword.length < 8) { setErr('New password must be at least 8 characters'); return; }
     if (form.newPassword !== form.confirmPassword) { setErr('Passwords do not match'); return; }
     setLoading(true);
     try {
-      const r = await fetch('/api/auth/reset-password', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: resetTokenRef.current, newPassword: form.newPassword }),
-      });
+      const r = await fetch('/api/auth/reset-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: resetTokenRef.current, newPassword: form.newPassword }) });
       const data = await r.json();
       if (!r.ok) { setErr(data.error || 'Reset failed'); setLoading(false); return; }
-      // Clear the ?reset=… param so a refresh doesn't reopen the reset form
       try { window.history.replaceState({}, '', window.location.pathname); } catch (_) {}
       setInfo('Password updated — sign in with your new password.');
-      setMode('signin');
-      setForm(f => ({ ...f, password: '', newPassword: '', confirmPassword: '' }));
-    } catch (_) {
-      setErr('Network error — please try again');
-    } finally { setLoading(false); }
+      setMode('signin'); setForm(f => ({ ...f, password: '', newPassword: '', confirmPassword: '' }));
+    } catch (_) { setErr('Network error — please try again'); }
+    finally { setLoading(false); }
   };
 
-  const inputS = {
-    width: '100%', padding: '12px 14px', borderRadius: 10,
-    border: '1.5px solid var(--cream-dark)', fontSize: 14, outline: 'none',
-    background: 'var(--white)', marginBottom: 10,
-  };
-  const lbl = {
-    display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)',
-    textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 5,
-  };
+  const inputS = { width: '100%', padding: '12px 14px', border: '1px solid var(--border-input)', borderRadius: 0, fontFamily: 'var(--f-ui)', fontSize: 14, outline: 'none', background: '#fff', color: 'var(--ink)', marginBottom: 12 };
+  const lbl = { display: 'block', fontFamily: 'var(--f-label)', fontSize: 11.5, fontWeight: 700, color: 'var(--rd-muted)', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: 6 };
+  const optional = { fontFamily: 'var(--f-ui)', fontWeight: 400, textTransform: 'none', letterSpacing: 0, color: 'var(--rd-faint)' };
 
-  // Same image used by the homepage hero. Drop the file at icons/hero.jpg.
   const HERO_BG = '/icons/hero.jpg';
-
   React.useEffect(() => {
-    const link = document.createElement('link');
-    link.rel = 'preload';
-    link.as = 'image';
-    link.href = HERO_BG;
-    link.fetchPriority = 'high';
-    document.head.appendChild(link);
-    return () => { try { document.head.removeChild(link); } catch (_) {} };
+    const link = document.createElement('link'); link.rel = 'preload'; link.as = 'image'; link.href = HERO_BG; link.fetchPriority = 'high';
+    document.head.appendChild(link); return () => { try { document.head.removeChild(link); } catch (_) {} };
   }, []);
 
   return (
-    <div style={{
-      minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-      backgroundColor: '#000', // instant fill while photo loads
-      backgroundImage: `linear-gradient(rgba(0,0,0,.55),rgba(0,0,0,.7)), url(${HERO_BG})`,
-      backgroundSize: 'cover',
-      backgroundPosition: isMobile ? 'center top' : 'center',
-      // backgroundAttachment:fixed is broken on iOS Safari and hurts performance
-      // on mobile in general — only use it on desktop.
-      backgroundAttachment: isMobile ? 'scroll' : 'fixed',
-      padding: isMobile ? '24px 14px' : '40px 24px',
-    }}>
-      <div style={{
-        background: 'rgba(255,255,255,.97)', borderRadius: 'var(--radius-lg)',
-        padding: isMobile ? '28px 22px' : '40px 36px',
-        boxShadow: '0 30px 80px rgba(0,0,0,.45), 0 0 0 1px rgba(255,255,255,.08)',
-        backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
-        width: '100%', maxWidth: 420,
-      }}>
-        {/* Wordmark */}
-        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 18 }}>
-          <span style={{ fontFamily: 'var(--font-head)', fontSize: 32, fontWeight: 700, color: '#000', letterSpacing: '-.01em' }}>SDGMart</span>
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--f-ui)', color: 'var(--ink)',
+      backgroundColor: '#0d0d0b', backgroundImage: `linear-gradient(rgba(10,10,9,.66),rgba(10,10,9,.8)), url(${HERO_BG})`, backgroundSize: 'cover', backgroundPosition: isMobile ? 'center top' : 'center', backgroundAttachment: isMobile ? 'scroll' : 'fixed', padding: isMobile ? '24px 14px' : '40px 24px' }}>
+      <div style={{ background: '#fff', border: '1px solid var(--rule-2)', boxShadow: '0 30px 80px rgba(0,0,0,.5)', padding: isMobile ? '30px 22px' : '40px 36px', width: '100%', maxWidth: 420 }}>
+        {/* Wordmark + tagline */}
+        <div style={{ textAlign: 'center', marginBottom: 24 }}>
+          <div style={{ fontFamily: 'var(--f-mark)', fontSize: 30, fontWeight: 700, letterSpacing: '-.035em', color: 'var(--ink)' }}>SDGMart</div>
+          <div style={{ marginTop: 6, fontSize: 15, color: 'var(--rd-muted)' }}>Tamale's essentials, <span style={{ fontFamily: 'var(--f-serif)', fontStyle: 'italic', color: 'var(--accent)' }}>delivered.</span></div>
         </div>
-        <p style={{ textAlign: 'center', fontSize: 13, color: 'var(--warm-gray)', marginBottom: 22 }}>
-          Tamale's essentials, delivered.
-        </p>
 
-        {/* Tab switcher — hidden in forgot/reset modes */}
+        {/* Tab switcher */}
         {(mode === 'signin' || mode === 'signup') && (
-          <div style={{ display: 'flex', background: 'var(--cream)', borderRadius: 10, padding: 4, marginBottom: 22 }}>
+          <div style={{ display: 'flex', border: '1px solid var(--border-input)', marginBottom: 22 }}>
             {['signin', 'signup'].map(m => (
               <button key={m} onClick={() => { setMode(m); setErr(''); setInfo(''); }}
-                style={{
-                  flex: 1, padding: '9px', borderRadius: 8, fontSize: 13, fontWeight: 700,
-                  background: mode === m ? 'var(--white)' : 'transparent',
-                  color: mode === m ? 'var(--sage-dark)' : 'var(--warm-gray)',
-                  boxShadow: mode === m ? '0 1px 3px rgba(0,0,0,.08)' : 'none',
-                  transition: 'all .15s',
-                }}>
+                style={{ flex: 1, padding: '10px', border: 'none', cursor: 'pointer', fontFamily: 'var(--f-label)', fontSize: 12.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase',
+                  background: mode === m ? 'var(--ink)' : 'transparent', color: mode === m ? '#fff' : 'var(--rd-muted)' }}>
                 {m === 'signin' ? 'Sign In' : 'Sign Up'}
               </button>
             ))}
           </div>
         )}
 
-        {/* Mode-specific heading for forgot/reset */}
-        {mode === 'forgot' && (
-          <div style={{ marginBottom: 18 }}>
-            <div style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, color: 'var(--sage-dark)' }}>Reset your password</div>
-            <div style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 4 }}>Enter your email and we'll send you a link to choose a new password.</div>
-          </div>
-        )}
-        {mode === 'reset' && (
-          <div style={{ marginBottom: 18 }}>
-            <div style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, color: 'var(--sage-dark)' }}>Choose a new password</div>
-            <div style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 4 }}>At least 8 characters, with a letter and a number.</div>
+        {(mode === 'forgot' || mode === 'reset') && (
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontFamily: 'var(--f-display)', fontSize: 22, fontWeight: 700, letterSpacing: '-.028em' }}>{mode === 'forgot' ? 'Reset your password' : 'Choose a new password'}</div>
+            <div style={{ fontSize: 13, color: 'var(--rd-muted)', marginTop: 4, lineHeight: 1.5 }}>{mode === 'forgot' ? "Enter your email and we'll send you a link to choose a new password." : 'At least 8 characters, with a letter and a number.'}</div>
           </div>
         )}
 
-        {/* Form — different fields per mode. Labels above each field for clarity. */}
-        {mode === 'signup' && (
-          <>
-            <label style={lbl}>Your name</label>
-            <input placeholder="e.g. Ama Mensah" value={form.name} onChange={e => set('name', e.target.value)} style={inputS} />
-          </>
-        )}
-        {(mode === 'signin' || mode === 'signup' || mode === 'forgot') && (
-          <>
-            <label style={lbl}>Email</label>
-            <input placeholder="you@example.com" type="email" autoComplete="email" value={form.email}
-              onChange={e => set('email', e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && submit()} style={inputS} />
-          </>
-        )}
-        {mode === 'signup' && (
-          <>
-            <label style={lbl}>Phone <span style={{ fontWeight: 400, textTransform: 'none', color: 'var(--warm-gray)' }}>(optional)</span></label>
-            <input placeholder="e.g. 024 123 4567" type="tel" value={form.phone} onChange={e => set('phone', e.target.value)} style={inputS} />
-          </>
-        )}
+        {mode === 'signup' && (<><label style={lbl}>Your name</label><input placeholder="e.g. Ama Mensah" value={form.name} onChange={e => set('name', e.target.value)} style={inputS} /></>)}
+        {(mode === 'signin' || mode === 'signup' || mode === 'forgot') && (<><label style={lbl}>Email</label><input placeholder="you@example.com" type="email" autoComplete="email" value={form.email} onChange={e => set('email', e.target.value)} onKeyDown={e => e.key === 'Enter' && submit()} style={inputS} /></>)}
+        {mode === 'signup' && (<><label style={lbl}>Phone <span style={optional}>(optional)</span></label><input placeholder="e.g. 024 123 4567" type="tel" value={form.phone} onChange={e => set('phone', e.target.value)} style={inputS} /></>)}
         {(mode === 'signin' || mode === 'signup') && (
           <>
             <label style={lbl}>Password</label>
-            <div style={{ position: 'relative', marginBottom: mode === 'signup' ? 4 : 10 }}>
-              <input placeholder={mode === 'signup' ? 'Create a password' : 'Your password'} type={showPw ? 'text' : 'password'}
-                autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-                value={form.password}
-                onChange={e => set('password', e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && submit()} style={{ ...inputS, marginBottom: 0, paddingRight: 60 }} />
-              <button type="button" onClick={() => setShowPw(s => !s)}
-                style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 12, fontWeight: 700, color: 'var(--sage-dark)', background: 'transparent', padding: 4 }}>
-                {showPw ? 'Hide' : 'Show'}
-              </button>
+            <div style={{ position: 'relative', marginBottom: mode === 'signup' ? 6 : 12 }}>
+              <input placeholder={mode === 'signup' ? 'Create a password' : 'Your password'} type={showPw ? 'text' : 'password'} autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} value={form.password} onChange={e => set('password', e.target.value)} onKeyDown={e => e.key === 'Enter' && submit()} style={{ ...inputS, marginBottom: 0, paddingRight: 62 }} />
+              <button type="button" onClick={() => setShowPw(s => !s)} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--f-label)', fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--ink)' }}>{showPw ? 'Hide' : 'Show'}</button>
             </div>
-            {mode === 'signup' && (
-              <div style={{ fontSize: 11, color: 'var(--warm-gray)', marginBottom: 10 }}>At least 8 characters, with a letter and a number.</div>
-            )}
+            {mode === 'signup' && <div style={{ fontSize: 11.5, color: 'var(--rd-muted)', marginBottom: 12 }}>At least 8 characters, with a letter and a number.</div>}
           </>
         )}
-        {mode === 'signup' && (
-          <>
-            <label style={lbl}>Referral code <span style={{ fontWeight: 400, textTransform: 'none', color: 'var(--warm-gray)' }}>(optional)</span></label>
-            <input placeholder="From a friend? Enter it here" value={form.refCode}
-              onChange={e => set('refCode', e.target.value.toUpperCase())} style={inputS} />
-          </>
-        )}
-        {mode === 'reset' && (
-          <>
-            <label style={lbl}>New password</label>
-            <input placeholder="At least 8 characters" type={showPw ? 'text' : 'password'} value={form.newPassword}
-              onChange={e => set('newPassword', e.target.value)} style={inputS} />
-            <label style={lbl}>Confirm new password</label>
-            <input placeholder="Re-enter your new password" type={showPw ? 'text' : 'password'} value={form.confirmPassword}
-              onChange={e => set('confirmPassword', e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && submit()} style={inputS} />
-          </>
-        )}
+        {mode === 'signup' && (<><label style={lbl}>Referral code <span style={optional}>(optional)</span></label><input placeholder="From a friend? Enter it here" value={form.refCode} onChange={e => set('refCode', e.target.value.toUpperCase())} style={inputS} /></>)}
+        {mode === 'reset' && (<>
+          <label style={lbl}>New password</label><input placeholder="At least 8 characters" type={showPw ? 'text' : 'password'} value={form.newPassword} onChange={e => set('newPassword', e.target.value)} style={inputS} />
+          <label style={lbl}>Confirm new password</label><input placeholder="Re-enter your new password" type={showPw ? 'text' : 'password'} value={form.confirmPassword} onChange={e => set('confirmPassword', e.target.value)} onKeyDown={e => e.key === 'Enter' && submit()} style={inputS} />
+        </>)}
 
-        {/* Forgot password link — only in signin mode */}
         {mode === 'signin' && (
-          <div style={{ textAlign: 'right', marginTop: -4, marginBottom: 8 }}>
-            <button type="button" onClick={() => { setMode('forgot'); setErr(''); setInfo(''); }}
-              style={{ background: 'transparent', color: 'var(--sage-dark)', fontSize: 12, fontWeight: 600, padding: 0 }}>
-              Forgot password?
-            </button>
+          <div style={{ textAlign: 'right', marginTop: -4, marginBottom: 10 }}>
+            <button type="button" onClick={() => { setMode('forgot'); setErr(''); setInfo(''); }} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--f-ui)', fontSize: 12.5, color: 'var(--accent)' }}>Forgot password?</button>
           </div>
         )}
 
-        {err && <div style={{ background: 'rgba(192,57,43,.08)', color: 'var(--accent-red)', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10 }}>{err}</div>}
-        {info && <div style={{ background: 'rgba(0,0,0,.05)', color: '#1A1A1A', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 10 }}>{info}</div>}
+        {err && <div style={{ background: 'var(--surface-warm)', borderLeft: '2px solid var(--accent)', color: 'var(--accent)', padding: '9px 12px', fontSize: 12.5, marginBottom: 12 }}>{err}</div>}
+        {info && <div style={{ background: 'var(--surface-warm)', borderLeft: '2px solid var(--ink)', color: 'var(--ink-2)', padding: '9px 12px', fontSize: 12.5, marginBottom: 12 }}>{info}</div>}
 
         <button onClick={submit} disabled={loading}
-          style={{
-            width: '100%', background: 'var(--sage)', color: '#fff', borderRadius: 10,
-            padding: '13px', fontWeight: 700, fontSize: 15, marginTop: 4,
-            opacity: loading ? .6 : 1, cursor: loading ? 'wait' : 'pointer',
-          }}>
-          {loading ? 'Please wait…' : (
-            mode === 'signin' ? 'Sign In' :
-            mode === 'signup' ? 'Create Account' :
-            mode === 'forgot' ? 'Send reset link' :
-            'Update password'
-          )}
+          style={{ width: '100%', background: 'var(--ink)', color: '#fff', border: 'none', padding: '14px', fontFamily: 'var(--f-ui)', fontSize: 15, fontWeight: 600, marginTop: 4, opacity: loading ? .6 : 1, cursor: loading ? 'wait' : 'pointer' }}>
+          {loading ? 'Please wait…' : (mode === 'signin' ? 'Sign In' : mode === 'signup' ? 'Create Account' : mode === 'forgot' ? 'Send reset link' : 'Update password')}
         </button>
 
-        {/* Back to sign in — when in forgot/reset */}
         {(mode === 'forgot' || mode === 'reset') && (
-          <button type="button" onClick={() => { setMode('signin'); setErr(''); setInfo(''); }}
-            style={{ background: 'transparent', color: 'var(--warm-gray)', fontSize: 12, fontWeight: 600, marginTop: 14, width: '100%', textAlign: 'center' }}>
-            ← Back to sign in
-          </button>
+          <button type="button" onClick={() => { setMode('signin'); setErr(''); setInfo(''); }} style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--f-ui)', fontSize: 12.5, color: 'var(--rd-muted)', marginTop: 14 }}>← Back to sign in</button>
         )}
 
-        {/* Google sign-in (only when configured on the server) */}
         {googleClientId && (mode === 'signin' || mode === 'signup') && (
           <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '20px 0 14px' }}>
-              <div style={{ flex: 1, height: 1, background: 'var(--cream-dark)' }} />
-              <span style={{ fontSize: 11, color: 'var(--warm-gray)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.05em' }}>or</span>
-              <div style={{ flex: 1, height: 1, background: 'var(--cream-dark)' }} />
-            </div>
+            <LoginDivider />
             <div ref={googleBtnRef} style={{ display: 'flex', justifyContent: 'center' }} />
           </>
         )}
 
-        {/* Divider + Guest — only on the main sign-in/up screens */}
         {(mode === 'signin' || mode === 'signup') && (<>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '20px 0' }}>
-          <div style={{ flex: 1, height: 1, background: 'var(--cream-dark)' }} />
-          <span style={{ fontSize: 11, color: 'var(--warm-gray)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.05em' }}>or</span>
-          <div style={{ flex: 1, height: 1, background: 'var(--cream-dark)' }} />
-        </div>
-
-        {/* Guest */}
-        <button onClick={onGuest}
-          style={{
-            width: '100%', background: 'var(--cream)', color: 'var(--warm-black)',
-            borderRadius: 10, padding: '12px', fontWeight: 600, fontSize: 14,
-          }}>
-          Continue as Guest
-        </button>
+          <LoginDivider />
+          <button onClick={onGuest} style={{ width: '100%', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--border-input)', cursor: 'pointer', padding: '13px', fontFamily: 'var(--f-ui)', fontSize: 14, fontWeight: 600 }}>Continue as Guest</button>
         </>)}
 
-        <p style={{ textAlign: 'center', fontSize: 11, color: 'var(--warm-gray)', marginTop: 18, lineHeight: 1.6 }}>
-          Sign up to track your spend, join a squad and unlock 5% group discounts.
-        </p>
+        <p style={{ textAlign: 'center', fontSize: 11.5, color: 'var(--rd-muted)', marginTop: 20, lineHeight: 1.6 }}>Sign up to track your spend, join a squad and unlock 5% group discounts.</p>
       </div>
     </div>
   );
 };
+
+// Hairline "or" divider
+const LoginDivider = () => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '20px 0 14px' }}>
+    <div style={{ flex: 1, height: 1, background: 'var(--rule)' }} />
+    <span style={{ fontFamily: 'var(--f-mono)', fontSize: 10.5, color: 'var(--rd-faint)', letterSpacing: '.1em', textTransform: 'uppercase' }}>or</span>
+    <div style={{ flex: 1, height: 1, background: 'var(--rule)' }} />
+  </div>
+);
 
 Object.assign(window, { LoginPage });

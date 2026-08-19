@@ -462,8 +462,7 @@ class AppErrorBoundary extends React.Component {
       return (
         <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', padding: 24 }}>
           <div style={{ textAlign: 'center', maxWidth: 360 }}>
-            <div style={{ fontSize: 40 }}>😞</div>
-            <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, marginTop: 8 }}>Something hiccuped</h2>
+            <h2 style={{ fontFamily: "'Gabarito','Plus Jakarta Sans',sans-serif", fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', marginTop: 8 }}>Something hiccuped</h2>
             <p style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 8, lineHeight: 1.5 }}>The page hit an error. Try reloading — if it keeps happening, sign out and restart.</p>
             <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 16, flexWrap: 'wrap' }}>
               <button onClick={() => { this.setState({ error: null }); location.reload(); }}
