@@ -1,5 +1,6 @@
-// Header Component
-const Header = ({ cart, page, setPage, setSelectedCategory, searchQuery, setSearchQuery, theme, currentUser, onLogout }) => {
+// Header Component — design refresh (2026): flat, typographic chrome
+// (announcement bar + header + category pill rail). Fully responsive.
+const Header = ({ cart, page, setPage, selectedCategory, setSelectedCategory, searchQuery, setSearchQuery, currentUser, onLogout }) => {
   const [menuOpen, setMenuOpen] = React.useState(false);
   const [cartBounce, setCartBounce] = React.useState(false);
   const isMobile = useMobile();
@@ -13,197 +14,163 @@ const Header = ({ cart, page, setPage, setSelectedCategory, searchQuery, setSear
     }
   }, [totalItems]);
 
-  // Close menu on page change
   React.useEffect(() => { setMenuOpen(false); }, [page]);
 
-  const isV2 = theme === 'v2';
-  const hStyle = {
-    background: isV2 ? '#2E3B1E' : 'var(--white)',
-    borderBottom: isV2 ? 'none' : '1px solid var(--cream-dark)',
-    color: isV2 ? '#F5F0E8' : 'var(--warm-black)',
-    position: 'sticky', top: 0, zIndex: 100,
-    boxShadow: isV2 ? '0 2px 20px rgba(0,0,0,.25)' : 'var(--shadow)',
-  };
+  const signedIn = !!(currentUser && currentUser.id && currentUser.role !== 'guest');
+  const firstName = signedIn ? (currentUser.name || 'You').split(' ')[0] : 'Guest';
+  const authLabel = signedIn ? 'Sign out' : 'Sign in';
+  const loyalty = signedIn ? Number(currentUser.loyaltyBalance || 0) : 0;
+  const cats = window.CATEGORIES || [];
+
+  const navItems = [['Home', 'home'], ['Categories', 'category'], ['Squad', 'squad'],
+    signedIn ? ['My Orders', 'orders'] : ['Track Order', 'orders']];
+  const go = (pg) => { if (pg === 'category') setSelectedCategory(null); setPage(pg); setMenuOpen(false); };
+  const onSearch = (v) => { setSearchQuery(v); if (v.trim() && page !== 'category') setPage('category'); };
+
+  // Minimalist search field (CSS-drawn magnifier ring), shared by desktop + mobile
+  const SearchField = ({ style }) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid var(--border-input)', padding: '10px 14px', background: '#fff', ...style }}>
+      <span style={{ width: 13, height: 13, border: '1.5px solid var(--rd-faint)', borderRadius: '50%', flexShrink: 0 }} />
+      <input value={searchQuery} onChange={e => onSearch(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter' && searchQuery.trim()) setPage('category'); }}
+        placeholder="Search groceries…" aria-label="Search groceries"
+        style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontFamily: 'var(--f-ui)', fontSize: 13.5, color: 'var(--ink)' }} />
+      {searchQuery && (
+        <button onClick={() => setSearchQuery('')} aria-label="Clear search"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--rd-faint)', fontSize: 15, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
+      )}
+    </div>
+  );
+
+  // Bag glyph + accent count badge (badge only when count > 0)
+  const CartGlyph = () => (
+    <button onClick={() => setPage('cart')} aria-label={`Cart, ${totalItems} item${totalItems === 1 ? '' : 's'}`}
+      style={{ position: 'relative', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px',
+        transform: cartBounce ? 'scale(1.16)' : 'scale(1)', transition: 'transform .2s' }}>
+      <span style={{ display: 'block', width: 15, height: 17, border: '1.5px solid var(--ink)', borderRadius: '0 0 3px 3px' }} />
+      {totalItems > 0 && (
+        <span style={{ position: 'absolute', top: -8, right: -9, minWidth: 16, height: 16, background: 'var(--accent)', color: '#fff',
+          fontFamily: 'var(--f-mono)', fontSize: 9.5, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 999, padding: '0 4px' }}>
+          {totalItems}
+        </span>
+      )}
+    </button>
+  );
 
   return (
-    <header style={hStyle}>
-      {/* Top bar */}
-      {!isMobile && (
-        <div style={{ background: isV2 ? '#1C2710' : 'var(--sage)', color: '#fff', textAlign: 'center', padding: '7px 16px', fontSize: 12, fontWeight: 500, letterSpacing: '.04em' }}>
-          🚚 Free delivery on orders above GHS 150 · Tamale Same-Day Service
-        </div>
-      )}
+    <header style={{ position: 'sticky', top: 0, zIndex: 100, background: 'var(--panel)', color: 'var(--ink)', fontFamily: 'var(--f-ui)' }}>
+      <style>{`
+        .rdh-link{color:var(--ink);background:none;border:none;cursor:pointer;font-family:var(--f-ui);transition:color .14s}
+        .rdh-link:hover{color:var(--accent)}
+        .rdh-auth{background:none;border:none;cursor:pointer;font-family:var(--f-mono);transition:color .14s}
+        .rdh-auth:hover{color:var(--accent)}
+        .rdh-pill{background:none;cursor:pointer;font-family:var(--f-label);transition:border-color .14s,color .14s,background .14s}
+        .rdh-pill:hover{border-color:var(--ink) !important;color:var(--ink) !important}
+        header button:focus-visible,header input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+      `}</style>
 
-      {/* Main nav */}
-      <div style={{ maxWidth: 1280, margin: '0 auto', padding: isMobile ? '10px 16px' : '12px 24px', display: 'flex', alignItems: 'center', gap: isMobile ? 10 : 16 }}>
-        {/* Logo — "SDG" script wordmark, white on black */}
-        <button onClick={() => setPage('home')} style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-          <div style={{
-            minWidth: 58, height: 40, padding: '0 10px',
-            borderRadius: 8, background: '#000',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <span style={{
-              fontFamily: "'Petit Formal Script', 'Allura', cursive",
-              fontSize: 28, lineHeight: 1, color: '#fff',
-              letterSpacing: '.01em',
-              transform: 'translateY(2px)',
-              whiteSpace: 'nowrap',
-            }}>SDG</span>
-          </div>
-          {!isMobile && (
-            <span style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, color: isV2 ? '#F5F0E8' : '#000', letterSpacing: '-.01em' }}>SDGMart</span>
-          )}
-        </button>
+      {/* Announcement bar */}
+      <div style={{ background: 'var(--ink)', color: '#fff', textAlign: 'center', padding: isMobile ? '8px 16px' : '10px 24px',
+        fontFamily: 'var(--f-mono)', fontSize: isMobile ? 10 : 11, letterSpacing: '.1em', textTransform: 'uppercase' }}>
+        Free delivery on orders above GHS 150 · Tamale same-day service
+      </div>
 
-        {/* Search bar */}
-        <div style={{ flex: 1, position: 'relative' }}>
-          <input
-            value={searchQuery}
-            onChange={e => {
-              const v = e.target.value;
-              setSearchQuery(v);
-              // Live search: jump to the (filtered) product grid on first keystroke
-              if (v.trim() && page !== 'category') setPage('category');
-            }}
-            onKeyDown={e => { if (e.key === 'Enter' && searchQuery.trim()) setPage('category'); }}
-            placeholder="Search groceries..."
-            style={{
-              width: '100%', padding: '10px 16px 10px 42px',
-              borderRadius: 30, border: `1.5px solid ${isV2 ? 'rgba(255,255,255,.2)' : 'var(--cream-dark)'}`,
-              background: isV2 ? 'rgba(255,255,255,.1)' : 'var(--cream)',
-              color: isV2 ? '#F5F0E8' : 'var(--warm-black)',
-              fontSize: 14, outline: 'none', transition: 'border .2s',
-            }}
-          />
-          <svg style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', opacity: .5 }} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={isV2 ? '#fff' : 'var(--warm-black)'} strokeWidth="2">
-            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-          </svg>
-          {searchQuery && (
-            <button onClick={() => setSearchQuery('')} title="Clear search"
-              style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', width: 24, height: 24, borderRadius: '50%', background: isV2 ? 'rgba(255,255,255,.2)' : 'var(--cream-dark)', color: isV2 ? '#fff' : 'var(--warm-gray)', fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              ×
-            </button>
-          )}
-        </div>
-
-        {/* Nav links — desktop only */}
-        <nav style={{ display: 'flex', gap: 4, alignItems: 'center', marginLeft: 8 }} className="desktop-nav">
-          {[['Home','home'],['Categories','category'],['Squad 🤝','squad'],
-            // Signed-in users get the "📦 My Orders" pill instead (same page)
-            ...(!(currentUser && currentUser.id) ? [['Track Order 🛵','orders']] : [])].map(([label, pg]) => (
-            <button key={pg} onClick={() => { setPage(pg); if (pg==='category') setSelectedCategory(null); }}
-              style={{ padding: '7px 14px', borderRadius: 20, fontSize: 13, fontWeight: 600,
-                background: page === pg ? 'var(--sage)' : 'transparent',
-                color: page === pg ? '#fff' : (isV2 ? 'rgba(245,240,232,.8)' : 'var(--warm-gray)'),
-                transition: 'all .2s' }}>
-              {label}
-            </button>
-          ))}
-        </nav>
-
-        {/* Right icons */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto', flexShrink: 0 }}>
-          {/* User pill — desktop only */}
-          {!isMobile && currentUser && currentUser.id && (
-            <button onClick={() => setPage('orders')} title="My orders"
-              style={{ fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 18, background: isV2 ? 'rgba(255,255,255,.12)' : 'var(--cream)', color: isV2 ? '#F5F0E8' : 'var(--sage-dark)' }}>
-              📦 My Orders
-            </button>
-          )}
-          {!isMobile && currentUser && currentUser.id && Number(currentUser.loyaltyBalance || 0) > 0 && (
-            <span title="Loyalty credit — apply at checkout"
-              style={{ fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 18, background: '#FFF8E1', color: '#7A5A00', border: '1px solid #F0DCA0' }}>
-              ⭐ GHS {Number(currentUser.loyaltyBalance).toFixed(0)}
-            </span>
-          )}
-          {!isMobile && currentUser && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: isV2 ? 'rgba(255,255,255,.12)' : 'var(--cream)', borderRadius: 20, padding: '5px 6px 5px 6px' }}>
-              <button onClick={() => currentUser.role !== 'guest' && setPage('account')}
-                title={currentUser.role === 'guest' ? 'Guest' : 'Account settings'}
-                style={{ fontSize: 12, fontWeight: 700, color: isV2 ? '#F5F0E8' : 'var(--sage-dark)', padding: '0 8px', cursor: currentUser.role === 'guest' ? 'default' : 'pointer' }}>
-                {currentUser.role === 'guest' ? 'Guest' : (currentUser.name || 'You').split(' ')[0]}
-              </button>
-              <button onClick={onLogout} title="Sign out"
-                style={{ fontSize: 11, fontWeight: 700, color: isV2 ? 'rgba(245,240,232,.85)' : 'var(--warm-gray)', padding: '3px 10px', borderRadius: 14, background: isV2 ? 'rgba(255,255,255,.12)' : 'var(--white)' }}>
-                {currentUser.role === 'guest' ? 'Sign in' : 'Sign out'}
-              </button>
-            </div>
-          )}
-          <button onClick={() => setPage('cart')}
-            style={{ position: 'relative', width: 40, height: 40, borderRadius: 20,
-              background: isV2 ? 'rgba(255,255,255,.15)' : 'var(--cream)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              transform: cartBounce ? 'scale(1.18)' : 'scale(1)', transition: 'transform .2s' }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={isV2 ? '#fff' : 'var(--sage-dark)'} strokeWidth="2">
-              <path d="M6 2 3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/>
-            </svg>
-            {totalItems > 0 && (
-              <span style={{ position: 'absolute', top: -4, right: -4, background: 'var(--accent-red)', color: '#fff', borderRadius: 10, fontSize: 10, fontWeight: 700, minWidth: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px' }}>
-                {totalItems}
-              </span>
-            )}
+      {/* ── Header row ── */}
+      {!isMobile ? (
+        <div className="rd-gutter" style={{ display: 'flex', alignItems: 'center', gap: 24, paddingTop: 16, paddingBottom: 16, borderBottom: '1px solid var(--rule)' }}>
+          {/* Logo */}
+          <button onClick={() => go('home')} aria-label="SDGMart home"
+            style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+            <span style={{ width: 38, height: 38, background: 'var(--ink)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--f-mark)', fontSize: 14, fontWeight: 700, letterSpacing: '-.03em' }}>SDG</span>
+            <span style={{ fontFamily: 'var(--f-mark)', fontSize: 19, fontWeight: 700, letterSpacing: '-.035em', color: 'var(--ink)' }}>SDGMart</span>
           </button>
 
-          {/* Hamburger — mobile only */}
-          {isMobile && (
-            <button onClick={() => setMenuOpen(m => !m)}
-              style={{ width: 40, height: 40, borderRadius: 20, background: isV2 ? 'rgba(255,255,255,.15)' : 'var(--cream)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={isV2 ? '#fff' : 'var(--sage-dark)'} strokeWidth="2">
-                {menuOpen
-                  ? <><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></>
-                  : <><line x1="3" y1="8" x2="21" y2="8"/><line x1="3" y1="16" x2="21" y2="16"/></>
-                }
-              </svg>
-            </button>
-          )}
-        </div>
-      </div>
+          <SearchField style={{ flex: 1 }} />
 
-      {/* Mobile menu */}
+          {/* Nav links */}
+          <nav style={{ display: 'flex', alignItems: 'center', gap: 22, fontSize: 13.5, fontWeight: 500, flexShrink: 0 }} className="desktop-nav">
+            {navItems.map(([label, pg]) => {
+              const active = page === pg;
+              return active ? (
+                <button key={pg} onClick={() => go(pg)} style={{ background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', padding: '8px 15px', fontSize: 13.5, fontWeight: 500, fontFamily: 'var(--f-ui)' }}>{label}</button>
+              ) : (
+                <button key={pg} className="rdh-link" onClick={() => go(pg)} style={{ padding: 0, fontSize: 13.5, fontWeight: 500 }}>{label}</button>
+              );
+            })}
+          </nav>
+
+          {/* Mono account cluster */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, paddingLeft: 22, borderLeft: '1px solid var(--rule)', flexShrink: 0,
+            fontFamily: 'var(--f-mono)', fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase' }}>
+            {loyalty > 0 && <span title="Loyalty credit — apply at checkout" style={{ color: 'var(--accent)' }}>GHS {loyalty.toFixed(0)} credit</span>}
+            <button className="rdh-auth" onClick={() => signedIn && setPage('account')} title={signedIn ? 'Account settings' : 'Guest'}
+              style={{ color: 'var(--rd-muted)', cursor: signedIn ? 'pointer' : 'default', padding: 0 }}>{firstName}</button>
+            <button className="rdh-auth" onClick={onLogout} style={{ color: 'var(--ink)', borderBottom: '1px solid var(--ink)', paddingBottom: 2 }}>{authLabel}</button>
+            <CartGlyph />
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="rd-gutter" style={{ display: 'flex', alignItems: 'center', gap: 12, paddingTop: 12, paddingBottom: 12, borderBottom: '1px solid var(--rule)' }}>
+            <button onClick={() => go('home')} aria-label="SDGMart home" style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+              <span style={{ width: 34, height: 34, background: 'var(--ink)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--f-mark)', fontSize: 13, fontWeight: 700, letterSpacing: '-.03em' }}>SDG</span>
+              <span style={{ fontFamily: 'var(--f-mark)', fontSize: 18, fontWeight: 700, letterSpacing: '-.035em', color: 'var(--ink)' }}>SDGMart</span>
+            </button>
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 18 }}>
+              <CartGlyph />
+              <button onClick={() => setMenuOpen(m => !m)} aria-label="Menu" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex' }}>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--ink)" strokeWidth="1.6">
+                  {menuOpen ? <><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>
+                    : <><line x1="3" y1="8" x2="21" y2="8" /><line x1="3" y1="16" x2="21" y2="16" /></>}
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div className="rd-gutter" style={{ paddingTop: 10, paddingBottom: 10, borderBottom: '1px solid var(--rule)' }}>
+            <SearchField />
+          </div>
+        </>
+      )}
+
+      {/* Mobile dropdown menu */}
       {isMobile && menuOpen && (
-        <div style={{ background: isV2 ? '#2E3B1E' : 'var(--white)', borderTop: `1px solid ${isV2 ? 'rgba(255,255,255,.1)' : 'var(--cream-dark)'}`, padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {[['🏠 Home','home'],['📦 Categories','category'],['🤝 Squad','squad'],...(currentUser && currentUser.id ? [['📦 My Orders','orders'],['👤 My Profile','account']] : [['🛵 Track Order','orders']])].map(([label, pg]) => (
-            <button key={pg} onClick={() => { setPage(pg); if (pg==='category') setSelectedCategory(null); setMenuOpen(false); }}
-              style={{ textAlign: 'left', padding: '12px 16px', borderRadius: 10, fontSize: 15, fontWeight: 600,
-                background: page === pg ? 'var(--sage)' : 'transparent',
-                color: page === pg ? '#fff' : (isV2 ? 'rgba(245,240,232,.85)' : 'var(--warm-black)') }}>
-              {label}
-            </button>
-          ))}
-          {currentUser && (
-            <button onClick={onLogout}
-              style={{ textAlign: 'left', padding: '12px 16px', borderRadius: 10, fontSize: 14, fontWeight: 600, color: isV2 ? 'rgba(245,240,232,.85)' : 'var(--warm-gray)', background: 'transparent' }}>
-              {currentUser.role === 'guest' ? '🔑 Sign In' : `🚪 Sign out (${(currentUser.name || 'You').split(' ')[0]})`}
-            </button>
+        <div className="rd-gutter" style={{ display: 'flex', flexDirection: 'column', paddingTop: 6, paddingBottom: 12, borderBottom: '1px solid var(--rule)' }}>
+          {navItems.map(([label, pg]) => {
+            const active = page === pg;
+            return (
+              <button key={pg} onClick={() => go(pg)}
+                style={{ textAlign: 'left', padding: '12px 14px', fontFamily: 'var(--f-label)', fontSize: 15, fontWeight: 600, letterSpacing: '.02em', textTransform: 'uppercase',
+                  background: active ? 'var(--ink)' : 'transparent', color: active ? '#fff' : 'var(--ink)', border: 'none', cursor: 'pointer' }}>
+                {label}
+              </button>
+            );
+          })}
+          {signedIn && (
+            <button onClick={() => go('account')} style={{ textAlign: 'left', padding: '12px 14px', fontFamily: 'var(--f-label)', fontSize: 15, fontWeight: 600, letterSpacing: '.02em', textTransform: 'uppercase', background: 'transparent', color: 'var(--ink)', border: 'none', cursor: 'pointer' }}>My Profile</button>
           )}
-          <div style={{ borderTop: `1px solid ${isV2 ? 'rgba(255,255,255,.1)' : 'var(--cream-dark)'}`, marginTop: 8, paddingTop: 8, fontSize: 12, color: isV2 ? 'rgba(255,255,255,.5)' : 'var(--warm-gray)', textAlign: 'center' }}>
-            🚚 Free delivery above GHS 150
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, paddingTop: 12, borderTop: '1px solid var(--rule)', fontFamily: 'var(--f-mono)', fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase' }}>
+            <span style={{ color: 'var(--rd-muted)' }}>{signedIn ? firstName : 'Guest'}{loyalty > 0 ? ` · GHS ${loyalty.toFixed(0)} credit` : ''}</span>
+            <button onClick={onLogout} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink)', borderBottom: '1px solid var(--ink)', paddingBottom: 2, fontFamily: 'var(--f-mono)', fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase' }}>{authLabel}</button>
           </div>
         </div>
       )}
 
-      {/* Category pills */}
-      <div style={{ borderTop: `1px solid ${isV2 ? 'rgba(255,255,255,.1)' : 'var(--cream-dark)'}`, overflowX: 'auto', scrollbarWidth: 'none' }}>
-        <div style={{ display: 'flex', gap: 4, padding: isMobile ? '6px 16px' : '8px 24px', maxWidth: 1280, margin: '0 auto', minWidth: 'max-content' }}>
-          {window.CATEGORIES.map(cat => (
-            <button key={cat}
+      {/* Category pill rail */}
+      <div className="rd-gutter rd-rail" style={{ display: 'flex', gap: 7, paddingTop: 14, paddingBottom: 14, borderBottom: '1px solid var(--rule)', overflowX: 'auto' }}>
+        {[['All', null], ...cats.map(c => [c, c])].map(([label, cat]) => {
+          const active = page === 'category' && (cat ? selectedCategory === cat : !selectedCategory);
+          return (
+            <button key={label} className="rdh-pill"
               onClick={() => { setSelectedCategory(cat); setPage('category'); }}
-              style={{ padding: isMobile ? '4px 12px' : '5px 16px', borderRadius: 20, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
-                background: 'transparent',
-                color: isV2 ? 'rgba(245,240,232,.75)' : 'var(--warm-gray)',
-                border: `1px solid ${isV2 ? 'rgba(255,255,255,.15)' : 'var(--cream-dark)'}`,
-                transition: 'all .18s',
-              }}
-              onMouseEnter={e => { e.currentTarget.style.background = 'var(--sage)'; e.currentTarget.style.color = '#fff'; e.currentTarget.style.borderColor = 'var(--sage)'; }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = isV2 ? 'rgba(245,240,232,.75)' : 'var(--warm-gray)'; e.currentTarget.style.borderColor = isV2 ? 'rgba(255,255,255,.15)' : 'var(--cream-dark)'; }}
-            >
-              {cat}
+              style={{ flex: 'none', padding: '9px 15px', borderRadius: 999, whiteSpace: 'nowrap',
+                fontSize: 13, fontWeight: cat ? 600 : 700, letterSpacing: '.02em', textTransform: 'uppercase',
+                background: active ? 'var(--ink)' : 'transparent', color: active ? '#fff' : 'var(--ink-2)',
+                border: `1px solid ${active ? 'var(--ink)' : 'var(--chip-border)'}` }}>
+              {label}
             </button>
-          ))}
-        </div>
+          );
+        })}
       </div>
-
     </header>
   );
 };
@@ -342,7 +309,7 @@ const ProfileNudge = ({ currentUser, setPage }) => {
         animation: 'sdg-nudge-rise .4s cubic-bezier(.16,1,.3,1)',
       }}>
       <style>{`@keyframes sdg-nudge-rise{from{transform:translateY(140%);opacity:0}to{transform:translateY(0);opacity:1}}`}</style>
-      <span style={{ fontSize: 26, flexShrink: 0 }}>👤</span>
+      <span style={{ flexShrink: 0, fontFamily: 'var(--f-mono)', fontSize: 10, letterSpacing: '.12em', textTransform: 'uppercase', color: 'var(--accent-light)', border: '1px solid var(--dark-rule)', padding: '4px 7px' }}>Tip</span>
       <div style={{ flex: 1, fontSize: 13, lineHeight: 1.4 }}>
         <div style={{ fontWeight: 700, marginBottom: 2 }}>Make checkout one tap</div>
         <div style={{ opacity: .85, fontSize: 12 }}>

@@ -38,6 +38,8 @@
 <meta name="twitter:image" content="https://sdg-mart.com/icons/og-image.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Petit+Formal+Script&amp;family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&amp;family=Plus+Jakarta+Sans:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet">
+<!-- Design refresh (2026) type system -->
+<link href="https://fonts.googleapis.com/css2?family=Gabarito:wght@500;700;800&amp;family=Space+Grotesk:wght@400;500;700&amp;family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&amp;family=Instrument+Serif:ital@0;1&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;family=Archivo+Narrow:wght@500;600;700&amp;display=swap" rel="stylesheet">
 <!-- Production React builds — much faster + smaller than the dev builds -->
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
@@ -66,8 +68,60 @@
   --radius-lg:16px;
   --shadow:0 2px 14px rgba(28,26,22,0.10);
   --shadow-lg:0 8px 36px rgba(28,26,22,0.18);
+
+  /* ── Design refresh (2026): flat, typographic language ── */
+  --ink:#111111;         /* text, primary buttons, dark panels, footer */
+  --ink-2:#2a2a26;       /* mono body on tinted panels */
+  --rd-body:#4a4a46;     /* secondary copy */
+  --rd-muted:#78786f;    /* labels, meta */
+  --rd-faint:#9a9a94;    /* placeholder, disabled */
+  --rule:#ededea;        /* hairline dividers */
+  --rule-2:#e6e6e2;      /* grid gutter lines / card borders */
+  --border-input:#dcdcd8;/* input + control borders */
+  --chip-border:#e2e0da; /* category pill border */
+  --panel:#ffffff;       /* page / card background */
+  --surface-warm:#faf8f4;/* notice panels, request band */
+  --dark-rule:#2c2c28;   /* dividers inside dark footer */
+  --accent:#c9591f;      /* category labels, links, Add underline, active accents */
+  --accent-light:#f0813c;/* same role on dark backgrounds */
+  --accent-amber:#fca94e;/* hero serif line, active step eyebrow on dark */
+  --wa:#3f9c66;          /* WhatsApp-specific actions only */
+  --dark-body:#a8a8a0;   /* copy on dark */
+  /* type roles */
+  --f-display:'Gabarito','Plus Jakarta Sans',system-ui,sans-serif;
+  --f-hero:'Bricolage Grotesque','Gabarito',sans-serif;
+  --f-mark:'Space Grotesk',system-ui,sans-serif;
+  --f-serif:'Instrument Serif',Georgia,serif;
+  --f-ui:'IBM Plex Sans',system-ui,sans-serif;
+  --f-mono:'IBM Plex Mono',ui-monospace,'Courier New',monospace;
+  --f-label:'Archivo Narrow','Arial Narrow',sans-serif;
 }
 html{scroll-behavior:smooth}
+
+/* ── Design-refresh utilities ─────────────────────────────── */
+/* Page gutter: 60px desktop, tightening on smaller screens */
+.rd-gutter{padding-left:60px;padding-right:60px}
+@media(max-width:1024px){.rd-gutter{padding-left:32px;padding-right:32px}}
+@media(max-width:640px){.rd-gutter{padding-left:16px;padding-right:16px}}
+/* Hairline product grids: cards sit on a 1px grid, no shadow/radius */
+.rd-grid{display:grid;gap:1px;background:var(--rule-2);border:1px solid var(--rule-2)}
+.rd-grid-5{grid-template-columns:repeat(5,1fr)}
+.rd-grid-4{grid-template-columns:repeat(4,1fr)}
+@media(max-width:1180px){.rd-grid-5{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:1024px){.rd-grid-4{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:720px){.rd-grid-5{grid-template-columns:repeat(2,1fr)}.rd-grid-4{grid-template-columns:repeat(2,1fr)}}
+/* Category tiles: 7 → 4 → 2 */
+.rd-cats{display:grid;gap:12px;grid-template-columns:repeat(7,1fr)}
+@media(max-width:1180px){.rd-cats{grid-template-columns:repeat(4,1fr)}}
+@media(max-width:720px){.rd-cats{grid-template-columns:repeat(2,1fr)}}
+/* Horizontal rails: hide scrollbar chrome */
+.rd-rail{scrollbar-width:none;-ms-overflow-style:none}
+.rd-rail::-webkit-scrollbar{display:none}
+/* Flat interactive cue: cards never lift; strongest allowed cue is an inset accent outline */
+.rd-tile:hover{outline:2px solid var(--accent);outline-offset:-2px}
+.rd-cell{transition:background .14s ease}
+.rd-underline{border-bottom:2px solid var(--accent)}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
 body{
   font-family:var(--font-body);
   background:var(--cream);

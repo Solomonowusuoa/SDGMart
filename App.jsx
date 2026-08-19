@@ -324,10 +324,10 @@ const App = () => {
         cart={cart}
         page={page}
         setPage={navigateTo}
+        selectedCategory={selectedCategory}
         setSelectedCategory={setSelectedCategory}
         searchQuery={searchQuery}
         setSearchQuery={setSearchQuery}
-        theme={theme}
         currentUser={currentUser}
         onLogout={logout}
       />

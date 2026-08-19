@@ -2,7 +2,7 @@
 // HomePage footer and on the Account page. Two channels:
 //   1. In-app send (signed-in users) → POST /api/feedback → admin Issues tab.
 //   2. WhatsApp — always available, opens a prefilled chat.
-const FeedbackBox = () => {
+const FeedbackBox = ({ dark }) => {
   const [msg, setMsg] = React.useState('');
   const [state, setState] = React.useState('idle'); // idle | sending | sent
   const [error, setError] = React.useState('');
@@ -27,6 +27,38 @@ const FeedbackBox = () => {
       setState('sent');
     } catch (_) { setError('Network error — please try again.'); setState('idle'); }
   };
+
+  // ── Design-refresh (dark, flat) variant — used in the home footer ──
+  if (dark) {
+    const label = { fontFamily: 'var(--f-label)', fontSize: 12.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', cursor: 'pointer' };
+    return (
+      <div style={{ border: '1px solid var(--dark-rule)', padding: '26px 28px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ fontFamily: 'var(--f-display)', fontSize: 19, fontWeight: 700, letterSpacing: '-.03em', color: '#fff' }}>Spotted a problem? Tell us.</div>
+        <div style={{ fontSize: 13.5, lineHeight: 1.6, color: 'var(--dark-body)' }}>Your feedback matters deeply to us — every message is read by our team and taken seriously. It's how we keep growing and serving Tamale better, so please don't hold back.</div>
+        {state === 'sent' ? (
+          <div style={{ fontSize: 13.5, color: 'var(--dark-body)' }}>
+            <strong style={{ color: '#fff' }}>Thank you.</strong> We've received your message and will look into it.
+            <button onClick={() => { setMsg(''); setState('idle'); }} style={{ display: 'block', marginTop: 8, background: 'none', border: 'none', padding: 0, ...label, color: 'var(--accent-light)' }}>Send another</button>
+          </div>
+        ) : (
+          <>
+            <textarea value={msg} onChange={e => { setMsg(e.target.value); if (error) setError(''); }} rows={2} maxLength={1000}
+              placeholder="Describe the problem or share your suggestion…"
+              style={{ width: '100%', minHeight: 56, padding: '14px', border: '1px solid var(--dark-rule)', background: 'transparent', color: '#fff', fontFamily: 'var(--f-ui)', fontSize: 13.5, outline: 'none', resize: 'vertical' }} />
+            {error && <div style={{ fontSize: 12.5, color: 'var(--accent-light)' }}>{error}</div>}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', paddingTop: 2 }}>
+              {signedIn ? (
+                <button onClick={send} disabled={state === 'sending'} style={{ ...label, background: 'var(--accent-light)', color: 'var(--ink)', border: 'none', padding: '9px 16px', opacity: state === 'sending' ? .6 : 1 }}>{state === 'sending' ? 'Sending…' : 'Send to SDGMart'}</button>
+              ) : (
+                <span style={{ fontSize: 13, color: 'var(--dark-body)' }}>Sign in to send in-app, or</span>
+              )}
+              <button onClick={openWhatsApp} style={{ ...label, background: 'transparent', color: '#fff', border: '1px solid #4a4a44', padding: '9px 16px' }}>WhatsApp us instead</button>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
 
   const btnS = { fontSize: 13, fontWeight: 700, borderRadius: 8, padding: '10px 16px', cursor: 'pointer' };
 
