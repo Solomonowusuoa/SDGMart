@@ -209,16 +209,13 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage, setCart }) => {
   } else {
     primaryMsg = status; secondaryMsg = '';
   }
-  // 4-step status strip — reads the live order status (README §09 addition)
-  const stage = status === 'delivered' ? 3
-    : (status === 'in_transit' || (status === 'assigned' && data.queueAhead === 0)) ? 2
-    : (status === 'queued' || status === 'assigned') ? 1 : 0;
+  // Status strip — only the two milestones the DB actually timestamps
+  // (order placed = createdAt, delivered = deliveredAt). Live progress is
+  // already conveyed by the status heading + map above.
   const fmtT = (ts) => { try { return new Date(ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }); } catch (_) { return ''; } };
   const steps = [
-    { label: 'Order placed', time: o.createdAt ? fmtT(o.createdAt) : '' },
-    { label: 'Queued for dispatch', time: '' },
-    { label: 'Rider on the way', time: '' },
-    { label: 'Delivered', time: o.deliveredAt ? fmtT(o.deliveredAt) : '' },
+    { label: 'Order placed', time: o.createdAt ? fmtT(o.createdAt) : '', done: true },
+    { label: 'Delivered', time: o.deliveredAt ? fmtT(o.deliveredAt) : '', done: status === 'delivered' },
   ];
 
   const footLbl = { fontFamily: 'var(--f-label)', fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--rd-muted)' };
@@ -232,14 +229,13 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage, setCart }) => {
       <div style={{ fontSize: 14, color: 'var(--rd-body)', lineHeight: 1.5, maxWidth: 560 }}>{secondaryMsg}</div>
 
       {/* 4-step status strip */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 1, background: 'var(--rule-2)', border: '1px solid var(--rule-2)', marginTop: 24 }}>
-        {steps.map((s, i) => {
-          const done = i < stage, current = i === stage;
-          const top = current ? 'var(--accent)' : done ? 'var(--ink)' : 'var(--rule-2)';
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 1, background: 'var(--rule-2)', border: '1px solid var(--rule-2)', marginTop: 24 }}>
+        {steps.map((s) => {
+          const top = s.done ? 'var(--ink)' : 'var(--rule-2)';
           return (
-            <div key={s.label} style={{ background: '#fff', padding: '14px 12px 16px', borderTop: `3px solid ${top}` }}>
-              <div style={{ fontSize: 12.5, fontWeight: 600, color: (done || current) ? 'var(--ink)' : 'var(--rd-faint)', lineHeight: 1.25 }}>{s.label}</div>
-              <div style={{ fontFamily: 'var(--f-mono)', fontSize: 11, letterSpacing: '.04em', textTransform: 'uppercase', color: current ? 'var(--accent)' : 'var(--rd-faint)', marginTop: 6 }}>{current ? 'Now' : (s.time || (done ? 'Done' : '—'))}</div>
+            <div key={s.label} style={{ background: '#fff', padding: '14px 14px 16px', borderTop: `3px solid ${top}` }}>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: s.done ? 'var(--ink)' : 'var(--rd-faint)', lineHeight: 1.25 }}>{s.label}</div>
+              <div style={{ fontFamily: 'var(--f-mono)', fontSize: 11, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--rd-faint)', marginTop: 6 }}>{s.time || (s.done ? 'Done' : '—')}</div>
             </div>
           );
         })}

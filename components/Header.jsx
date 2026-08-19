@@ -160,7 +160,7 @@ const Header = ({ cart, page, setPage, selectedCategory, setSelectedCategory, se
         {[['All', null], ...cats.map(c => [c, c])].map(([label, cat]) => {
           const active = page === 'category' && (cat ? selectedCategory === cat : !selectedCategory);
           return (
-            <button key={label} className="rdh-pill"
+            <button key={label} className={active ? undefined : 'rdh-pill'}
               onClick={() => { setSelectedCategory(cat); setPage('category'); }}
               style={{ flex: 'none', padding: '9px 15px', borderRadius: 999, whiteSpace: 'nowrap',
                 fontSize: 13, fontWeight: cat ? 600 : 700, letterSpacing: '.02em', textTransform: 'uppercase',

@@ -104,7 +104,10 @@ html{scroll-behavior:smooth}
 @media(max-width:1024px){.rd-gutter{padding-left:32px;padding-right:32px}}
 @media(max-width:640px){.rd-gutter{padding-left:16px;padding-right:16px}}
 /* Hairline product grids: cards sit on a 1px grid, no shadow/radius */
-.rd-grid{display:grid;gap:1px;background:var(--rule-2);border:1px solid var(--rule-2)}
+/* Hairlines via per-cell borders over a white ground, so a half-filled last
+   row (odd item count) shows plain white — not the grid's grey gutter. */
+.rd-grid{display:grid;gap:0;background:var(--panel);border-top:1px solid var(--rule-2);border-left:1px solid var(--rule-2)}
+.rd-grid>*{border-right:1px solid var(--rule-2);border-bottom:1px solid var(--rule-2)}
 .rd-grid-5{grid-template-columns:repeat(5,1fr)}
 .rd-grid-4{grid-template-columns:repeat(4,1fr)}
 @media(max-width:1180px){.rd-grid-5{grid-template-columns:repeat(3,1fr)}}
