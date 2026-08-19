@@ -540,9 +540,9 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
             const sections = [
               ['Shop', [
                 ['Bestsellers', goHome],
-                ['Cereals', () => goCat('Cereals')],
-                ['Dairy', () => goCat('Dairy')],
-                ['Detergents', () => goCat('Detergents')],
+                ['Rice & Grains', () => goCat('Rice & Grains')],
+                ['Drinks', () => goCat('Drinks')],
+                ['Fruits & Vegetables', () => goCat('Fruits & Vegetables')],
                 ...(window.SHOW_FRESHNESS === true ? [['Clearance', () => { goHome(); setTimeout(() => { const el = [...document.querySelectorAll('h2,div')].find(n => /Clearance Corner/i.test(n.textContent)); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100); }]] : []),
               ]],
               ['Customer Care', [
