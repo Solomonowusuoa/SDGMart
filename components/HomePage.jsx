@@ -224,10 +224,10 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
   promos.forEach(p => (p.productIds || []).forEach(id => { promoIds[id] = Math.max(promoIds[id] || 0, p.discountPercent); }));
   const dealProducts = window.PRODUCTS.filter(p => promoIds[p.id]).slice(0, 8);
 
-  // Hero photo (local; falls back to the dark striped panel if absent).
-  // Swap among the staged candidates in /icons: hero-market / hero-produce /
-  // hero-fruit / hero-tomatoes / hero-trolley.
-  const HERO_BG = '/icons/hero-market.jpg';
+  // Hero photo — the dark "grocery bags" shot. The other staged images in
+  // /icons (hero-market / hero-produce / hero-fruit / hero-tomatoes /
+  // hero-trolley) are candidates for the not-yet-built rotating hero.
+  const HERO_BG = '/icons/hero.jpg';
   React.useEffect(() => {
     const link = document.createElement('link'); link.rel = 'preload'; link.as = 'image'; link.href = HERO_BG; link.fetchPriority = 'high';
     document.head.appendChild(link); return () => { try { document.head.removeChild(link); } catch (_) {} };
@@ -260,7 +260,7 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
 
       {/* ── Hero ── */}
       <section style={{ position: 'relative', minHeight: isMobile ? 420 : 460, display: 'flex', alignItems: 'center', overflow: 'hidden',
-        backgroundColor: '#141412', backgroundImage: `linear-gradient(90deg,rgba(12,12,10,.93) 0%,rgba(12,12,10,.74) 55%,rgba(12,12,10,.6) 100%), url(${HERO_BG}), ${DARK_STRIPES}`, backgroundSize: 'cover, cover, auto', backgroundPosition: 'center' }}>
+        backgroundColor: '#0d0d0b', backgroundImage: `linear-gradient(90deg,rgba(10,10,9,.82) 0%,rgba(10,10,9,.5) 52%,rgba(10,10,9,.32) 100%), url(${HERO_BG}), ${DARK_STRIPES}`, backgroundSize: 'cover, cover, auto', backgroundPosition: 'center' }}>
         <div className="rd-gutter" style={{ display: 'flex', flexDirection: 'column', gap: 22, width: '100%', maxWidth: 760, paddingTop: 40, paddingBottom: 40 }}>
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontFamily: 'var(--f-label)', fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase' }}>
             <span style={{ color: 'var(--accent-light)' }}>Tamale's smart grocery service</span>
@@ -306,9 +306,8 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
               <div style={{ fontFamily: 'var(--f-label)', fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--accent-light)' }}>This week's basket</div>
               <div style={{ fontFamily: 'var(--f-serif)', fontStyle: 'italic', fontSize: 34, lineHeight: 1.05, letterSpacing: '-.015em' }}>The things you always run out of.</div>
               <div style={{ fontSize: 13.5, lineHeight: 1.6, color: 'var(--dark-body)', marginTop: isMobile ? 4 : 'auto' }}>Soap, bleach, tissue and dish liquid — restocked weekly and delivered with the rest of your order.</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginTop: 4 }}>
+              <div style={{ marginTop: 4 }}>
                 <button onClick={addAllEssentials} style={{ background: 'var(--accent-light)', color: 'var(--ink)', border: 'none', cursor: 'pointer', padding: '12px 18px', fontFamily: 'var(--f-label)', fontSize: 12.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase' }}>Add all {essentials.length} — GHS {essentialsTotal.toFixed(2)}</button>
-                <button onClick={goShop} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#fff', fontFamily: 'var(--f-label)', fontSize: 12.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', borderBottom: '1px solid #4a4a44', paddingBottom: 1 }}>Shop essentials</button>
               </div>
             </div>
             <div className="rd-rail" style={{ flex: 1, minWidth: 0, display: 'flex', gap: 1, overflowX: 'auto', background: 'var(--rule-2)' }}>
