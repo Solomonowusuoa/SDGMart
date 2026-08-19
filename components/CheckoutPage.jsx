@@ -36,21 +36,21 @@ const trackPurchase = (snap, code) => {
 // keystroke).
 const CheckoutField = ({ label, k, type='text', placeholder='', half, value, error, onChange }) => (
   <div style={{ flex: half ? '1 1 45%' : '1 1 100%', minWidth: 0 }}>
-    <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '.05em' }}>{label}</label>
+    <label style={{ display: 'block', fontFamily: 'var(--f-label)', fontSize: 11.5, fontWeight: 700, color: 'var(--rd-muted)', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: 6 }}>{label}</label>
     <input
       type={type}
       value={value || ''}
       placeholder={placeholder}
       onChange={e => onChange(k, e.target.value)}
       style={{
-        width: '100%', padding: '11px 14px', borderRadius: 10,
-        border: `1.5px solid ${error ? 'var(--accent-red)' : 'var(--cream-dark)'}`,
-        background: 'var(--white)', fontSize: 14, outline: 'none', transition: 'border .15s',
+        width: '100%', padding: '11px 14px', borderRadius: 0,
+        border: `1px solid ${error ? 'var(--accent)' : 'var(--border-input)'}`,
+        background: '#fff', fontFamily: 'var(--f-ui)', fontSize: 14, color: 'var(--ink)', outline: 'none', transition: 'border .15s',
       }}
-      onFocus={e => e.target.style.borderColor = 'var(--sage)'}
-      onBlur={e => e.target.style.borderColor = error ? 'var(--accent-red)' : 'var(--cream-dark)'}
+      onFocus={e => e.target.style.borderColor = 'var(--ink)'}
+      onBlur={e => e.target.style.borderColor = error ? 'var(--accent)' : 'var(--border-input)'}
     />
-    {error && <div style={{ fontSize: 11, color: 'var(--accent-red)', marginTop: 3 }}>{error}</div>}
+    {error && <div style={{ fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--accent)', marginTop: 4 }}>{error}</div>}
   </div>
 );
 
@@ -426,10 +426,16 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   };
 
   const inputStyle = (k) => ({
-    width: '100%', padding: '11px 14px', borderRadius: 10,
-    border: `1.5px solid ${errors[k] ? 'var(--accent-red)' : 'var(--cream-dark)'}`,
-    background: 'var(--white)', fontSize: 14, outline: 'none', transition: 'border .15s',
+    width: '100%', padding: '11px 14px', borderRadius: 0,
+    border: `1px solid ${errors[k] ? 'var(--accent)' : 'var(--border-input)'}`,
+    background: '#fff', fontFamily: 'var(--f-ui)', fontSize: 14, color: 'var(--ink)', outline: 'none', transition: 'border .15s',
   });
+  // Design-refresh style helpers (checkout-local)
+  const ckLbl = { display: 'block', fontFamily: 'var(--f-label)', fontSize: 11.5, fontWeight: 700, color: 'var(--rd-muted)', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: 6 };
+  const ckNotice = (accent) => ({ border: '1px solid var(--rule-2)', borderLeft: `2px solid ${accent}`, background: 'var(--surface-warm)', padding: '13px 16px', marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 3 });
+  const ckPrimary = { width: '100%', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', padding: '15px', fontFamily: 'var(--f-ui)', fontSize: 14, fontWeight: 600 };
+  const ckLabelBtn = { fontFamily: 'var(--f-label)', fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', cursor: 'pointer' };
+  const ckEyebrow = { fontFamily: 'var(--f-label)', fontSize: 12, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', color: 'var(--accent)' };
 
   // Stable handler that updates a field and clears its error in one go.
   const handleFieldChange = React.useCallback((k, v) => {
@@ -456,24 +462,21 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
       setCodeCopied(true); setTimeout(() => setCodeCopied(false), 2000);
     };
     return (
-    <div style={{ maxWidth: 520, margin: '60px auto', padding: '0 24px', textAlign: 'center' }}>
-      <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', padding: '40px 32px', boxShadow: 'var(--shadow-lg)' }}>
-        <div style={{ fontSize: 56 }}>🎉</div>
-        <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginTop: 16 }}>Order Received!</h1>
-        <div style={{ color: 'var(--warm-gray)', marginTop: 8, fontSize: 14, lineHeight: 1.55 }}>
-          🛵 Your rider is lacing up the boots.<br/>
-          <span style={{ fontSize: 12, opacity: .85 }}>Order <strong>{orderId}</strong> is confirmed.</span>
-        </div>
+    <div className="rd-gutter" style={{ maxWidth: 640, margin: '48px auto 64px', fontFamily: 'var(--f-ui)', color: 'var(--ink)' }}>
+      <div style={{ borderTop: '2px solid var(--ink)', paddingTop: 22 }}>
+        <div style={ckEyebrow}>Order {orderId} confirmed</div>
+        <h1 style={{ margin: '12px 0 2px', fontFamily: 'var(--f-display)', fontSize: 44, fontWeight: 700, letterSpacing: '-.03em' }}>Order received.</h1>
+        <div style={{ fontFamily: 'var(--f-serif)', fontStyle: 'italic', fontSize: 24, color: 'var(--rd-body)' }}>Your rider is lacing up the boots.</div>
         {(() => {
           const now = new Date();
           const afterCutoff = now.getHours() >= 12;
           const txt = (scheduleLater && scheduledDate)
-            ? `📅 Scheduled: ${scheduledDate}${scheduledSlot ? ` · ${scheduledSlot}` : ''}`
+            ? `Scheduled: ${scheduledDate}${scheduledSlot ? ` · ${scheduledSlot}` : ''}`
             : (afterCutoff
-              ? '📅 Delivery: tomorrow from 12 PM (priority queue)'
-              : '🛵 Delivery: today, starting from 12 PM');
+              ? 'Delivery: tomorrow from 12 PM (priority queue)'
+              : 'Delivery: today, starting from 12 PM');
           return (
-            <div style={{ marginTop: 14, display: 'inline-block', background: 'var(--cream)', border: '1px solid var(--cream-dark)', borderRadius: 999, padding: '8px 16px', fontSize: 13, fontWeight: 600, color: 'var(--warm-black)' }}>
+            <div style={{ marginTop: 20, display: 'inline-block', border: '1px solid var(--border-input)', padding: '9px 16px', fontFamily: 'var(--f-mono)', fontSize: 12, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--ink)' }}>
               {txt}
             </div>
           );
@@ -484,98 +487,86 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
         </div>
 
         {trackingCode && (
-          <div style={{ background: '#FFF8E1', border: '1px solid #F0DCA0', borderRadius: 10, padding: '14px 16px', marginTop: 22, textAlign: 'left' }}>
-            <div style={{ fontSize: 12, color: '#7A5A00', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>
-              🔑 Your tracking code — save it!
-            </div>
-            <div style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 700, background: 'var(--white)', borderRadius: 8, padding: '10px 12px', wordBreak: 'break-all', border: '1px solid var(--cream-dark)' }}>
-              {trackingCode}
-            </div>
-            <div style={{ fontSize: 11, color: '#7A5A00', marginTop: 6, lineHeight: 1.5 }}>
-              Enter this on the <strong>Track Order</strong> page from any device or phone to follow your delivery. It stops working 7 days after delivery.
-            </div>
-            <button onClick={copyTrackingCode}
-              style={{ marginTop: 10, width: '100%', background: 'var(--warm-black, #1A1A1A)', color: '#fff', borderRadius: 8, padding: '10px', fontWeight: 700, fontSize: 13 }}>
-              {codeCopied ? '✓ Copied!' : '📋 Copy tracking code'}
-            </button>
+          <div style={{ border: '1px solid var(--rule-2)', borderLeft: '2px solid var(--accent)', background: 'var(--surface-warm)', padding: '16px 18px', marginTop: 24, textAlign: 'left' }}>
+            <div style={ckEyebrow}>Your tracking code — save it</div>
+            <div style={{ fontFamily: 'var(--f-mono)', fontSize: 13, fontWeight: 500, background: '#fff', border: '1px solid var(--border-input)', padding: '11px 12px', marginTop: 10, wordBreak: 'break-all' }}>{trackingCode}</div>
+            <div style={{ fontSize: 12, color: 'var(--rd-body)', marginTop: 8, lineHeight: 1.5 }}>Enter this on the <strong style={{ color: 'var(--ink)' }}>Track Order</strong> page from any device to follow your delivery. It stops working 7 days after delivery.</div>
+            <button onClick={copyTrackingCode} style={{ ...ckLabelBtn, marginTop: 12, width: '100%', background: 'var(--ink)', color: '#fff', border: 'none', padding: '11px', fontSize: 12.5 }}>{codeCopied ? 'Copied ✓' : 'Copy tracking code'}</button>
           </div>
         )}
 
-        <div style={{ background: 'var(--cream)', borderRadius: 10, padding: '16px', marginTop: 16, textAlign: 'left' }}>
-          <div style={{ fontSize: 12, color: 'var(--warm-gray)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>
-            Send a copy of this order (incl. tracking code) to your WhatsApp
-          </div>
+        <div style={{ border: '1px solid var(--rule-2)', padding: '16px 18px', marginTop: 16, textAlign: 'left' }}>
+          <div style={ckLbl}>Send a copy (incl. tracking code) to your WhatsApp</div>
           <input
             type="tel"
             value={waNumber}
             onChange={e => setWaNumber(e.target.value)}
             placeholder={form.phone || 'e.g. 0504082555 or +233504082555'}
-            style={{ width: '100%', padding: '11px 14px', borderRadius: 10, border: '1.5px solid var(--cream-dark)', background: 'var(--white)', fontSize: 14, outline: 'none' }}
+            style={{ width: '100%', padding: '11px 14px', border: '1px solid var(--border-input)', borderRadius: 0, background: '#fff', fontFamily: 'var(--f-ui)', fontSize: 14, color: 'var(--ink)', outline: 'none' }}
           />
-          <div style={{ fontSize: 11, color: 'var(--warm-gray)', marginTop: 6 }}>
+          <div style={{ fontSize: 11.5, color: 'var(--rd-muted)', marginTop: 6 }}>
             Defaults to the phone you entered at checkout. Ghana numbers (starting with 0) are accepted.
           </div>
         </div>
 
-        <a href={waHref} target="_blank" rel="noopener noreferrer"
-          onClick={e => { if (!waValid) { e.preventDefault(); alert('Please enter a valid WhatsApp number first.'); } }}
-          style={{ display: 'block', marginTop: 16, background: waValid ? '#25D366' : '#888', color: '#fff', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 15, textDecoration: 'none', cursor: waValid ? 'pointer' : 'not-allowed' }}>
-          📱 Send Order to My WhatsApp
-        </a>
-        <button onClick={() => generateReceipt(orderSnapshot, orderId)}
-          style={{ marginTop: 10, width: '100%', background: '#1A1A1A', color: '#fff', borderRadius: 10, padding: '12px', fontWeight: 700, fontSize: 14 }}>
-          📄 Download PDF Receipt
-        </button>
-        {openTracking && placedOrderId != null && (
-          <button onClick={() => openTracking(placedOrderId)}
-            style={{ marginTop: 10, width: '100%', background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '12px', fontWeight: 700, fontSize: 14 }}>
-            🛵 Track this order
-          </button>
-        )}
-        <button onClick={() => setPage('home')}
-          style={{ marginTop: 10, width: '100%', background: 'var(--cream)', color: 'var(--warm-black)', borderRadius: 10, padding: '12px', fontWeight: 600, fontSize: 14 }}>
-          Continue Shopping
-        </button>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, background: 'var(--rule-2)', border: '1px solid var(--rule-2)', marginTop: 16 }}>
+          {(() => {
+            const cell = { ...ckLabelBtn, border: 'none', padding: '15px', fontSize: 12, textAlign: 'center', textDecoration: 'none', display: 'block' };
+            return (<>
+              <a href={waHref} target="_blank" rel="noopener noreferrer"
+                onClick={e => { if (!waValid) { e.preventDefault(); alert('Please enter a valid WhatsApp number first.'); } }}
+                style={{ ...cell, background: waValid ? 'var(--wa)' : '#9a9a94', color: '#fff', cursor: waValid ? 'pointer' : 'not-allowed' }}>Send order to my WhatsApp</a>
+              {openTracking && placedOrderId != null && (
+                <button onClick={() => openTracking(placedOrderId)} style={{ ...cell, background: 'var(--ink)', color: '#fff' }}>Track this order</button>
+              )}
+              <button onClick={() => generateReceipt(orderSnapshot, orderId)} style={{ ...cell, background: '#fff', color: 'var(--ink)' }}>Download PDF receipt</button>
+              <button onClick={() => setPage('home')} style={{ ...cell, background: '#fff', color: 'var(--rd-muted)' }}>Continue shopping</button>
+            </>);
+          })()}
+        </div>
       </div>
     </div>
     );
   }
 
   return (
-    <div style={{ maxWidth: 960, margin: '0 auto', padding: isMobile ? '16px' : '28px 24px' }}>
+    <div style={{ maxWidth: 1040, margin: '0 auto', padding: isMobile ? '20px 16px' : '34px 24px', fontFamily: 'var(--f-ui)', color: 'var(--ink)', background: 'var(--panel)' }}>
       {/* Step indicator */}
-      <div style={{ display: 'flex', gap: 0, marginBottom: 32, background: 'var(--white)', borderRadius: 'var(--radius-lg)', padding: '6px', boxShadow: 'var(--shadow)' }}>
-        {[['1','Delivery Details'],['2','Review Order'],['3','Confirm & Pay']].map(([n, label], idx) => (
-          <div key={n} style={{ flex: 1, textAlign: 'center', padding: '10px', borderRadius: 10, background: step === idx+1 ? 'var(--sage)' : 'transparent', color: step === idx+1 ? '#fff' : step > idx+1 ? 'var(--sage)' : 'var(--warm-gray)', transition: 'all .2s', cursor: step > idx+1 ? 'pointer' : 'default' }}
-            onClick={() => { if (step > idx+1) setStep(idx+1); }}>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>{label}</div>
-            <div style={{ fontSize: 11, opacity: .75, marginTop: 2 }}>Step {n} of 3</div>
-          </div>
-        ))}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 1, background: 'var(--rule-2)', border: '1px solid var(--rule-2)', marginBottom: 32 }}>
+        {[['1','Delivery Details'],['2','Review Order'],['3','Confirm & Pay']].map(([n, label], idx) => {
+          const active = step === idx + 1, done = step > idx + 1;
+          return (
+            <div key={n} onClick={() => { if (done) setStep(idx + 1); }}
+              style={{ background: active ? 'var(--ink)' : '#fff', padding: isMobile ? '12px 12px' : '16px 22px', display: 'flex', flexDirection: 'column', gap: 3, cursor: done ? 'pointer' : 'default' }}>
+              <span style={{ fontFamily: 'var(--f-label)', fontSize: 11, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', color: active ? 'var(--accent-amber)' : (done ? 'var(--accent)' : 'var(--rd-faint)') }}>Step {n} of 3</span>
+              <span style={{ fontSize: 14.5, fontWeight: 600, color: active ? '#fff' : (done ? 'var(--ink)' : 'var(--rd-faint)') }}>{label}</span>
+            </div>
+          );
+        })}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 320px', gap: 24, alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 380px', gap: 24, alignItems: 'start' }}>
         {/* Main form */}
-        <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', padding: '28px', boxShadow: 'var(--shadow)' }}>
+        <div style={{ border: '1px solid var(--rule-2)', background: '#fff', padding: isMobile ? '20px' : '28px' }}>
 
           {step === 1 && (
             <>
-              <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, marginBottom: 14 }}>Delivery Details</h2>
+              <h2 style={{ fontFamily: 'var(--f-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', marginBottom: 16 }}>Delivery Details</h2>
 
               {bdayGifts.eligible && bdayGifts.products.length > 0 && (
-                <div style={{ marginBottom: 20, padding: '16px', background: '#FFF8E1', border: '1.5px solid #F0DCA0', borderRadius: 12 }}>
-                  <div style={{ fontWeight: 700, fontSize: 15, color: '#7A5A00' }}>🎂 Happy Birthday{currentUser && currentUser.name ? `, ${String(currentUser.name).split(' ')[0]}` : ''}!</div>
-                  <div style={{ fontSize: 13, color: '#7A5A00', marginTop: 2, marginBottom: 12 }}>Add one free gift to your order — on us. 🎁</div>
+                <div style={{ marginBottom: 20, padding: '16px 18px', border: '1px solid var(--rule-2)', borderLeft: '2px solid var(--accent)', background: 'var(--surface-warm)' }}>
+                  <div style={{ fontFamily: 'var(--f-display)', fontWeight: 700, fontSize: 16 }}>Happy Birthday{currentUser && currentUser.name ? `, ${String(currentUser.name).split(' ')[0]}` : ''}</div>
+                  <div style={{ fontSize: 13, color: 'var(--rd-body)', marginTop: 2, marginBottom: 12 }}>Add one free gift to your order — on us.</div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {bdayGifts.products.map(p => (
                       <button key={p.id} type="button" onClick={() => setChosenGift(chosenGift === p.id ? null : p.id)}
-                        style={{ textAlign: 'left', padding: '10px 14px', borderRadius: 10, border: `2px solid ${chosenGift === p.id ? 'var(--sage)' : 'var(--cream-dark)'}`, background: chosenGift === p.id ? 'rgba(0,0,0,.05)' : 'var(--white)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <span style={{ fontWeight: 700, fontSize: 14 }}>{p.name}</span>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: chosenGift === p.id ? 'var(--sage-dark)' : 'var(--warm-gray)' }}>{chosenGift === p.id ? '✓ FREE' : 'FREE'}</span>
+                        style={{ textAlign: 'left', padding: '11px 14px', border: `1px solid ${chosenGift === p.id ? 'var(--ink)' : 'var(--border-input)'}`, background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</span>
+                        <span style={{ fontFamily: 'var(--f-label)', fontSize: 11, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: chosenGift === p.id ? 'var(--accent)' : 'var(--rd-muted)' }}>{chosenGift === p.id ? 'Free ✓' : 'Free'}</span>
                       </button>
                     ))}
                   </div>
-                  {chosenGift && <div style={{ fontSize: 11, color: '#7A5A00', marginTop: 8 }}>Tap again to deselect. Your gift is added free at checkout.</div>}
+                  {chosenGift && <div style={{ fontSize: 11.5, color: 'var(--rd-muted)', marginTop: 8 }}>Tap again to deselect. Your gift is added free at checkout.</div>}
                 </div>
               )}
 
@@ -583,93 +574,69 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
               {(() => {
                 const now = new Date();
                 const afterCutoff = now.getHours() >= 12;
-                if (afterCutoff) {
-                  return (
-                    <div style={{ background: '#FFF4E0', border: '1px solid #F0C674', borderRadius: 10, padding: '12px 14px', marginBottom: 20, display: 'flex', gap: 10 }}>
-                      <span style={{ fontSize: 18 }}>⏰</span>
-                      <div style={{ fontSize: 13, lineHeight: 1.5, color: '#7A5A00' }}>
-                        <div style={{ fontWeight: 700 }}>Order after the 12 PM cut-off</div>
-                        Today's deliveries are already on the road. Your order will be delivered <strong>tomorrow from 12 PM</strong>, and we'll prioritise it ahead of new same-day orders.
-                      </div>
-                    </div>
-                  );
-                }
                 return (
-                  <div style={{ background: '#E8F4EC', border: '1px solid #B6D9C4', borderRadius: 10, padding: '12px 14px', marginBottom: 20, display: 'flex', gap: 10 }}>
-                    <span style={{ fontSize: 18 }}>🛵</span>
-                    <div style={{ fontSize: 13, lineHeight: 1.5, color: '#1F5D3A' }}>
-                      <div style={{ fontWeight: 700 }}>Same-day delivery</div>
-                      Order before 12 PM and your delivery will be made today. Riders begin their routes at 12 PM.
-                    </div>
+                  <div style={ckNotice(afterCutoff ? 'var(--accent)' : 'var(--ink)')}>
+                    <div style={{ fontFamily: 'var(--f-label)', fontSize: 12, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: afterCutoff ? 'var(--accent)' : 'var(--ink)' }}>{afterCutoff ? 'Order after the 12 PM cut-off' : 'Same-day delivery'}</div>
+                    <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--rd-body)' }}>{afterCutoff
+                      ? <>Today's deliveries are already on the road. Your order will be delivered <strong style={{ color: 'var(--ink)' }}>tomorrow from 12 PM</strong>, and we'll prioritise it ahead of new same-day orders.</>
+                      : <>Order before 12 PM and your delivery will be made today. Riders begin their routes at 12 PM.</>}</div>
                   </div>
                 );
               })()}
 
               {/* Delivery timing — ASAP or scheduled for later */}
-              <div style={{ marginBottom: 16, padding: '14px 16px', background: 'var(--cream)', borderRadius: 12, border: '1px solid var(--cream-dark)' }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>When should we deliver?</div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button type="button" onClick={() => setScheduleLater(false)}
-                    style={{ flex: 1, padding: '10px', borderRadius: 8, fontWeight: 700, fontSize: 13, color: 'var(--warm-black)', border: `1.5px solid ${!scheduleLater ? 'var(--sage)' : 'var(--cream-dark)'}`, background: !scheduleLater ? 'rgba(0,0,0,.05)' : 'var(--white)' }}>
-                    🛵 Deliver ASAP
-                  </button>
-                  <button type="button" onClick={() => setScheduleLater(true)}
-                    style={{ flex: 1, padding: '10px', borderRadius: 8, fontWeight: 700, fontSize: 13, color: 'var(--warm-black)', border: `1.5px solid ${scheduleLater ? 'var(--sage)' : 'var(--cream-dark)'}`, background: scheduleLater ? 'rgba(0,0,0,.05)' : 'var(--white)' }}>
-                    📅 Schedule for later
-                  </button>
+              <div style={{ marginBottom: 16, padding: '14px 16px', border: '1px solid var(--rule-2)' }}>
+                <div style={ckLbl}>When should we deliver?</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, background: 'var(--rule-2)', border: '1px solid var(--rule-2)' }}>
+                  {[['Deliver ASAP', false], ['Schedule for later', true]].map(([lab, val]) => {
+                    const on = scheduleLater === val;
+                    return <button key={lab} type="button" onClick={() => setScheduleLater(val)} style={{ padding: '11px', border: 'none', cursor: 'pointer', fontFamily: 'var(--f-label)', fontSize: 12, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', background: on ? 'var(--ink)' : '#fff', color: on ? '#fff' : 'var(--rd-muted)' }}>{lab}</button>;
+                  })}
                 </div>
                 {scheduleLater && (
                   <>
                     <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
                       <input type="date" value={scheduledDate} min={minSchedDate} max={maxSchedDate}
                         onChange={e => { setScheduledDate(e.target.value); clearErr('scheduledDate'); }}
-                        style={{ flex: 1, minWidth: 150, padding: '11px 12px', borderRadius: 10, border: `1.5px solid ${errors.scheduledDate ? 'var(--accent-red)' : 'var(--cream-dark)'}`, fontSize: 14, background: 'var(--white)', outline: 'none' }} />
+                        style={{ flex: 1, minWidth: 150, padding: '11px 12px', borderRadius: 0, border: `1px solid ${errors.scheduledDate ? 'var(--accent)' : 'var(--border-input)'}`, fontFamily: 'var(--f-ui)', fontSize: 14, background: '#fff', color: 'var(--ink)', outline: 'none' }} />
                       <select value={scheduledSlot} onChange={e => { setScheduledSlot(e.target.value); clearErr('scheduledSlot'); }}
-                        style={{ flex: 1, minWidth: 150, padding: '11px 12px', borderRadius: 10, border: `1.5px solid ${errors.scheduledSlot ? 'var(--accent-red)' : 'var(--cream-dark)'}`, fontSize: 14, background: 'var(--white)', outline: 'none', cursor: 'pointer' }}>
+                        style={{ flex: 1, minWidth: 150, padding: '11px 12px', borderRadius: 0, border: `1px solid ${errors.scheduledSlot ? 'var(--accent)' : 'var(--border-input)'}`, fontFamily: 'var(--f-ui)', fontSize: 14, background: '#fff', color: 'var(--ink)', outline: 'none', cursor: 'pointer' }}>
                         <option value="">Pick a time slot…</option>
                         {slots.map(s => <option key={s} value={s}>{s}</option>)}
                       </select>
                     </div>
-                    {(errors.scheduledDate || errors.scheduledSlot) && <div style={{ fontSize: 11, color: 'var(--accent-red)', marginTop: 6 }}>Pick a delivery date and time slot.</div>}
-                    <div style={{ fontSize: 11, color: 'var(--warm-gray)', marginTop: 8 }}>Choose any day within the next 7 days. Delivery fee is unchanged.</div>
+                    {(errors.scheduledDate || errors.scheduledSlot) && <div style={{ fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--accent)', marginTop: 6 }}>Pick a delivery date and time slot.</div>}
+                    <div style={{ fontSize: 11.5, color: 'var(--rd-muted)', marginTop: 8 }}>Choose any day within the next 7 days. Delivery fee is unchanged.</div>
                   </>
                 )}
               </div>
 
               {/* First-order-free notice */}
               {isFirstOrderFree && (
-                <div style={{ background: '#FFF8E1', border: '1px solid #F0DCA0', borderRadius: 10, padding: '12px 14px', marginBottom: 16, display: 'flex', gap: 10 }}>
-                  <span style={{ fontSize: 18 }}>🎁</span>
-                  <div style={{ fontSize: 13, lineHeight: 1.5, color: '#7A5A00' }}>
-                    <div style={{ fontWeight: 700 }}>Welcome — your first delivery is FREE</div>
-                    No delivery fee on this order (first orders above GHS {FIRST_ORDER_FREE_MIN}). Future orders are a flat GHS 10.
-                  </div>
+                <div style={ckNotice('var(--accent)')}>
+                  <div style={{ fontFamily: 'var(--f-label)', fontSize: 12, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--accent)' }}>Welcome — your first delivery is free</div>
+                  <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--rd-body)' }}>No delivery fee on this order (first orders above GHS {FIRST_ORDER_FREE_MIN}). Future orders are a flat GHS 10.</div>
                 </div>
               )}
               {isFirstOrderEligible && !isFirstOrderFree && (
-                <div style={{ background: '#FFF8E1', border: '1px solid #F0DCA0', borderRadius: 10, padding: '12px 14px', marginBottom: 16, display: 'flex', gap: 10 }}>
-                  <span style={{ fontSize: 18 }}>🎁</span>
-                  <div style={{ fontSize: 13, lineHeight: 1.5, color: '#7A5A00' }}>
-                    <div style={{ fontWeight: 700 }}>Your first delivery is FREE on orders above GHS {FIRST_ORDER_FREE_MIN}</div>
-                    Add <strong>GHS {(FIRST_ORDER_FREE_MIN - afterLoyalty).toFixed(2)}</strong> more to skip the GHS {STANDARD_DELIVERY} delivery fee — or keep it for a bigger order; it doesn't expire until you use it.
-                  </div>
+                <div style={ckNotice('var(--accent)')}>
+                  <div style={{ fontFamily: 'var(--f-label)', fontSize: 12, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--accent)' }}>Your first delivery is free above GHS {FIRST_ORDER_FREE_MIN}</div>
+                  <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--rd-body)' }}>Add <strong style={{ color: 'var(--ink)' }}>GHS {(FIRST_ORDER_FREE_MIN - afterLoyalty).toFixed(2)}</strong> more to skip the GHS {STANDARD_DELIVERY} delivery fee — or keep it for a bigger order; it doesn't expire until you use it.</div>
                 </div>
               )}
 
               {/* Saved-address quick picker (hidden while the compact saved-address note is shown) */}
               {!compactAddress && savedAddresses.length > 0 && (
                 <div style={{ marginBottom: 16 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>
-                    Deliver to one of your saved addresses
-                  </div>
+                  <div style={ckLbl}>Deliver to one of your saved addresses</div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     {savedAddresses.map(a => {
                       const active = form.neighborhood === a.neighborhood && (a.location && form.location && Math.abs(a.location.lat - (form.location.lat || 0)) < 0.0005);
                       return (
                         <button key={a.id} type="button" onClick={() => applyAddress(a)}
-                          style={{ fontSize: 12, fontWeight: 700, padding: '8px 14px', borderRadius: 999, border: `1.5px solid ${active ? 'var(--sage)' : 'var(--cream-dark)'}`, background: active ? 'rgba(0,0,0,.04)' : 'var(--white)' }}>
+                          style={{ fontFamily: 'var(--f-ui)', fontSize: 12.5, fontWeight: 600, padding: '8px 14px', border: `1px solid ${active ? 'var(--ink)' : 'var(--border-input)'}`, background: active ? 'var(--surface-warm)' : '#fff', cursor: 'pointer' }}>
                           {a.label}{a.isLastUsed ? ' (last used)' : ''}
-                          <span style={{ color: 'var(--warm-gray)', fontWeight: 500, marginLeft: 6, fontSize: 11 }}>{a.neighborhood}</span>
+                          <span style={{ color: 'var(--rd-muted)', fontWeight: 400, marginLeft: 6, fontSize: 11 }}>{a.neighborhood}</span>
                         </button>
                       );
                     })}
@@ -678,17 +645,14 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
               )}
 
               {/* Family mode toggle */}
-              <div style={{ marginBottom: 24, padding: '14px 18px', background: familyMode ? 'rgba(212,160,23,.12)' : 'var(--cream)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
+              <div style={{ marginBottom: 24, padding: '14px 18px', border: `1px solid ${familyMode ? 'var(--ink)' : 'var(--rule-2)'}`, background: familyMode ? 'var(--surface-warm)' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, cursor: 'pointer' }}
                 onClick={() => setFamilyMode(f => !f)}>
-                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                  <span style={{ fontSize: 20 }}>🎁</span>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 14 }}>Family Mode — Ordering for Someone Else?</div>
-                    <div style={{ fontSize: 12, color: 'var(--warm-gray)' }}>Send a gift with a custom message and GPS pin</div>
-                  </div>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>Family Mode — ordering for someone else?</div>
+                  <div style={{ fontSize: 12, color: 'var(--rd-muted)', marginTop: 2 }}>Send a gift with a custom message and GPS pin</div>
                 </div>
-                <div style={{ width: 44, height: 24, borderRadius: 12, background: familyMode ? 'var(--sage)' : 'var(--cream-dark)', position: 'relative', transition: 'background .2s', flexShrink: 0 }}>
-                  <div style={{ position: 'absolute', top: 2, left: familyMode ? 22 : 2, width: 20, height: 20, borderRadius: '50%', background: '#fff', transition: 'left .2s', boxShadow: '0 1px 4px rgba(0,0,0,.2)' }} />
+                <div style={{ width: 44, height: 24, background: familyMode ? 'var(--ink)' : 'var(--rule-2)', position: 'relative', transition: 'background .2s', flexShrink: 0 }}>
+                  <div style={{ position: 'absolute', top: 2, left: familyMode ? 22 : 2, width: 20, height: 20, background: '#fff', transition: 'left .2s' }} />
                 </div>
               </div>
 
@@ -696,27 +660,20 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                 <CheckoutField {...fieldProps('name')} label="Your Name" placeholder="Kwame Asante" />
                 <CheckoutField {...fieldProps('phone')} label="Your phone (Call)" placeholder="+233 50 123 4567" />
                 {compactAddress && (
-                  <div style={{ flex: '1 1 100%', background: 'var(--cream)', border: '1.5px solid var(--cream-dark)', borderRadius: 10, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 18 }}>📍</span>
+                  <div style={{ flex: '1 1 100%', border: '1px solid var(--rule-2)', borderLeft: '2px solid var(--ink)', background: 'var(--surface-warm)', padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                     <div style={{ flex: 1, minWidth: 180 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700 }}>
-                        Delivering to {appliedAddress.label}{appliedAddress.isDefault ? ' (your default address)' : ''}
-                      </div>
-                      <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 2 }}>
-                        {appliedAddress.neighborhood}{appliedAddress.address ? ` · ${appliedAddress.address}` : ''}
-                      </div>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>Delivering to {appliedAddress.label}{appliedAddress.isDefault ? ' (your default address)' : ''}</div>
+                      <div style={{ fontSize: 12, color: 'var(--rd-muted)', marginTop: 2 }}>{appliedAddress.neighborhood}{appliedAddress.address ? ` · ${appliedAddress.address}` : ''}</div>
                     </div>
                     <button type="button" onClick={() => setEditingAddress(true)}
-                      style={{ fontSize: 12, fontWeight: 700, color: 'var(--sage-dark)', background: 'var(--white)', border: '1.5px solid var(--cream-dark)', borderRadius: 8, padding: '7px 14px' }}>
-                      Change / add details
-                    </button>
+                      style={{ fontFamily: 'var(--f-label)', fontSize: 11.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--ink)', background: '#fff', border: '1px solid var(--border-input)', cursor: 'pointer', padding: '8px 14px' }}>Change / add details</button>
                   </div>
                 )}
                 {!compactAddress && (
                 <div style={{ flex: '1 1 100%' }}>
-                  <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '.05em' }}>Neighborhood</label>
+                  <label style={ckLbl}>Neighborhood</label>
                   <select value={form.neighborhood} onChange={e => { set('neighborhood', e.target.value); clearErr('neighborhood'); if (e.target.value !== '__other__') set('customNeighborhood', ''); }}
-                    style={{ ...inputStyle('neighborhood'), appearance: 'none', cursor: 'pointer' }}>
+                    style={{ ...inputStyle('neighborhood'), cursor: 'pointer' }}>
                     <option value="">Select your neighborhood...</option>
                     {window.NEIGHBORHOODS.map(n => <option key={n} value={n}>{n}</option>)}
                     <option value="__other__">Other (enter below)…</option>
@@ -730,20 +687,20 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                       style={{ ...inputStyle('customNeighborhood'), marginTop: 8 }}
                     />
                   )}
-                  {errors.neighborhood && <div style={{ fontSize: 11, color: 'var(--accent-red)', marginTop: 3 }}>{errors.neighborhood}</div>}
+                  {errors.neighborhood && <div style={{ fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--accent)', marginTop: 4 }}>{errors.neighborhood}</div>}
                 </div>
                 )}
                 {!compactAddress && (
                 <>
                 <CheckoutField {...fieldProps('address')} label="Delivery Address / Landmark" placeholder="e.g. Blue gate opposite Lamashegu market" />
-                {errors.address && <div style={{ fontSize: 11, color: 'var(--accent-red)', marginTop: -6, marginBottom: 8 }}>{errors.address}</div>}
+                {errors.address && <div style={{ fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--accent)', marginTop: -6, marginBottom: 8 }}>{errors.address}</div>}
                 </>
                 )}
               </div>
 
               {!compactAddress && (
-              <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--warm-gray)', margin: '6px 0', fontWeight: 600 }}>
-                — type a landmark above, <em>or</em> pin your spot on the map below —
+              <div style={{ textAlign: 'center', fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--rd-muted)', letterSpacing: '.04em', textTransform: 'uppercase', margin: '10px 0' }}>
+                Type a landmark above, or pin your spot on the map below
               </div>
               )}
 
@@ -752,26 +709,21 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
               <div style={{ marginTop: 4 }}>
                 {!mapOpen ? (
                   <button type="button" onClick={() => setMapOpen(true)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', background: 'var(--cream)', border: '1.5px dashed var(--cream-dark)', borderRadius: 10, cursor: 'pointer', textAlign: 'left' }}>
-                    <span style={{ fontSize: 18 }}>📍</span>
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '13px 16px', background: '#fff', border: '1px dashed var(--border-input)', cursor: 'pointer', textAlign: 'left' }}>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 700, fontSize: 13 }}>Pin exact spot on map</div>
-                      <div style={{ fontSize: 12, color: 'var(--warm-gray)' }}>
-                        {form.location ? '✓ Location pinned — tap to adjust' : 'Search a landmark or drop a pin. Skip this if you typed an address above.'}
+                      <div style={{ fontWeight: 600, fontSize: 13 }}>Pin exact spot on map</div>
+                      <div style={{ fontSize: 12, color: 'var(--rd-muted)', marginTop: 2 }}>
+                        {form.location ? 'Location pinned — tap to adjust' : 'Search a landmark or drop a pin. Skip this if you typed an address above.'}
                       </div>
                     </div>
-                    <span style={{ fontSize: 13, color: 'var(--sage-dark)', fontWeight: 700 }}>{form.location ? 'Edit' : 'Open map'}</span>
+                    <span style={{ fontFamily: 'var(--f-label)', fontSize: 12, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--accent)' }}>{form.location ? 'Edit' : 'Open map'}</span>
                   </button>
                 ) : (
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
-                        Pin your exact spot
-                      </label>
+                      <label style={{ fontFamily: 'var(--f-label)', fontSize: 11.5, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--rd-muted)' }}>Pin your exact spot</label>
                       <button type="button" onClick={() => setMapOpen(false)}
-                        style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', background: 'transparent' }}>
-                        ✕ Hide map
-                      </button>
+                        style={{ fontFamily: 'var(--f-label)', fontSize: 11.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--rd-muted)', background: 'none', border: 'none', cursor: 'pointer' }}>Hide map</button>
                     </div>
                     <MapPicker
                       value={form.location || null}
@@ -785,13 +737,13 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
 
               {familyMode && (
                 <div style={{ marginTop: 24, paddingTop: 24, borderTop: '1.5px dashed var(--cream-dark)' }}>
-                  <div style={{ fontFamily: 'var(--font-head)', fontSize: 18, fontWeight: 700, marginBottom: 16 }}>🎁 Recipient Details</div>
+                  <div style={{ fontFamily: 'var(--f-display)', fontSize: 18, fontWeight: 700, letterSpacing: '-.02em', marginBottom: 16 }}>Recipient Details</div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14 }}>
                     <CheckoutField {...fieldProps('recipientName')} label="Recipient Name" placeholder="Abena Mensah" />
                     <CheckoutField {...fieldProps('recipientPhone')} label="Recipient Phone" placeholder="+233 24 000 0000" />
                     <CheckoutField {...fieldProps('recipientAddress')} label="Recipient Address" placeholder="House number and street" />
                     <div style={{ flex: '1 1 100%' }}>
-                      <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '.05em' }}>Google Maps Pin (Optional)</label>
+                      <label style={ckLbl}>Google Maps Pin (Optional)</label>
                       <input value={form.mapsPin} onChange={e => set('mapsPin', e.target.value)}
                         placeholder="Paste Google Maps link here..."
                         style={inputStyle('mapsPin')}
@@ -799,7 +751,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                       <div style={{ fontSize: 11, color: 'var(--warm-gray)', marginTop: 4 }}>Share the pin from Google Maps for precise delivery</div>
                     </div>
                     <div style={{ flex: '1 1 100%' }}>
-                      <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '.05em' }}>Gift Message (Optional)</label>
+                      <label style={ckLbl}>Gift Message (Optional)</label>
                       <textarea value={form.giftMessage} onChange={e => set('giftMessage', e.target.value)}
                         placeholder="Write a personal message for the recipient..."
                         rows={3} style={{ ...inputStyle('giftMessage'), resize: 'vertical' }} />
@@ -808,56 +760,53 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                 </div>
               )}
 
-              <button onClick={() => { if (validate1()) setStep(2); }}
-                style={{ marginTop: 28, width: '100%', background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 15 }}>
-                Continue to Review →
-              </button>
+              <button onClick={() => { if (validate1()) setStep(2); }} style={{ ...ckPrimary, marginTop: 28 }}>Continue to Review →</button>
             </>
           )}
 
           {step === 2 && (
             <>
-              <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, marginBottom: 24 }}>Review Your Order</h2>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <h2 style={{ fontFamily: 'var(--f-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', marginBottom: 20 }}>Review Your Order</h2>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
                 {cart.map(item => (
-                  <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px', background: 'var(--cream)', borderRadius: 10 }}>
-                    <span style={{ fontSize: 24 }}>{['🌾','🥛','🧴','🍚','🫙','🍪','🥫','🥤','🍫'][window.CATEGORIES.indexOf(item.category)] || '📦'}</span>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 700, fontSize: 14 }}>{item.name}</div>
-                      <div style={{ fontSize: 12, color: 'var(--warm-gray)' }}>{item.unit} × {item.qty}</div>
+                  <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 0', borderBottom: '1px solid var(--rule)' }}>
+                    <div style={{ width: 56, height: 56, flex: 'none', background: '#fff', border: '1px solid var(--rule-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                      {item.img ? <img src={item.img} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} onError={e => { e.target.style.visibility = 'hidden'; }} /> : <span style={{ width: '100%', height: '100%', background: 'repeating-linear-gradient(135deg,#f4f4f1 0 6px,#eceae5 6px 12px)' }} />}
                     </div>
-                    <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--sage-dark)' }}>GHS {(item.price * item.qty).toFixed(2)}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14 }}>{item.name}</div>
+                      <div style={{ fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--rd-faint)', marginTop: 2 }}>{item.unit} × {item.qty}</div>
+                    </div>
+                    <div style={{ fontFamily: 'var(--f-display)', fontWeight: 800, fontSize: 15, letterSpacing: '-.02em' }}>GHS {(item.price * item.qty).toFixed(2)}</div>
                   </div>
                 ))}
               </div>
 
-              <div style={{ marginTop: 20, padding: '16px', background: 'var(--cream-dark)', borderRadius: 10 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Delivering to</div>
-                <div style={{ fontSize: 13, color: 'var(--warm-gray)' }}>
-                  {familyMode ? form.recipientName : form.name} · {form.neighborhood}
-                  {familyMode && form.giftMessage && <div style={{ marginTop: 6, fontStyle: 'italic' }}>"{form.giftMessage}"</div>}
-                  {scheduleLater && scheduledDate && <div style={{ marginTop: 6, fontWeight: 700, color: 'var(--sage-dark)' }}>📅 Scheduled: {scheduledDate}{scheduledSlot ? ` · ${scheduledSlot}` : ''}</div>}
+              <div style={{ marginTop: 20, padding: '16px 18px', border: '1px solid var(--rule-2)', borderLeft: '2px solid var(--ink)', background: 'var(--surface-warm)' }}>
+                <div style={{ fontFamily: 'var(--f-label)', fontSize: 11.5, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--rd-muted)', marginBottom: 8 }}>Delivering to</div>
+                <div style={{ fontSize: 13.5, color: 'var(--rd-body)' }}>
+                  <strong style={{ color: 'var(--ink)' }}>{familyMode ? form.recipientName : form.name}</strong> · {form.neighborhood}
+                  {familyMode && form.giftMessage && <div style={{ marginTop: 6, fontFamily: 'var(--f-serif)', fontStyle: 'italic', fontSize: 15, color: 'var(--ink)' }}>"{form.giftMessage}"</div>}
+                  {scheduleLater && scheduledDate && <div style={{ marginTop: 6, fontFamily: 'var(--f-mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--ink)' }}>Scheduled: {scheduledDate}{scheduledSlot ? ` · ${scheduledSlot}` : ''}</div>}
                 </div>
               </div>
 
               {/* Auto-reorder — signed-in users only */}
               {currentUser && currentUser.id && currentUser.role !== 'guest' && (
-                <div style={{ marginTop: 20, padding: '14px 16px', background: 'var(--cream)', borderRadius: 10, border: '1px solid var(--cream-dark)' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+                <div style={{ marginTop: 20, padding: '14px 16px', border: '1px solid var(--rule-2)' }}>
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
                     <input type="checkbox" checked={autoReorder} onChange={e => setAutoReorder(e.target.checked)}
-                      style={{ accentColor: 'var(--sage)', width: 18, height: 18 }} />
+                      style={{ width: 16, height: 16, accentColor: 'var(--ink)', marginTop: 2 }} />
                     <span style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 700, fontSize: 14 }}>🔁 Auto-reorder these items</div>
-                      <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 2 }}>
-                        We'll re-create this exact order every chosen interval. Pause or cancel any time from My Orders.
-                      </div>
+                      <div style={{ fontWeight: 600, fontSize: 14 }}>Auto-reorder these items</div>
+                      <div style={{ fontSize: 12, color: 'var(--rd-muted)', marginTop: 2 }}>We'll re-create this exact order every chosen interval. Pause or cancel any time from My Orders.</div>
                     </span>
                   </label>
                   {autoReorder && (
-                    <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, paddingLeft: 28 }}>
-                      <span style={{ fontSize: 13, color: 'var(--warm-gray)' }}>Every</span>
+                    <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, paddingLeft: 26 }}>
+                      <span style={{ fontSize: 13, color: 'var(--rd-muted)' }}>Every</span>
                       <select value={reorderCadence} onChange={e => setReorderCadence(Number(e.target.value))}
-                        style={{ padding: '6px 10px', borderRadius: 8, border: '1.5px solid var(--cream-dark)', fontSize: 13, background: 'var(--white)' }}>
+                        style={{ padding: '8px 10px', borderRadius: 0, border: '1px solid var(--border-input)', fontFamily: 'var(--f-ui)', fontSize: 13, background: '#fff', color: 'var(--ink)' }}>
                         <option value={7}>7 days (weekly)</option>
                         <option value={14}>14 days (fortnightly)</option>
                         <option value={30}>30 days (monthly)</option>
@@ -868,79 +817,74 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
               )}
 
               <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
-                <button onClick={() => setStep(1)} style={{ flex: 1, background: 'var(--cream)', color: 'var(--warm-gray)', borderRadius: 10, padding: '12px', fontWeight: 600, fontSize: 14 }}>← Back</button>
-                <button onClick={() => setStep(3)} style={{ flex: 2, background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '12px', fontWeight: 700, fontSize: 15 }}>Confirm Order →</button>
+                <button onClick={() => setStep(1)} style={{ flex: 1, background: 'transparent', color: 'var(--rd-muted)', border: '1px solid var(--border-input)', cursor: 'pointer', padding: '13px', fontFamily: 'var(--f-ui)', fontSize: 14, fontWeight: 600 }}>← Back</button>
+                <button onClick={() => setStep(3)} style={{ ...ckPrimary, flex: 2 }}>Confirm Order →</button>
               </div>
             </>
           )}
 
           {step === 3 && (
             <>
-              <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, marginBottom: 24 }}>Confirm & Pay</h2>
+              <h2 style={{ fontFamily: 'var(--f-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', marginBottom: 20 }}>Confirm & Pay</h2>
 
               {/* Payment method */}
               <div style={{ marginBottom: 24 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 12 }}>Payment Method</div>
+                <div style={{ ...ckLbl, marginBottom: 12 }}>Payment Method</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {paystackEnabled && (
                     <button onClick={() => set('payMethod', 'paystack')}
-                      style={{ textAlign: 'left', padding: '14px 16px', borderRadius: 10, border: `2px solid ${form.payMethod === 'paystack' ? 'var(--sage)' : 'var(--cream-dark)'}`, background: form.payMethod === 'paystack' ? 'rgba(0,0,0,.06)' : 'var(--white)', transition: 'all .15s' }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--warm-black)' }}>💳 Pay Now — Card or Mobile Money</div>
-                      <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 2 }}>Secure checkout via Paystack. Enter your MoMo number, approve with your PIN, done.</div>
+                      style={{ textAlign: 'left', padding: '14px 16px', border: form.payMethod === 'paystack' ? '2px solid var(--ink)' : '1px solid var(--border-input)', background: '#fff', cursor: 'pointer' }}>
+                      <div style={{ fontWeight: 600, fontSize: 14 }}>Pay Now — Card or Mobile Money</div>
+                      <div style={{ fontSize: 12, color: 'var(--rd-muted)', marginTop: 2 }}>Secure checkout via Paystack. Enter your MoMo number, approve with your PIN, done.</div>
                     </button>
                   )}
                   {paystackEnabled && form.payMethod === 'paystack' && (
-                    <div style={{ display: 'flex', gap: 8, background: '#FFF8E1', border: '1px solid #F0DCA0', borderRadius: 10, padding: '10px 12px' }}>
-                      <span style={{ fontSize: 15 }}>💡</span>
-                      <div style={{ fontSize: 12, color: '#7A5A00', lineHeight: 1.5 }}>
-                        Approving with mobile money? If the OTP code doesn't arrive by SMS (network can be slow),
-                        wait about a minute on the payment screen — a <strong>“Get OTP via WhatsApp”</strong> option
-                        appears as a reliable backup. Don't close the window while you wait.
-                      </div>
+                    <div style={{ ...ckNotice('var(--accent)'), marginBottom: 0 }}>
+                      <div style={{ fontSize: 12, color: 'var(--rd-body)', lineHeight: 1.5 }}>Approving with mobile money? If the OTP code doesn't arrive by SMS (network can be slow), wait about a minute on the payment screen — a <strong style={{ color: 'var(--ink)' }}>"Get OTP via WhatsApp"</strong> option appears as a reliable backup. Don't close the window while you wait.</div>
                     </div>
                   )}
                   <button onClick={() => set('payMethod', 'cash')}
-                    style={{ textAlign: 'left', padding: '14px 16px', borderRadius: 10, border: `2px solid ${form.payMethod === 'cash' ? 'var(--sage)' : 'var(--cream-dark)'}`, background: form.payMethod === 'cash' ? 'rgba(0,0,0,.06)' : 'var(--white)', transition: 'all .15s' }}>
-                    <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--warm-black)' }}>💵 Cash on Delivery</div>
-                    <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 2 }}>Pay the rider in cash when your order arrives.</div>
+                    style={{ textAlign: 'left', padding: '14px 16px', border: form.payMethod === 'cash' ? '2px solid var(--ink)' : '1px solid var(--border-input)', background: '#fff', cursor: 'pointer' }}>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>Cash on Delivery</div>
+                    <div style={{ fontSize: 12, color: 'var(--rd-muted)', marginTop: 2 }}>Pay the rider in cash when your order arrives.</div>
                   </button>
                 </div>
               </div>
 
 
               {/* Download receipt checkbox */}
-              <label style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '14px 16px', background: 'var(--cream)', borderRadius: 10, cursor: 'pointer', marginBottom: 24 }}>
+              <label style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '14px 16px', border: '1px solid var(--rule-2)', cursor: 'pointer', marginBottom: 24 }}>
                 <input type="checkbox" checked={downloadReceipt} onChange={e => setDownloadReceipt(e.target.checked)}
-                  style={{ width: 18, height: 18, accentColor: 'var(--sage)', cursor: 'pointer' }} />
+                  style={{ width: 16, height: 16, accentColor: 'var(--ink)', cursor: 'pointer' }} />
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: 14 }}>Download PDF Receipt</div>
-                  <div style={{ fontSize: 12, color: 'var(--warm-gray)' }}>Get a printable PDF receipt of your order</div>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>Download PDF Receipt</div>
+                  <div style={{ fontSize: 12, color: 'var(--rd-muted)' }}>Get a printable PDF receipt of your order</div>
                 </div>
               </label>
 
               {/* WhatsApp preview */}
-              <div style={{ background: '#DCF8C6', borderRadius: 12, padding: '16px', marginBottom: 24, fontFamily: 'monospace', fontSize: 12, lineHeight: 1.7 }}>
-                <div style={{ fontWeight: 700, fontSize: 11, color: 'var(--warm-gray)', marginBottom: 8, fontFamily: 'var(--font-body)' }}>WhatsApp Message Preview</div>
-                <strong>ORDER #{orderId}</strong><br/>
-                Items: {cart.slice(0,3).map(i=>`${i.name} x${i.qty}`).join(', ')}{cart.length > 3 ? '...' : ''}<br/>
-                Total: GHS {total.toFixed(2)}<br/>
-                Neighborhood: {form.neighborhood || '[neighborhood]'}<br/>
-                Recipient: {familyMode ? (form.recipientName || '[name]') : (form.name || '[name]')} / {familyMode ? (form.recipientPhone || '[phone]') : (form.phone || '[phone]')}<br/>
-                Location: {form.mapsPin || form.address || form.neighborhood || '[location]'}
+              <div style={{ background: '#f7f8f5', border: '1px solid var(--rule-2)', padding: '16px', marginBottom: 24 }}>
+                <div style={{ fontFamily: 'var(--f-label)', fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--wa)', marginBottom: 10 }}>WhatsApp message preview</div>
+                <div style={{ fontFamily: 'var(--f-mono)', fontSize: 12, lineHeight: 1.7, color: 'var(--ink-2)' }}>
+                  <strong>ORDER #{orderId}</strong><br/>
+                  Items: {cart.slice(0,3).map(i=>`${i.name} x${i.qty}`).join(', ')}{cart.length > 3 ? '...' : ''}<br/>
+                  Total: GHS {total.toFixed(2)}<br/>
+                  Neighborhood: {form.neighborhood || '[neighborhood]'}<br/>
+                  Recipient: {familyMode ? (form.recipientName || '[name]') : (form.name || '[name]')} / {familyMode ? (form.recipientPhone || '[phone]') : (form.phone || '[phone]')}<br/>
+                  Location: {form.mapsPin || form.address || form.neighborhood || '[location]'}
+                </div>
               </div>
 
               <div style={{ display: 'flex', gap: 10 }}>
-                <button onClick={() => setStep(2)} disabled={paying} style={{ flex: 1, background: 'var(--cream)', color: 'var(--warm-gray)', borderRadius: 10, padding: '12px', fontWeight: 600, fontSize: 14 }}>← Back</button>
+                <button onClick={() => setStep(2)} disabled={paying} style={{ flex: 1, background: 'transparent', color: 'var(--rd-muted)', border: '1px solid var(--border-input)', cursor: 'pointer', padding: '13px', fontFamily: 'var(--f-ui)', fontSize: 14, fontWeight: 600 }}>← Back</button>
                 {form.payMethod === 'paystack' ? (
                   <button onClick={() => { setWaNumber(form.phone || ''); payWithPaystack(); }} disabled={paying}
-                    style={{ flex: 2, background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 15, opacity: paying ? .6 : 1, cursor: paying ? 'wait' : 'pointer' }}>
+                    style={{ ...ckPrimary, flex: 2, opacity: paying ? .6 : 1, cursor: paying ? 'wait' : 'pointer' }}>
                     {paying ? 'Opening payment…' : `Pay GHS ${total.toFixed(2)} →`}
                   </button>
                 ) : (
                   <button onClick={() => { setWaNumber(form.phone || ''); placeOrder(); }} disabled={paying}
-                    style={{ flex: 2, background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 15 }}>
-                    Place Order →
-                  </button>
+                    style={{ ...ckPrimary, flex: 2 }}>Place Order →</button>
                 )}
               </div>
             </>
@@ -948,68 +892,66 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
         </div>
 
         {/* Order summary sidebar */}
-        <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', padding: '24px', boxShadow: 'var(--shadow)', position: isMobile ? 'static' : 'sticky', top: 120 }}>
-          <h3 style={{ fontFamily: 'var(--font-head)', fontSize: 18, fontWeight: 700, marginBottom: 16 }}>Order Summary</h3>
+        <div style={{ border: '1px solid var(--rule-2)', padding: '24px', position: isMobile ? 'static' : 'sticky', top: 120, background: '#fff' }}>
+          <h3 style={{ fontFamily: 'var(--f-display)', fontSize: 18, fontWeight: 700, letterSpacing: '-.02em', marginBottom: 16 }}>Order Summary</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
             {cart.map(i => (
-              <div key={i.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-                <span style={{ color: 'var(--warm-gray)' }}>{i.name} <span style={{ fontWeight: 700 }}>×{i.qty}</span></span>
-                <span style={{ fontWeight: 600 }}>GHS {(i.price * i.qty).toFixed(2)}</span>
+              <div key={i.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 13 }}>
+                <span style={{ color: 'var(--rd-muted)' }}>{i.name} <span style={{ fontWeight: 700, color: 'var(--ink)' }}>×{i.qty}</span></span>
+                <span style={{ fontFamily: 'var(--f-display)', fontWeight: 600 }}>GHS {(i.price * i.qty).toFixed(2)}</span>
               </div>
             ))}
             {chosenGift && bdayGifts.products.find(p => p.id === chosenGift) && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#7A5A00' }}>
-                <span>🎁 {bdayGifts.products.find(p => p.id === chosenGift).name} <span style={{ fontWeight: 700 }}>(birthday)</span></span>
-                <span style={{ fontWeight: 700 }}>FREE</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 13, color: 'var(--accent)' }}>
+                <span>{bdayGifts.products.find(p => p.id === chosenGift).name} <span style={{ fontWeight: 700 }}>(birthday)</span></span>
+                <span style={{ fontFamily: 'var(--f-label)', fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', fontSize: 11 }}>Free</span>
               </div>
             )}
           </div>
-          <div style={{ borderTop: '1.5px solid var(--cream-dark)', paddingTop: 12 }}>
+          <div style={{ borderTop: '1px solid var(--rule)', paddingTop: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
-              <span style={{ color: 'var(--warm-gray)' }}>Subtotal</span>
-              <span>GHS {subtotal.toFixed(2)}</span>
+              <span style={{ color: 'var(--rd-muted)' }}>Subtotal</span>
+              <span style={{ fontFamily: 'var(--f-display)', fontWeight: 600 }}>GHS {subtotal.toFixed(2)}</span>
             </div>
             {canUseDiscount && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6, color: 'var(--sage)' }}>
-                <span>🎉 Squad Discount (5%)</span>
-                <span>−GHS {discount.toFixed(2)}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6, color: 'var(--accent)' }}>
+                <span>Squad Discount (5%)</span>
+                <span style={{ fontFamily: 'var(--f-display)', fontWeight: 600 }}>−GHS {discount.toFixed(2)}</span>
               </div>
             )}
             {loyaltyAvailable > 0 && (
-              <div style={{ background: '#FFF8E1', border: '1px solid #F0DCA0', borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 12 }}>
-                  <input type="checkbox" checked={useLoyalty} onChange={e => setUseLoyalty(e.target.checked)} style={{ accentColor: 'var(--sage)' }} />
+              <div style={{ border: '1px solid var(--rule-2)', borderLeft: '2px solid var(--accent)', background: 'var(--surface-warm)', padding: '10px 12px', marginBottom: 10 }}>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer', fontSize: 12 }}>
+                  <input type="checkbox" checked={useLoyalty} onChange={e => setUseLoyalty(e.target.checked)} style={{ width: 16, height: 16, accentColor: 'var(--ink)', marginTop: 1 }} />
                   <span style={{ flex: 1 }}>
-                    <strong>⭐ Loyalty credit:</strong> GHS {loyaltyAvailable.toFixed(2)} available
-                    {useLoyalty && loyaltyUsed > 0 && <span style={{ color: 'var(--sage)' }}> — using GHS {loyaltyUsed.toFixed(2)}</span>}
+                    <strong>Loyalty credit:</strong> GHS {loyaltyAvailable.toFixed(2)} available
+                    {useLoyalty && loyaltyUsed > 0 && <span style={{ color: 'var(--accent)' }}> — using GHS {loyaltyUsed.toFixed(2)}</span>}
                   </span>
                 </label>
               </div>
             )}
             {useLoyalty && loyaltyUsed > 0 && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6, color: '#7A5A00' }}>
-                <span>⭐ Loyalty credit</span>
-                <span>−GHS {loyaltyUsed.toFixed(2)}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6, color: 'var(--accent)' }}>
+                <span>Loyalty credit</span>
+                <span style={{ fontFamily: 'var(--f-display)', fontWeight: 600 }}>−GHS {loyaltyUsed.toFixed(2)}</span>
               </div>
             )}
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 12 }}>
-              <span style={{ color: 'var(--warm-gray)' }}>Delivery</span>
-              <span style={{ color: delivery === 0 ? 'var(--sage)' : 'inherit', fontWeight: delivery === 0 ? 700 : 400 }}>
-                {delivery === 0
-                  ? (isFirstOrderFree ? '🎁 FIRST ORDER FREE' : (qualifiesFreeByThreshold ? 'FREE 🎉' : 'FREE'))
-                  : `GHS ${delivery.toFixed(2)}`}
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 14 }}>
+              <span style={{ color: 'var(--rd-muted)' }}>Delivery</span>
+              <span style={{ fontFamily: delivery === 0 ? 'var(--f-label)' : 'var(--f-display)', fontWeight: 700, letterSpacing: delivery === 0 ? '.06em' : '0', textTransform: delivery === 0 ? 'uppercase' : 'none', fontSize: delivery === 0 ? 11 : 13, color: delivery === 0 ? 'var(--wa)' : 'var(--ink)' }}>
+                {delivery === 0 ? (isFirstOrderFree ? 'First order free' : 'Free') : `GHS ${delivery.toFixed(2)}`}
               </span>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 16 }}>
-              <span>Total</span>
-              <span style={{ color: 'var(--sage-dark)' }}>GHS {total.toFixed(2)}</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', borderTop: '2px solid var(--ink)', paddingTop: 12 }}>
+              <span style={{ fontFamily: 'var(--f-display)', fontSize: 18, fontWeight: 700, letterSpacing: '-.02em' }}>Total</span>
+              <RPrice amount={total} size="md" />
             </div>
           </div>
           {afterLoyalty < FREE_DELIVERY_MIN && !isFirstOrderFree && (
-            <div style={{ marginTop: 14, padding: '10px 12px', background: 'rgba(0,0,0,.06)', borderRadius: 8, fontSize: 12, color: 'var(--sage-dark)', fontWeight: 600 }}>
+            <div style={{ marginTop: 14, border: '1px solid var(--rule-2)', borderLeft: '2px solid var(--accent)', background: 'var(--surface-warm)', padding: '10px 12px', fontSize: 12, color: 'var(--rd-body)' }}>
               {isFirstOrderEligible
-                ? <>Add <strong>GHS {(FIRST_ORDER_FREE_MIN - afterLoyalty).toFixed(2)}</strong> more — your FIRST delivery is free above GHS {FIRST_ORDER_FREE_MIN} 🎁</>
-                : <>Add <strong>GHS {(FREE_DELIVERY_MIN - afterLoyalty).toFixed(2)}</strong> more for free delivery 🚚</>}
+                ? <>Add <strong style={{ color: 'var(--ink)' }}>GHS {(FIRST_ORDER_FREE_MIN - afterLoyalty).toFixed(2)}</strong> more — your FIRST delivery is free above GHS {FIRST_ORDER_FREE_MIN}.</>
+                : <>Add <strong style={{ color: 'var(--ink)' }}>GHS {(FREE_DELIVERY_MIN - afterLoyalty).toFixed(2)}</strong> more for free delivery.</>}
             </div>
           )}
         </div>
