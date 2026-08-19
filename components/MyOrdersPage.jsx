@@ -40,60 +40,46 @@ const GuestOrdersView = ({ setPage, openTracking }) => {
   };
 
   return (
-      <div style={{ maxWidth: 720, margin: '0 auto', padding: isMobile ? 16 : 28 }}>
+      <div style={{ maxWidth: 720, margin: '0 auto', padding: isMobile ? '20px 16px' : '32px 24px', fontFamily: 'var(--f-ui)', color: 'var(--ink)', background: 'var(--panel)', minHeight: '60vh' }}>
         <button onClick={() => setPage('home')}
-          style={{ fontSize: 13, color: 'var(--warm-gray)', fontWeight: 600, background: 'transparent', marginBottom: 14 }}>
-          ← Back to home
-        </button>
-        <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginBottom: 6 }}>Track Your Order</h1>
-        <p style={{ fontSize: 13, color: 'var(--warm-gray)', marginBottom: 18 }}>
-          Orders you placed on this device. Sign up to keep your full order history across devices.
-        </p>
+          style={{ fontFamily: 'var(--f-label)', fontSize: 12, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--rd-muted)', background: 'none', border: 'none', cursor: 'pointer', marginBottom: 16 }}>← Back to home</button>
+        <h1 style={{ fontFamily: 'var(--f-display)', fontSize: isMobile ? 30 : 40, fontWeight: 700, letterSpacing: '-.03em', margin: '0 0 6px' }}>Track Your Order</h1>
+        <p style={{ fontSize: 13.5, color: 'var(--rd-muted)', marginBottom: 20 }}>Orders you placed on this device. Sign up to keep your full order history across devices.</p>
 
-        {/* Track by code — works on ANY device, not just the ordering one */}
-        <div style={{ background: 'var(--white)', borderRadius: 12, padding: '16px 18px', boxShadow: 'var(--shadow)', marginBottom: 18 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>
-            🔑 Have a tracking code?
-          </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {/* Track by code — works on ANY device */}
+        <div style={{ border: '1px solid var(--rule-2)', padding: '16px 18px', marginBottom: 18 }}>
+          <div style={{ fontFamily: 'var(--f-label)', fontSize: 12, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--accent)', marginBottom: 10 }}>Have a tracking code?</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap' }}>
             <input
               value={codeInput}
               onChange={e => { setCodeInput(e.target.value); if (codeErr) setCodeErr(''); }}
               onKeyDown={e => { if (e.key === 'Enter') trackByCode(); }}
               placeholder="e.g. SDG-00030-a1b2c3d4e5f6…"
-              style={{ flex: '1 1 220px', padding: '11px 14px', borderRadius: 10, border: '1.5px solid var(--cream-dark)', fontSize: 13, fontFamily: 'monospace', outline: 'none', background: 'var(--white)' }}
+              style={{ flex: '1 1 220px', padding: '11px 14px', border: '1px solid var(--border-input)', borderRight: 'none', fontFamily: 'var(--f-mono)', fontSize: 13, outline: 'none', background: '#fff', color: 'var(--ink)' }}
             />
             <button onClick={trackByCode} disabled={checking}
-              style={{ background: 'var(--sage)', color: '#fff', borderRadius: 10, padding: '11px 20px', fontWeight: 700, fontSize: 13, opacity: checking ? .6 : 1 }}>
-              {checking ? 'Checking…' : 'Track'}
-            </button>
+              style={{ background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', padding: '11px 20px', fontFamily: 'var(--f-label)', fontSize: 12.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', opacity: checking ? .6 : 1 }}>{checking ? 'Checking…' : 'Track'}</button>
           </div>
-          {codeErr && <div style={{ fontSize: 12, color: 'var(--accent-red)', marginTop: 8, lineHeight: 1.5 }}>{codeErr}</div>}
-          <div style={{ fontSize: 11, color: 'var(--warm-gray)', marginTop: 8 }}>
-            The code is on your order confirmation screen and in the WhatsApp copy of your order. It works on any device until 7 days after delivery.
-          </div>
+          {codeErr && <div style={{ fontFamily: 'var(--f-mono)', fontSize: 11.5, color: 'var(--accent)', marginTop: 8, lineHeight: 1.5 }}>{codeErr}</div>}
+          <div style={{ fontSize: 11.5, color: 'var(--rd-muted)', marginTop: 8 }}>The code is on your order confirmation screen and in the WhatsApp copy of your order. It works on any device until 7 days after delivery.</div>
         </div>
         {guestOrders.length === 0 ? (
-          <div style={{ background: 'var(--white)', borderRadius: 12, padding: 30, boxShadow: 'var(--shadow)', textAlign: 'center', color: 'var(--warm-gray)', fontSize: 14 }}>
-            No orders on this device yet.<br />
-            <span style={{ fontSize: 12 }}>Placed one elsewhere or need help? <a href="https://wa.me/233504082555?text=Hi!%20I%20would%20like%20to%20track%20my%20SDGMart%20order." target="_blank" rel="noopener" style={{ color: 'var(--sage-dark)', fontWeight: 700 }}>WhatsApp us</a> with your order code.</span>
+          <div style={{ border: '1px dashed var(--border-input)', padding: 30, textAlign: 'center' }}>
+            <div style={{ fontFamily: 'var(--f-serif)', fontStyle: 'italic', fontSize: 24, color: 'var(--ink)' }}>No orders on this device yet.</div>
+            <div style={{ fontSize: 12.5, color: 'var(--rd-muted)', marginTop: 8 }}>Placed one elsewhere or need help? <a href="https://wa.me/233504082555?text=Hi!%20I%20would%20like%20to%20track%20my%20SDGMart%20order." target="_blank" rel="noopener" style={{ color: 'var(--accent)', fontWeight: 600 }}>WhatsApp us</a> with your order code.</div>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {guestOrders.map(o => (
-              <div key={o.id} style={{ background: 'var(--white)', borderRadius: 12, padding: '14px 16px', boxShadow: 'var(--shadow)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <div key={o.id} style={{ border: '1px solid var(--rule-2)', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                 <div style={{ flex: 1, minWidth: 140 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14 }}>{o.code}</div>
-                  <div style={{ fontSize: 12, color: 'var(--warm-gray)' }}>{new Date(o.at).toLocaleString()} · GHS {Number(o.total || 0).toFixed(2)}</div>
+                  <div style={{ fontFamily: 'var(--f-mono)', fontWeight: 500, fontSize: 13.5 }}>{o.code}</div>
+                  <div style={{ fontSize: 12, color: 'var(--rd-muted)', marginTop: 2 }}>{new Date(o.at).toLocaleString()} · GHS {Number(o.total || 0).toFixed(2)}</div>
                 </div>
                 <button onClick={() => copyCode(o)} title="Copy tracking code (use it on any device)"
-                  style={{ background: 'var(--cream)', color: 'var(--sage-dark)', borderRadius: 8, padding: '8px 12px', fontWeight: 700, fontSize: 12 }}>
-                  📋 Code
-                </button>
+                  style={{ background: '#fff', color: 'var(--ink)', border: '1px solid var(--border-input)', cursor: 'pointer', padding: '8px 14px', fontFamily: 'var(--f-label)', fontSize: 11.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase' }}>Copy code</button>
                 <button onClick={() => openTracking(o.id)}
-                  style={{ background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '8px 16px', fontWeight: 700, fontSize: 12 }}>
-                  Track →
-                </button>
+                  style={{ background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', padding: '8px 16px', fontFamily: 'var(--f-label)', fontSize: 11.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase' }}>Track →</button>
               </div>
             ))}
           </div>
@@ -218,51 +204,43 @@ const SignedInOrdersView = ({ setPage, openTracking, setCart }) => {
 
   const statusBadge = (s) => {
     const map = {
-      queued: ['#C8923A', 'Queued'],
-      assigned: ['#3879BF', 'Assigned'],
-      in_transit: ['var(--sage)', 'Out for delivery'],
-      delivered: ['#1A1A1A', 'Delivered'],
-      cancelled: ['#888', 'Cancelled'],
-      Pending: ['var(--warm-gray)', 'Pending'],
+      queued: ['var(--surface-warm)', 'var(--warn-ink)', 'Queued', '1px solid var(--rule-2)'],
+      assigned: ['var(--ink)', '#fff', 'Assigned', 'none'],
+      in_transit: ['var(--ink)', '#fff', 'Out for delivery', 'none'],
+      delivered: ['var(--ink)', '#fff', 'Delivered', 'none'],
+      cancelled: ['var(--rule-2)', 'var(--rd-muted)', 'Cancelled', 'none'],
+      Pending: ['var(--surface-warm)', 'var(--rd-muted)', 'Pending', '1px solid var(--rule-2)'],
     };
-    const [bg, label] = map[s] || ['var(--warm-gray)', s];
-    return <span style={{ background: bg, color: '#fff', borderRadius: 999, padding: '3px 10px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em' }}>{label}</span>;
+    const [bg, color, label, border] = map[s] || ['var(--surface-warm)', 'var(--rd-muted)', s, '1px solid var(--rule-2)'];
+    return <span style={{ background: bg, color, border, padding: '3px 10px', fontFamily: 'var(--f-label)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em' }}>{label}</span>;
   };
 
   const ageMin = (o) => (Date.now() - new Date(o.createdAt).getTime()) / 60000;
   const canCancel = (o) => o.status === 'queued' && ageMin(o) < 15;
 
   return (
-    <div style={{ maxWidth: 880, margin: '0 auto', padding: isMobile ? 16 : 28 }}>
+    <div style={{ maxWidth: 880, margin: '0 auto', padding: isMobile ? '20px 16px' : '32px 24px', fontFamily: 'var(--f-ui)', color: 'var(--ink)', background: 'var(--panel)', minHeight: '60vh' }}>
       <button onClick={() => setPage('home')}
-        style={{ fontSize: 13, color: 'var(--warm-gray)', fontWeight: 600, background: 'transparent', marginBottom: 14 }}>
-        ← Back to home
-      </button>
-      <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginBottom: 18 }}>My Orders</h1>
-      {err && <div style={{ color: 'var(--accent-red)', marginBottom: 14 }}>{err}</div>}
+        style={{ fontFamily: 'var(--f-label)', fontSize: 12, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--rd-muted)', background: 'none', border: 'none', cursor: 'pointer', marginBottom: 16 }}>← Back to home</button>
+      <h1 style={{ fontFamily: 'var(--f-display)', fontSize: isMobile ? 30 : 40, fontWeight: 700, letterSpacing: '-.03em', margin: '0 0 20px' }}>My Orders</h1>
+      {err && <div style={{ color: 'var(--accent)', marginBottom: 14 }}>{err}</div>}
 
       {/* Recurring orders block */}
       {Array.isArray(recurring) && recurring.length > 0 && (
         <div style={{ marginBottom: 24 }}>
-          <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 18, fontWeight: 700, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>🔁 Auto-reorders</h2>
+          <h2 style={{ fontFamily: 'var(--f-display)', fontSize: 18, fontWeight: 700, letterSpacing: '-.02em', marginBottom: 10 }}>Auto-reorders</h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {recurring.map(r => (
-              <div key={r.id} style={{ background: r.active ? 'var(--white)' : 'var(--cream)', borderRadius: 10, padding: 14, boxShadow: 'var(--shadow)', display: 'flex', alignItems: 'center', gap: 12, opacity: r.active ? 1 : .65, flexWrap: 'wrap' }}>
+              <div key={r.id} style={{ border: '1px solid var(--rule-2)', background: r.active ? '#fff' : 'var(--surface-warm)', padding: 14, display: 'flex', alignItems: 'center', gap: 12, opacity: r.active ? 1 : .8, flexWrap: 'wrap' }}>
                 <div style={{ flex: 1, minWidth: 200 }}>
-                  <div style={{ fontWeight: 700, fontSize: 13 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>
                     Every {r.cadenceDays} day{r.cadenceDays === 1 ? '' : 's'} · {Array.isArray(r.items) ? r.items.length : 0} item{(Array.isArray(r.items) ? r.items.length : 0) === 1 ? '' : 's'}
-                    {!r.active && <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--warm-gray)' }}>(paused)</span>}
+                    {!r.active && <span style={{ marginLeft: 8, fontFamily: 'var(--f-mono)', fontSize: 10.5, textTransform: 'uppercase', color: 'var(--rd-muted)' }}>(paused)</span>}
                   </div>
-                  <div style={{ marginTop: 4, fontSize: 12, color: 'var(--warm-gray)' }}>
-                    Next: {r.nextRunAt ? new Date(r.nextRunAt).toLocaleDateString() : '—'}
-                  </div>
+                  <div style={{ marginTop: 4, fontFamily: 'var(--f-mono)', fontSize: 11.5, color: 'var(--rd-muted)' }}>Next: {r.nextRunAt ? new Date(r.nextRunAt).toLocaleDateString() : '—'}</div>
                 </div>
-                <button onClick={() => toggleRecurring(r.id, !r.active)} style={{ fontSize: 12, fontWeight: 700, background: 'var(--cream)', color: 'var(--warm-gray)', borderRadius: 8, padding: '6px 12px' }}>
-                  {r.active ? '⏸ Pause' : '▶ Resume'}
-                </button>
-                <button onClick={() => deleteRecurring(r.id)} style={{ fontSize: 12, fontWeight: 700, background: 'transparent', color: 'var(--accent-red)', borderRadius: 8, padding: '6px 12px' }}>
-                  Cancel
-                </button>
+                <button onClick={() => toggleRecurring(r.id, !r.active)} style={{ background: '#fff', color: 'var(--ink)', border: '1px solid var(--border-input)', cursor: 'pointer', padding: '7px 12px', fontFamily: 'var(--f-label)', fontSize: 11.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase' }}>{r.active ? 'Pause' : 'Resume'}</button>
+                <button onClick={() => deleteRecurring(r.id)} style={{ background: 'none', color: 'var(--accent)', border: 'none', cursor: 'pointer', padding: '7px 12px', fontFamily: 'var(--f-label)', fontSize: 11.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase' }}>Cancel</button>
               </div>
             ))}
           </div>
@@ -270,71 +248,57 @@ const SignedInOrdersView = ({ setPage, openTracking, setCart }) => {
       )}
 
       {orders === null ? (
-        <div style={{ color: 'var(--warm-gray)' }}>Loading…</div>
+        <div style={{ color: 'var(--rd-muted)' }}>Loading…</div>
       ) : orders.length === 0 ? (
-        <div style={{ background: 'var(--white)', borderRadius: 12, padding: 32, textAlign: 'center', color: 'var(--warm-gray)', boxShadow: 'var(--shadow)' }}>
-          You haven't placed any orders yet.
-          <div style={{ marginTop: 14 }}>
-            <button onClick={() => setPage('home')} style={{ background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '10px 18px', fontWeight: 700, fontSize: 13 }}>Start shopping →</button>
+        <div style={{ border: '1px solid var(--rule-2)', padding: 32, textAlign: 'center' }}>
+          <div style={{ fontFamily: 'var(--f-serif)', fontStyle: 'italic', fontSize: 24, color: 'var(--ink)' }}>You haven't placed any orders yet.</div>
+          <div style={{ marginTop: 16 }}>
+            <button onClick={() => setPage('home')} style={{ background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', padding: '12px 20px', fontFamily: 'var(--f-ui)', fontSize: 14, fontWeight: 600 }}>Start shopping →</button>
           </div>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {orders.map(o => (
-            <div key={o.id} style={{ background: 'var(--white)', borderRadius: 12, padding: 14, boxShadow: 'var(--shadow)' }}>
+            <div key={o.id} style={{ border: '1px solid var(--rule-2)', padding: 16 }}>
               <div onClick={() => o.status !== 'cancelled' && openTracking(o.id)}
                 style={{ cursor: o.status !== 'cancelled' ? 'pointer' : 'default', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                    <span style={{ fontWeight: 700, fontSize: 14 }}>{window.orderCode(o.id)}</span>
+                    <span style={{ fontFamily: 'var(--f-mono)', fontWeight: 500, fontSize: 13.5 }}>{window.orderCode(o.id)}</span>
                     {statusBadge(o.status)}
-                    {o.priority && <span style={{ background: '#FFF4E0', color: '#7A5A00', borderRadius: 999, padding: '3px 8px', fontSize: 10, fontWeight: 700 }}>⭐ Priority</span>}
-                    {o.surpriseExtra && <span style={{ background: '#FCE4F0', color: '#9B2D60', borderRadius: 999, padding: '3px 8px', fontSize: 10, fontWeight: 700 }}>🎁 Free extra</span>}
+                    {o.priority && <span style={{ fontFamily: 'var(--f-label)', fontSize: 10, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--accent)', border: '1px solid var(--accent)', padding: '2px 7px' }}>Priority</span>}
+                    {o.surpriseExtra && <span style={{ fontFamily: 'var(--f-label)', fontSize: 10, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--accent)', border: '1px solid var(--accent)', padding: '2px 7px' }}>Free extra</span>}
                   </div>
-                  <div style={{ marginTop: 4, fontSize: 12, color: 'var(--warm-gray)' }}>
+                  <div style={{ marginTop: 6, fontFamily: 'var(--f-mono)', fontSize: 11.5, color: 'var(--rd-muted)' }}>
                     {new Date(o.createdAt).toLocaleString()} · GHS {Number(o.total || 0).toFixed(2)} · {Array.isArray(o.items) ? o.items.length : 0} item{(Array.isArray(o.items) ? o.items.length : 0) === 1 ? '' : 's'}
                   </div>
                   {Array.isArray(o.items) && o.items.length > 0 && (
-                    <div style={{ marginTop: 4, fontSize: 12, color: 'var(--warm-black)', opacity: .8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <div style={{ marginTop: 4, fontSize: 12.5, color: 'var(--rd-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {o.items.slice(0, 3).map(it => `${it.qty || 1}× ${it.name}`).join(', ')}{o.items.length > 3 ? `, +${o.items.length - 3} more` : ''}
                     </div>
                   )}
-                  {o.surpriseExtra && <div style={{ marginTop: 4, fontSize: 12, color: '#9B2D60', fontStyle: 'italic' }}>🎁 {o.surpriseExtra}</div>}
-                  {o.cancelReason && <div style={{ marginTop: 4, fontSize: 12, color: 'var(--warm-gray)', fontStyle: 'italic' }}>Cancelled: {o.cancelReason}</div>}
+                  {o.surpriseExtra && <div style={{ marginTop: 4, fontFamily: 'var(--f-serif)', fontStyle: 'italic', fontSize: 14, color: 'var(--accent)' }}>{o.surpriseExtra}</div>}
+                  {o.cancelReason && <div style={{ marginTop: 4, fontSize: 12, color: 'var(--rd-muted)', fontStyle: 'italic' }}>Cancelled: {o.cancelReason}</div>}
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--sage)', fontWeight: 700, flexShrink: 0 }}>
+                <div style={{ fontFamily: 'var(--f-label)', fontSize: 12, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--accent)', flexShrink: 0, borderBottom: o.status !== 'cancelled' ? '1px solid var(--accent)' : 'none', paddingBottom: 1 }}>
                   {o.status === 'delivered' ? 'View →' : o.status === 'cancelled' ? '' : 'Track →'}
                 </div>
               </div>
 
               {/* Per-order actions */}
-              <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--cream-dark)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button onClick={() => reorder(o)}
-                  style={{ fontSize: 11, fontWeight: 700, padding: '6px 10px', borderRadius: 6, background: 'var(--cream)', color: 'var(--sage-dark)' }}>
-                  🔁 Order again
-                </button>
-                <button onClick={() => downloadReceipt(o)}
-                  style={{ fontSize: 11, fontWeight: 700, padding: '6px 10px', borderRadius: 6, background: 'var(--cream)', color: 'var(--warm-black)' }}>
-                  📄 Receipt
-                </button>
-                {o.trackToken && o.status !== 'delivered' && o.status !== 'cancelled' && (
-                  <button onClick={() => shareTrackingCode(o)} title="Copy a track-on-any-device link to share"
-                    style={{ fontSize: 11, fontWeight: 700, padding: '6px 10px', borderRadius: 6, background: 'var(--cream)', color: 'var(--sage-dark)' }}>
-                    🔑 Share tracking
-                  </button>
-                )}
-                {canCancel(o) && (
-                  <button onClick={() => cancelOrder(o.id)}
-                    style={{ fontSize: 11, fontWeight: 700, padding: '6px 10px', borderRadius: 6, background: 'rgba(192,57,43,.08)', color: 'var(--accent-red)' }}>
-                    ✕ Cancel order
-                  </button>
-                )}
-                {o.status === 'delivered' && (
-                  <button onClick={() => setIssueFor(o.id)}
-                    style={{ fontSize: 11, fontWeight: 700, padding: '6px 10px', borderRadius: 6, background: 'rgba(192,57,43,.08)', color: 'var(--accent-red)' }}>
-                    ⚠ Report a problem
-                  </button>
-                )}
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--rule)', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                {(() => {
+                  const act = { background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'var(--f-label)', fontSize: 11.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase' };
+                  return (<>
+                    <button onClick={() => reorder(o)} style={{ ...act, color: 'var(--ink)' }}>Order again</button>
+                    <button onClick={() => downloadReceipt(o)} style={{ ...act, color: 'var(--ink)' }}>Receipt</button>
+                    {o.trackToken && o.status !== 'delivered' && o.status !== 'cancelled' && (
+                      <button onClick={() => shareTrackingCode(o)} title="Copy a track-on-any-device link to share" style={{ ...act, color: 'var(--ink)' }}>Share tracking</button>
+                    )}
+                    {canCancel(o) && <button onClick={() => cancelOrder(o.id)} style={{ ...act, color: 'var(--accent)' }}>Cancel order</button>}
+                    {o.status === 'delivered' && <button onClick={() => setIssueFor(o.id)} style={{ ...act, color: 'var(--accent)' }}>Report a problem</button>}
+                  </>);
+                })()}
               </div>
             </div>
           ))}
@@ -343,14 +307,14 @@ const SignedInOrdersView = ({ setPage, openTracking, setCart }) => {
 
       {/* Report-issue modal */}
       {issueFor && (
-        <div onClick={() => setIssueFor(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--white)', borderRadius: 14, padding: 22, maxWidth: 460, width: '100%' }}>
-            <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, marginBottom: 14 }}>Report a problem</h2>
-            <p style={{ fontSize: 13, color: 'var(--warm-gray)', marginBottom: 14 }}>Order {window.orderCode(issueFor)}. Tell us what went wrong and we'll reach out.</p>
+        <div onClick={() => setIssueFor(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(17,17,17,.5)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', border: '1px solid var(--rule-2)', padding: 24, maxWidth: 460, width: '100%', fontFamily: 'var(--f-ui)', color: 'var(--ink)' }}>
+            <h2 style={{ fontFamily: 'var(--f-display)', fontSize: 20, fontWeight: 700, letterSpacing: '-.02em', marginBottom: 12 }}>Report a problem</h2>
+            <p style={{ fontSize: 13, color: 'var(--rd-muted)', marginBottom: 14 }}>Order {window.orderCode(issueFor)}. Tell us what went wrong and we'll reach out.</p>
             <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
               {[['missing','Missing item'],['damaged','Damaged/bad'],['wrong','Wrong item'],['other','Other']].map(([v,l]) => (
                 <button key={v} onClick={() => setIssue(s => ({ ...s, issueType: v }))}
-                  style={{ fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 999, background: issue.issueType === v ? 'var(--sage)' : 'var(--cream)', color: issue.issueType === v ? '#fff' : 'var(--warm-gray)' }}>
+                  style={{ fontFamily: 'var(--f-label)', fontSize: 11.5, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', padding: '7px 12px', border: `1px solid ${issue.issueType === v ? 'var(--ink)' : 'var(--border-input)'}`, background: issue.issueType === v ? 'var(--ink)' : '#fff', color: issue.issueType === v ? '#fff' : 'var(--rd-muted)', cursor: 'pointer' }}>
                   {l}
                 </button>
               ))}
@@ -358,14 +322,14 @@ const SignedInOrdersView = ({ setPage, openTracking, setCart }) => {
             <textarea value={issue.description} onChange={e => setIssue(s => ({ ...s, description: e.target.value }))}
               placeholder="What happened? (the more detail the better)"
               rows={4}
-              style={{ width: '100%', padding: 12, borderRadius: 10, border: '1.5px solid var(--cream-dark)', fontSize: 13, fontFamily: 'inherit', resize: 'vertical', marginBottom: 14, outline: 'none' }} />
+              style={{ width: '100%', padding: 12, border: '1px solid var(--border-input)', fontFamily: 'var(--f-ui)', fontSize: 13, resize: 'vertical', marginBottom: 14, outline: 'none', color: 'var(--ink)', background: '#fff' }} />
             <div style={{ display: 'flex', gap: 8 }}>
               <button onClick={reportIssue} disabled={!issue.description.trim()}
-                style={{ flex: 1, background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '10px', fontWeight: 700, fontSize: 13, opacity: issue.description.trim() ? 1 : .5 }}>
+                style={{ flex: 1, background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', padding: '12px', fontFamily: 'var(--f-ui)', fontSize: 14, fontWeight: 600, opacity: issue.description.trim() ? 1 : .5 }}>
                 Submit report
               </button>
               <button onClick={() => setIssueFor(null)}
-                style={{ background: 'var(--cream-dark)', color: 'var(--warm-gray)', borderRadius: 8, padding: '10px 16px', fontWeight: 700, fontSize: 13 }}>
+                style={{ background: 'transparent', color: 'var(--rd-muted)', border: '1px solid var(--border-input)', cursor: 'pointer', padding: '12px 16px', fontFamily: 'var(--f-ui)', fontSize: 14, fontWeight: 600 }}>
                 Cancel
               </button>
             </div>
