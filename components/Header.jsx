@@ -178,7 +178,7 @@ const Header = ({ cart, page, setPage, selectedCategory, setSelectedCategory, se
 // Floating "chat with admin" WhatsApp button — rendered globally (outside the
 // header) so the sticky/z-index of the header can't block clicks.
 const WhatsAppFloat = () => (
-  <a href="https://wa.me/233504082555" target="_blank" rel="noopener noreferrer"
+  <a href="https://wa.me/233599189773" target="_blank" rel="noopener noreferrer"
     aria-label="Chat with SDGMart on WhatsApp"
     style={{
       position: 'fixed', bottom: 28, right: 28, width: 56, height: 56,

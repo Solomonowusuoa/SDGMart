@@ -66,7 +66,7 @@ const GuestOrdersView = ({ setPage, openTracking }) => {
         {guestOrders.length === 0 ? (
           <div style={{ border: '1px dashed var(--border-input)', padding: 30, textAlign: 'center' }}>
             <div style={{ fontFamily: 'var(--f-serif)', fontStyle: 'italic', fontSize: 24, color: 'var(--ink)' }}>No orders on this device yet.</div>
-            <div style={{ fontSize: 12.5, color: 'var(--rd-muted)', marginTop: 8 }}>Placed one elsewhere or need help? <a href="https://wa.me/233504082555?text=Hi!%20I%20would%20like%20to%20track%20my%20SDGMart%20order." target="_blank" rel="noopener" style={{ color: 'var(--accent)', fontWeight: 600 }}>WhatsApp us</a> with your order code.</div>
+            <div style={{ fontSize: 12.5, color: 'var(--rd-muted)', marginTop: 8 }}>Placed one elsewhere or need help? <a href="https://wa.me/233599189773?text=Hi!%20I%20would%20like%20to%20track%20my%20SDGMart%20order." target="_blank" rel="noopener" style={{ color: 'var(--accent)', fontWeight: 600 }}>WhatsApp us</a> with your order code.</div>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>

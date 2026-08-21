@@ -120,6 +120,9 @@ html{scroll-behavior:smooth}
 /* Horizontal rails: hide scrollbar chrome */
 .rd-rail{scrollbar-width:none;-ms-overflow-style:none}
 .rd-rail::-webkit-scrollbar{display:none}
+/* Essentials rail: stretch every card to equal height (no grey gutter below short cards) */
+.rd-ess-item{flex:none;width:236px;display:flex}
+.rd-ess-item>.rd-cell{width:100%}
 /* Flat interactive cue: cards never lift; strongest allowed cue is an inset accent outline */
 .rd-tile:hover{outline:2px solid var(--accent);outline-offset:-2px}
 .rd-cell{transition:background .14s ease}

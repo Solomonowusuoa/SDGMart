@@ -209,7 +209,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     return ok;
   };
 
-  // Convert "+233 50 408 2555" or "0504082555" → "233504082555" (wa.me format)
+  // Convert "+233 59 918 9773" or "0599189773" → "233599189773" (wa.me format)
   const normalizeWaNumber = (raw) => {
     let n = String(raw || '').replace(/[^\d]/g, '');
     if (n.startsWith('00')) n = n.slice(2);
@@ -501,7 +501,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
             type="tel"
             value={waNumber}
             onChange={e => setWaNumber(e.target.value)}
-            placeholder={form.phone || 'e.g. 0504082555 or +233504082555'}
+            placeholder={form.phone || 'e.g. 0599189773 or +233599189773'}
             style={{ width: '100%', padding: '11px 14px', border: '1px solid var(--border-input)', borderRadius: 0, background: '#fff', fontFamily: 'var(--f-ui)', fontSize: 14, color: 'var(--ink)', outline: 'none' }}
           />
           <div style={{ fontSize: 11.5, color: 'var(--rd-muted)', marginTop: 6 }}>

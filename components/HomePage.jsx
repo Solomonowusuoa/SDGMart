@@ -237,7 +237,10 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
     'Rice & Grains': '/icons/categories/rice.jpg', 'Cooking Oil': '/icons/categories/cooking-oil.jpg',
     'Canned & Sauces': '/icons/categories/canned.jpg', 'Dairy & Eggs': '/icons/categories/dairy.jpg',
     'Drinks': '/icons/categories/drinks.jpg', 'Snacks & Biscuits': '/icons/categories/snacks.jpg',
-    'Breakfast & Cereals': '/icons/categories/cereals.jpg',
+    'Breakfast & Cereals': '/icons/categories/cereals.jpg', 'Spices & Seasoning': '/icons/categories/spices.jpg',
+    'Baking & Sugar': '/icons/categories/baking.jpg', 'Coffee, Tea & Cocoa': '/icons/categories/coffee.jpg',
+    'Fruits & Vegetables': '/icons/categories/fruits-veg.jpg', 'Staples (Tubers & Fufu)': '/icons/categories/staples.jpg',
+    'Meat, Poultry & Seafood': '/icons/categories/meat.jpg', 'Toiletries & Personal Care': '/icons/categories/toiletries.jpg',
   };
   const DARK_STRIPES = 'repeating-linear-gradient(135deg,#1c1c19 0 8px,#141412 8px 16px)';
 
@@ -312,7 +315,7 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
             </div>
             <div className="rd-rail" style={{ flex: 1, minWidth: 0, display: 'flex', gap: 1, overflowX: 'auto', background: 'var(--rule-2)' }}>
               {essentials.map(p => (
-                <div key={p.id} style={{ flex: 'none', width: 236 }}><RCard product={p} onAdd={onAdd} onView={onView} /></div>
+                <div key={p.id} className="rd-ess-item"><RCard product={p} onAdd={onAdd} onView={onView} /></div>
               ))}
             </div>
           </div>
@@ -389,7 +392,7 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
             </div>
             {(() => {
               const goHome = () => { setPage('home'); window.scrollTo({ top: 0, behavior: 'smooth' }); };
-              const wa = (text) => window.open(`https://wa.me/233504082555${text ? `?text=${encodeURIComponent(text)}` : ''}`, '_blank', 'noopener');
+              const wa = (text) => window.open(`https://wa.me/233599189773${text ? `?text=${encodeURIComponent(text)}` : ''}`, '_blank', 'noopener');
               const sections = [
                 ['Shop', [['Bestsellers', goHome], ['Rice & Grains', () => goCat('Rice & Grains')], ['Drinks', () => goCat('Drinks')], ['Fruits & Vegetables', () => goCat('Fruits & Vegetables')]]],
                 ['Customer Care', [['Track Order & Delivery', () => setPage('orders')], ['Returns', () => { window.location.href = '/terms#returns'; }], ['WhatsApp Us', () => wa('')]]],

@@ -736,7 +736,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                           style={{ fontSize: 11, fontWeight: 700, color: 'var(--sage-dark)', background: 'var(--cream)', borderRadius: 8, padding: '6px 10px' }}>
                           {expanded ? 'Hide ▴' : 'Details ▾'}
                         </button>
-                        <a href={`https://wa.me/${String(o.customerPhone || o.phone || '233504082555').replace(/\D/g,'').replace(/^0/, '233')}?text=${encodeURIComponent(`Hi ${o.customerName || o.customer || ''}, regarding your SDGMart order ${window.orderCode(o.id)} —`)}`}
+                        <a href={`https://wa.me/${String(o.customerPhone || o.phone || '233599189773').replace(/\D/g,'').replace(/^0/, '233')}?text=${encodeURIComponent(`Hi ${o.customerName || o.customer || ''}, regarding your SDGMart order ${window.orderCode(o.id)} —`)}`}
                           target="_blank" rel="noreferrer"
                           style={{ fontSize: 11, fontWeight: 700, color: '#25D366', padding: '6px 4px' }}>WhatsApp</a>
                         <button onClick={() => deleteOrder(o.id)} title="Delete order"
@@ -1702,7 +1702,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                   placeholder="Type your message to all customers..." rows={5}
                   style={{ ...inputS, resize: 'vertical', marginBottom: 14, padding: '12px 14px' }} />
                 <div style={{ display: 'flex', gap: 10 }}>
-                  <a href={`https://wa.me/233504082555?text=${encodeURIComponent(smsText)}`} target="_blank" rel="noreferrer"
+                  <a href={`https://wa.me/233599189773?text=${encodeURIComponent(smsText)}`} target="_blank" rel="noreferrer"
                     style={{ flex: 1, background: '#25D366', color: '#fff', borderRadius: 8, padding: '10px', fontWeight: 700, fontSize: 13, textAlign: 'center', textDecoration: 'none' }}>
                     WhatsApp
                   </a>
@@ -1722,7 +1722,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                       <div style={{ fontWeight: 700, fontSize: 13 }}>{c}</div>
                       <div style={{ fontSize: 11, color: 'var(--warm-gray)' }}>{orders.find(o=>o.customer===c)?.neighborhood}</div>
                     </div>
-                    <a href={`https://wa.me/233504082555`} target="_blank" rel="noreferrer"
+                    <a href={`https://wa.me/233599189773`} target="_blank" rel="noreferrer"
                       style={{ fontSize: 11, fontWeight: 700, color: '#25D366' }}>WhatsApp</a>
                   </div>
                 ))}

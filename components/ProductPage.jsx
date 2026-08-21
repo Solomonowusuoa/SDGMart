@@ -3,7 +3,7 @@
 const OutOfStockBlock = ({ product }) => {
   const notify = () => {
     const msg = encodeURIComponent(`Hi SDGMart! Please notify me when "${product.name}" (${product.unit}) is back in stock.`);
-    window.open(`https://wa.me/233504082555?text=${msg}`, '_blank', 'noopener');
+    window.open(`https://wa.me/233599189773?text=${msg}`, '_blank', 'noopener');
   };
   return (
     <div style={{ marginTop: 4, padding: '20px 22px', border: '1px dashed var(--border-input)', display: 'flex', flexDirection: 'column', gap: 10 }}>

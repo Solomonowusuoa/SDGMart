@@ -181,7 +181,7 @@
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
     doc.setTextColor(...GRAY);
-    doc.text('Questions? WhatsApp us: +233 50 408 2555', M, pageH - 10);
+    doc.text('Questions? WhatsApp us: +233 59 918 9773', M, pageH - 10);
 
     if (opts.output === 'blob') return doc.output('blob');
     doc.save(`SDGMart-${o.orderId}.pdf`);

@@ -15,7 +15,7 @@ const FeedbackBox = ({ dark }) => {
 
   const openWhatsApp = () => {
     const text = 'Hi SDGMart! I want to report a problem / share feedback' + (msg.trim() ? ': ' + msg.trim() : '.');
-    window.open(`https://wa.me/233504082555?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
+    window.open(`https://wa.me/233599189773?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
   };
 
   const send = async () => {
