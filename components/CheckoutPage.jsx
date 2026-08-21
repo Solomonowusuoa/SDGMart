@@ -76,7 +76,11 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   const [savedAddresses, setSavedAddresses] = React.useState([]);
   const [appliedAddress, setAppliedAddress] = React.useState(null);
   const [editingAddress, setEditingAddress] = React.useState(false);
-  const compactAddress = !!(appliedAddress && !editingAddress && !familyMode);
+  // Family Mode keeps the compact saved-address card too: the user's own
+  // details stay pre-filled and we only ADD the recipient section below.
+  // Delivery still defaults to the saved address; "Change / add details"
+  // reveals the full form when the gift goes to a different location.
+  const compactAddress = !!(appliedAddress && !editingAddress);
   React.useEffect(() => {
     if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
     apiFetch('/api/me/addresses').then(r => r.ok ? r.json() : []).then(list => {

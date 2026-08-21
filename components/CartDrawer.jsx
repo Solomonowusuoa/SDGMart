@@ -1,8 +1,17 @@
 // CartDrawer — slide-in cart panel (design refresh)
-const CartDrawer = ({ cart, setCart, setPage, onClose }) => {
+const CartDrawer = ({ cart, setCart, setPage, onClose, currentUser }) => {
   const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
   const count = cart.reduce((s, i) => s + i.qty, 0);
-  const delivery = subtotal >= 150 ? 0 : 10;
+  // Delivery preview — mirrors CheckoutPage so the cart isn't misleading.
+  // Free over GHS 150 for everyone; signed-in members also get their FIRST
+  // order delivered free once it reaches GHS 50.
+  const FREE_DELIVERY_MIN = 150;
+  const FIRST_ORDER_FREE_MIN = 50;
+  const STANDARD_DELIVERY = 10;
+  const isFirstOrderEligible = !!(currentUser && currentUser.id && currentUser.role !== 'guest' && currentUser.firstOrderDone === false);
+  const isFirstOrderFree = isFirstOrderEligible && subtotal >= FIRST_ORDER_FREE_MIN;
+  const qualifiesFreeByThreshold = subtotal >= FREE_DELIVERY_MIN;
+  const delivery = (isFirstOrderFree || qualifiesFreeByThreshold) ? 0 : STANDARD_DELIVERY;
 
   const updateQty = (id, delta) => {
     setCart(prev => prev.map(i => i.id === id ? { ...i, qty: Math.max(0, i.qty + delta) } : i).filter(i => i.qty > 0));
@@ -74,8 +83,19 @@ const CartDrawer = ({ cart, setCart, setPage, onClose }) => {
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, paddingBottom: 12, borderBottom: '1px solid var(--rule)' }}>
               <span style={{ color: 'var(--rd-muted)' }}>Delivery</span>
-              <span style={{ fontFamily: 'var(--f-display)', fontWeight: 700, color: delivery === 0 ? 'var(--wa)' : 'var(--ink)' }}>{delivery === 0 ? 'FREE' : 'GHS 10.00'}</span>
+              <span style={{ fontFamily: 'var(--f-display)', fontWeight: 700, color: delivery === 0 ? 'var(--wa)' : 'var(--ink)' }}>{delivery === 0 ? 'FREE' : `GHS ${STANDARD_DELIVERY.toFixed(2)}`}</span>
             </div>
+            {/* First-order free-delivery message / nudge (signed-in members) */}
+            {isFirstOrderFree && (
+              <div style={{ border: '1px solid var(--rule-2)', borderLeft: '2px solid var(--wa)', background: 'var(--surface-warm)', padding: '10px 13px', fontSize: 12, lineHeight: 1.5, color: 'var(--rd-body)' }}>
+                <strong style={{ color: 'var(--ink)' }}>First delivery's on us.</strong> No delivery fee on your first order over GHS {FIRST_ORDER_FREE_MIN}.
+              </div>
+            )}
+            {isFirstOrderEligible && !isFirstOrderFree && (
+              <div style={{ border: '1px solid var(--rule-2)', borderLeft: '2px solid var(--accent)', background: 'var(--surface-warm)', padding: '10px 13px', fontSize: 12, lineHeight: 1.5, color: 'var(--rd-body)' }}>
+                Add <strong style={{ color: 'var(--ink)' }}>GHS {(FIRST_ORDER_FREE_MIN - subtotal).toFixed(2)}</strong> more and your first delivery is free.
+              </div>
+            )}
             <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
               <span style={{ fontFamily: 'var(--f-display)', fontSize: 18, fontWeight: 700, letterSpacing: '-.03em' }}>Total</span>
               <RPrice amount={subtotal + delivery} size="md" />

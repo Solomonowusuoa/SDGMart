@@ -363,6 +363,7 @@ const App = () => {
           cart={cart}
           setCart={setCart}
           setPage={navigateTo}
+          currentUser={currentUser}
           onClose={() => navigateTo('home')}
         />
       )}
@@ -405,6 +406,7 @@ const App = () => {
           cart={cart}
           setCart={setCart}
           setPage={navigateTo}
+          currentUser={currentUser}
           onClose={() => setCartOpen(false)}
         />
       )}
