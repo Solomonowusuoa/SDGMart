@@ -1,3 +1,38 @@
+// Minimalist search field (CSS-drawn magnifier ring), shared by desktop + mobile.
+// Defined at MODULE scope — NOT inside Header — so its element type stays stable
+// across renders. When it lived inside Header, every keystroke re-rendered Header,
+// produced a fresh SearchField function, and React remounted the <input>, dropping
+// focus and dismissing the mobile keyboard after each letter. Now the on-screen
+// keyboard stays up while typing and closes only on the keyboard's action key:
+// enterKeyHint="search" renders that key as "Search" per-OS (iOS/Android), and
+// submitting the form blurs the input to dismiss it.
+const SearchField = ({ style, searchQuery, onSearch, setSearchQuery, setPage }) => {
+  const inputRef = React.useRef(null);
+  // Navigate to results and dismiss the on-screen keyboard. Fired by form submit
+  // (desktop Enter, or the mobile keyboard's "Search" action key) and, defensively,
+  // by an explicit Enter keydown so the keyboard closes on that key across engines.
+  const runSearch = () => {
+    if (searchQuery.trim()) setPage('category');
+    if (inputRef.current) inputRef.current.blur();
+  };
+  return (
+    <form role="search" onSubmit={e => { e.preventDefault(); runSearch(); }}
+      style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid var(--border-input)', padding: '10px 14px', background: '#fff', ...style }}>
+      <span style={{ width: 13, height: 13, border: '1.5px solid var(--rd-faint)', borderRadius: '50%', flexShrink: 0 }} />
+      <input ref={inputRef} value={searchQuery} onChange={e => onSearch(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } }}
+        inputMode="search" enterKeyHint="search"
+        autoComplete="off" autoCorrect="off" autoCapitalize="none" spellCheck={false}
+        placeholder="Search groceries…" aria-label="Search groceries"
+        style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontFamily: 'var(--f-ui)', fontSize: 13.5, color: 'var(--ink)' }} />
+      {searchQuery && (
+        <button type="button" onClick={() => { setSearchQuery(''); if (inputRef.current) inputRef.current.focus(); }} aria-label="Clear search"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--rd-faint)', fontSize: 15, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
+      )}
+    </form>
+  );
+};
+
 // Header Component — design refresh (2026): flat, typographic chrome
 // (announcement bar + header + category pill rail). Fully responsive.
 const Header = ({ cart, page, setPage, selectedCategory, setSelectedCategory, searchQuery, setSearchQuery, currentUser, onLogout }) => {
@@ -26,21 +61,6 @@ const Header = ({ cart, page, setPage, selectedCategory, setSelectedCategory, se
     signedIn ? ['My Orders', 'orders'] : ['Track Order', 'orders']];
   const go = (pg) => { if (pg === 'category') setSelectedCategory(null); setPage(pg); setMenuOpen(false); };
   const onSearch = (v) => { setSearchQuery(v); if (v.trim() && page !== 'category') setPage('category'); };
-
-  // Minimalist search field (CSS-drawn magnifier ring), shared by desktop + mobile
-  const SearchField = ({ style }) => (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid var(--border-input)', padding: '10px 14px', background: '#fff', ...style }}>
-      <span style={{ width: 13, height: 13, border: '1.5px solid var(--rd-faint)', borderRadius: '50%', flexShrink: 0 }} />
-      <input value={searchQuery} onChange={e => onSearch(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter' && searchQuery.trim()) setPage('category'); }}
-        placeholder="Search groceries…" aria-label="Search groceries"
-        style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontFamily: 'var(--f-ui)', fontSize: 13.5, color: 'var(--ink)' }} />
-      {searchQuery && (
-        <button onClick={() => setSearchQuery('')} aria-label="Clear search"
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--rd-faint)', fontSize: 15, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
-      )}
-    </div>
-  );
 
   // Bag glyph + accent count badge (badge only when count > 0)
   const CartGlyph = () => (
@@ -85,7 +105,7 @@ const Header = ({ cart, page, setPage, selectedCategory, setSelectedCategory, se
             <span style={{ fontFamily: 'var(--f-mark)', fontSize: 19, fontWeight: 700, letterSpacing: '-.035em', color: 'var(--ink)' }}>SDGMart</span>
           </button>
 
-          <SearchField style={{ flex: 1 }} />
+          <SearchField style={{ flex: 1 }} searchQuery={searchQuery} onSearch={onSearch} setSearchQuery={setSearchQuery} setPage={setPage} />
 
           {/* Nav links */}
           <nav style={{ display: 'flex', alignItems: 'center', gap: 22, fontSize: 13.5, fontWeight: 500, flexShrink: 0 }} className="desktop-nav">
@@ -127,7 +147,7 @@ const Header = ({ cart, page, setPage, selectedCategory, setSelectedCategory, se
             </div>
           </div>
           <div className="rd-gutter" style={{ paddingTop: 10, paddingBottom: 10, borderBottom: '1px solid var(--rule)' }}>
-            <SearchField />
+            <SearchField searchQuery={searchQuery} onSearch={onSearch} setSearchQuery={setSearchQuery} setPage={setPage} />
           </div>
         </>
       )}
