@@ -5,6 +5,7 @@
 try { require('dotenv').config({ path: require('path').join(__dirname, '.env') }); } catch (_) {}
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const path = require('path');
 const zlib = require('zlib');
 const fs = require('fs');
@@ -95,6 +96,10 @@ function getGoogleClient() {
 }
 
 const app = express();
+// Compress every response. The app bundle alone goes from 344 KB to ~76 KB
+// gzipped. Cloudflare compresses proxied traffic today, but that is a setting
+// outside this repo and does not cover the onrender.com origin.
+app.use(compression());
 const PORT = process.env.PORT || 3000;
 app.set('trust proxy', 1);
 // CORS locked to our known web origins. Same-origin app calls and
@@ -1395,7 +1400,8 @@ app.post('/api/auth/resend-verification', requireAuth, async (req, res) => {
     text: `Verify your email: ${verifyLink}`,
   });
   if (emailResult.skipped) console.log(`✉️  (no email config) re-sent for ${req.user.email}: ${verifyLink}`);
-  res.json({ ok: true, emailSent: !!emailResult.ok, verificationLink: emailResult.skipped ? verifyLink : undefined });
+  if (emailResult.skipped && process.env.NODE_ENV !== 'production') console.log('[dev] verification link:', verifyLink);
+  res.json({ ok: true, emailSent: !!emailResult.ok });
 });
 
 // ── Password reset ───────────────────────────────────────────────────────
@@ -1422,7 +1428,12 @@ app.post('/api/auth/forgot-password', async (req, res) => {
       text: `Reset your SDGMart password: ${link}`,
     });
     if (emailResult.skipped) console.log(`🔑 (no email config) reset for ${u.email}: ${link}`);
-    res.json({ ok: true, emailSent: !!emailResult.ok, resetLink: emailResult.skipped ? link : undefined });
+    // Returning the link when RESEND_API_KEY is unset made forgot-password an
+    // unauthenticated password-reset oracle for any address, including admin.
+    if (emailResult.skipped && process.env.NODE_ENV !== 'production') console.log('[dev] password reset link:', link);
+    // Identical to the not-found and rate-limited branches above: three
+    // distinguishable responses were themselves an account-enumeration oracle.
+    res.json({ ok: true });
   } catch (e) { console.error('forgot-password failed:', e); res.status(500).json({ error: e.message }); }
 });
 
@@ -2238,7 +2249,14 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception:', err);
   if (Sentry) { try { Sentry.captureException(err); } catch (_) {} }
-  db.errorLog.record({ message: 'uncaughtException: ' + err.message, stack: err.stack });
+  // Exit, do not continue. After an uncaught exception the stack unwound from
+  // somewhere unknown, leaving work half-finished; carrying on serves subtly
+  // wrong results indefinitely. Render restarts an exited process in seconds,
+  // so losing the in-flight requests is the cheaper trade. The delay gives the
+  // log write and the Sentry flush a chance to land first.
+  Promise.resolve(db.errorLog.record({ message: 'uncaughtException: ' + err.message, stack: err.stack }))
+    .catch(() => {})
+    .finally(() => setTimeout(() => process.exit(1), 500).unref());
 });
 
 // ── Startup ──────────────────────────────────────────────────────────────

@@ -145,7 +145,10 @@ const users = {
     return rowOut(data);
   },
   async findByEmail(email) {
-    const { data, error } = await sb.from('users').select('*').ilike('email', email).maybeSingle();
+    // .eq, not .ilike: ilike made caller-supplied % and _ into SQL wildcards, so
+    // probing a%, ab%, abc% binary-searched the whole user table. Every insert
+    // already lowercases, and the accompanying migration normalises legacy rows.
+    const { data, error } = await sb.from('users').select('*').eq('email', String(email || '').toLowerCase().trim()).maybeSingle();
     if (error) throw error;
     return rowOut(data);
   },
@@ -211,7 +214,7 @@ const users = {
       u = rowOut(r.data);
     }
     if (!u) {
-      const r = await sb.from('users').select('*').ilike('email', lower).maybeSingle();
+      const r = await sb.from('users').select('*').eq('email', lower.trim()).maybeSingle();
       u = rowOut(r.data);
       if (u) {
         // Link google_id to existing email user and mark verified
@@ -475,7 +478,7 @@ const riders = {
     return rowOut(data);
   },
   async findByEmail(email) {
-    const { data, error } = await sb.from('riders').select('*').ilike('email', email).maybeSingle();
+    const { data, error } = await sb.from('riders').select('*').eq('email', String(email || '').toLowerCase().trim()).maybeSingle();
     if (error) throw error;
     return rowOut(data);
   },
