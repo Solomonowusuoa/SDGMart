@@ -49,6 +49,9 @@ const REQUIRED_SCHEMA = [
   // it were missing the CAS would throw into a catch and credit would silently
   // never be paid, so the drift check has to see it too.
   ['users',    'referral_credited',   'supabase-schema-referrals.sql',       true],
+  // Consent capture (H-03). Optional: an older deployment still serves fine,
+  // it just cannot record what a new customer agreed to.
+  ['users',    'terms_accepted_at',   'supabase-schema-consent.sql',         false],
   ['users',    'first_order_done',    'supabase-schema-additions.sql',       true],
   ['users',    'birthday_gift_claimed_year', 'supabase-schema-tweaks.sql',   true],
   ['carts',    'items',               'supabase-schema-cart.sql',            true],
@@ -316,7 +319,7 @@ const users = {
     if (error) throw error;
     return rowOut(data);
   },
-  async create({ name, email, phone, password, refCode, role = 'customer' }) {
+  async create({ name, email, phone, password, refCode, role = 'customer', termsVersion = null }) {
     const passwordHash = password ? await hashPassword(password) : null;
     // Look up the referrer (if any) — inherit their squadCode AND credit them
     let squadCode = null;
@@ -343,6 +346,9 @@ const users = {
       ref_code: myRefCode, squad_code: squadCode, owns_squad: ownsSquad,
       // Record who referred them — credited only AFTER their first purchase.
       referred_by: referrer ? referrer.id : null,
+      // What each customer agreed to, and when (audit H-03). Null for the
+      // bootstrap admin and for accounts created before this shipped.
+      ...(termsVersion ? { terms_version: termsVersion, terms_accepted_at: new Date().toISOString() } : {}),
     };
     let { data, error } = await sb.from('users').insert(insert).select().single();
     // A ref_code collision must not cost someone their signup. Retry with a
@@ -844,8 +850,21 @@ const orders = {
       : { rider_id: null, status: 'queued' };
     return await orders.update(orderId, patch);
   },
+  // Audit H-04: this returned select('*'), so a rider saw every column of
+  // every assigned order — including momo_number, the full price breakdown and
+  // the customer's user_id. A rider needs to find the address, carry the
+  // right items, call the customer and collect the right amount. This is that
+  // list and nothing else; it is what RiderPage actually reads.
   async forRider(riderId) {
-    const { data, error } = await sb.from('orders').select('*').eq('rider_id', riderId).in('status', ['assigned','in_transit']).order('created_at');
+    // `paid` is not optional here despite being payment data: it drives the
+    // rider's "collect nothing" vs "collect GHS X cash" badge, and dropping it
+    // would have every prepaid order read as cash-on-delivery. Withheld:
+    // user_id, momo_number, and the subtotal/discount/loyalty breakdown —
+    // none of which a rider needs to complete a delivery.
+    const RIDER_FIELDS = 'id, customer_name, customer_phone, recipient_name, recipient_phone, '
+      + 'address, neighborhood, location, items, total, paid, payment_method, status, '
+      + 'delivery_date, delivery_slot, priority, surprise_extra, created_at';
+    const { data, error } = await sb.from('orders').select(RIDER_FIELDS).eq('rider_id', riderId).in('status', ['assigned','in_transit']).order('created_at');
     if (error) throw error;
     const list = rowsOut(data);
     // Nearest-neighbor sort starting from the rider's current location

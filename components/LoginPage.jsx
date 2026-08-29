@@ -3,6 +3,11 @@
 const LoginPage = ({ onAuth, onGuest }) => {
   const isMobile = useMobile();
   const [mode, setMode] = React.useState('signin'); // signin | signup | forgot | reset
+  // Act 843 is built around consent and prior notice. The signup form made no
+  // reference to the privacy notice or terms at all — no checkbox, no link, no
+  // wording — so there was no record that any customer had been shown, let
+  // alone agreed to, the policy the site publishes (audit H-03).
+  const [acceptedTerms, setAcceptedTerms] = React.useState(false);
   const [form, setForm] = React.useState({ name: '', email: '', phone: '', password: '', refCode: '', newPassword: '', confirmPassword: '' });
   const [err, setErr] = React.useState('');
   const [info, setInfo] = React.useState('');
@@ -56,11 +61,14 @@ const LoginPage = ({ onAuth, onGuest }) => {
     if (mode === 'forgot') return submitForgot();
     if (mode === 'reset') return submitReset();
     if (mode === 'signin') { if (!form.email || !form.password) { setErr('Email and password required'); return; } }
-    else { if (!form.name || !form.email || !form.password) { setErr('Name, email and password required'); return; } }
+    else {
+      if (!form.name || !form.email || !form.password) { setErr('Name, email and password required'); return; }
+      if (!acceptedTerms) { setErr('Please accept the Privacy Notice and Terms to create an account.'); return; }
+    }
     setLoading(true);
     try {
       const url = mode === 'signin' ? '/api/auth/login' : '/api/auth/signup';
-      const body = mode === 'signin' ? { email: form.email, password: form.password } : { name: form.name, email: form.email, phone: form.phone, password: form.password, refCode: form.refCode };
+      const body = mode === 'signin' ? { email: form.email, password: form.password } : { name: form.name, email: form.email, phone: form.phone, password: form.password, refCode: form.refCode, acceptedTerms: true, termsVersion: window.TERMS_VERSION || null };
       const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await res.json();
       if (!res.ok) { setErr(data.error || 'Login failed'); setLoading(false); return; }
@@ -151,6 +159,19 @@ const LoginPage = ({ onAuth, onGuest }) => {
           </>
         )}
         {mode === 'signup' && (<><label style={lbl}>Referral code <span style={optional}>(optional)</span></label><input placeholder="From a friend? Enter it here" value={form.refCode} onChange={e => set('refCode', e.target.value.toUpperCase())} style={inputS} /></>)}
+        {mode === 'signup' && (
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, fontSize: 12.5, lineHeight: 1.5, color: 'var(--rd-body)', marginBottom: 12, cursor: 'pointer' }}>
+            <input type="checkbox" checked={acceptedTerms} onChange={e => setAcceptedTerms(e.target.checked)}
+              style={{ marginTop: 2, width: 16, height: 16, flexShrink: 0, cursor: 'pointer' }} />
+            <span>
+              I've read and accept the{' '}
+              <a href="/privacy" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', fontWeight: 600 }}>Privacy Notice</a>
+              {' '}and{' '}
+              <a href="/terms" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', fontWeight: 600 }}>Terms</a>.
+              This includes storing my delivery address and map pin so we can deliver to you.
+            </span>
+          </label>
+        )}
         {mode === 'reset' && (<>
           <label style={lbl}>New password</label><input placeholder="At least 8 characters" type={showPw ? 'text' : 'password'} value={form.newPassword} onChange={e => set('newPassword', e.target.value)} style={inputS} />
           <label style={lbl}>Confirm new password</label><input placeholder="Re-enter your new password" type={showPw ? 'text' : 'password'} value={form.confirmPassword} onChange={e => set('confirmPassword', e.target.value)} onKeyDown={e => e.key === 'Enter' && submit()} style={inputS} />

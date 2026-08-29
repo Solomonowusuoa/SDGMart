@@ -567,6 +567,7 @@ const ESSENTIALS = ${JSON.stringify(essentials)};
 const NEIGHBORHOODS = ${JSON.stringify(neighborhoods)};
 const TOP_IDS_BY_ORDERS = ${JSON.stringify(TOP_IDS_BY_ORDERS)};
 const SHOW_FRESHNESS = ${showFreshness ? 'true' : 'false'};
+const TERMS_VERSION = ${JSON.stringify(TERMS_VERSION)};
 const SHOW_STOCK = ${showStock ? 'true' : 'false'};
 if (typeof window !== 'undefined') {
   window.PRODUCTS = PRODUCTS;
@@ -575,6 +576,7 @@ if (typeof window !== 'undefined') {
   window.NEIGHBORHOODS = NEIGHBORHOODS;
   window.TOP_IDS_BY_ORDERS = TOP_IDS_BY_ORDERS;
   window.SHOW_FRESHNESS = SHOW_FRESHNESS;
+  window.TERMS_VERSION = TERMS_VERSION;
   window.SHOW_STOCK = SHOW_STOCK;
   window.LOCATIONIQ_KEY = ${JSON.stringify(locationiqKey)};
   window.PAYSTACK_PUBLIC_KEY = ${JSON.stringify(PAYSTACK_PUBLIC_KEY)};
@@ -700,6 +702,10 @@ async function birthdayGiftStatus(user) {
 // stored order always match reality.
 const STANDARD_DELIVERY = 10;
 const FREE_DELIVERY_MIN = 150;
+// Bump this whenever the privacy notice or terms change materially — stored
+// per user so it is answerable which text each customer agreed to (audit H-03).
+const TERMS_VERSION = '2026-08-29';
+
 const FIRST_ORDER_FREE_MIN = 50; // first-order free delivery only when the order is ≥ this (GHS)
 
 // Audit B-14: product writes took parseFloat(price) with no floor and no CHECK
@@ -1048,7 +1054,17 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
     deliveryDateStr = afterCutoff ? db.businessDatePlus(1, now) : db.businessDate(now);
     priority = afterCutoff;
   }
-  const loc = location && typeof location.lat === 'number' ? location : null;
+  // Keep the fix quality alongside the coordinate (audit I-02) — a pin from a
+  // coarse network fix should not be treated as though it were surveyed, and
+  // markLastUsed's ~50m match threshold has no way to tell without this.
+  const loc = location && typeof location.lat === 'number'
+    ? {
+        lat: location.lat, lng: location.lng,
+        ...(location.address ? { address: String(location.address).slice(0, 300) } : {}),
+        ...(Number.isFinite(Number(location.accuracy)) ? { accuracy: Math.round(Number(location.accuracy)) } : {}),
+        ...(location.source ? { source: String(location.source).slice(0, 12) } : {}),
+      }
+    : null;
 
   // Authoritative pricing — recomputed on the server from DB prices + promos +
   // the signed-in user's discount/loyalty. Client prices/subtotal/total ignored.
@@ -1388,6 +1404,23 @@ app.delete('/api/admin/payments/orphans/:reference', requireAdmin, async (req, r
 // as they would if the customer checked out by hand). Runs once/day from
 // runDailyJobs (see below) — there's no real cron on this host.
 function serverOrderCode(id) { return 'SDG-' + String(id).replace(/\D/g, '').padStart(5, '0'); }
+// ── Bulk-PII access log (audit H-04) ────────────────────────────────────
+// There is one shared admin account, no roles, no 2FA and — until this — no
+// record of who read what. Endpoints that return personal data for many
+// customers at once now leave a trace. This is not a substitute for 2FA on
+// the admin account, which remains the real answer given it can read every
+// customer record; it is the minimum that makes an incident investigable.
+async function logPiiAccess(req, what, count) {
+  try {
+    await db.errorLog.record({
+      message: 'PII ACCESS: ' + what + ' — ' + count + ' record(s) read by user '
+        + (req.user ? req.user.id : '?') + ' from ' + clientIp(req),
+      path: 'audit', method: 'READ', status: 200,
+      userId: req.user ? req.user.id : null,
+    });
+  } catch (_) { /* the read itself must not fail because the log did */ }
+}
+
 // ── Stuck-order watchdog (audit C-08) ───────────────────────────────────
 // Assignment ran only as a side effect of a rider going online or polling,
 // and returns immediately before noon. An order placed at 09:00 on a day when
@@ -1744,15 +1777,20 @@ function publicUser(u) {
 }
 
 app.post('/api/auth/signup', rateLimitIp('signup', LIMIT_SIGNUP), async (req, res) => {
-  const { name, email, phone, password, refCode } = req.body || {};
+  const { name, email, phone, password, refCode, acceptedTerms } = req.body || {};
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password are required' });
+  // Enforced server-side, not only in the form: the record of consent is
+  // worthless if a direct POST can skip it (audit H-03).
+  if (!acceptedTerms) return res.status(400).json({ error: 'You must accept the Privacy Notice and Terms to create an account.' });
   const pwErr = db.validatePasswordStrength(password);
   if (pwErr) return res.status(400).json({ error: pwErr });
   try {
     // Reject duplicate email up front for a clean error
     const existing = await db.users.findByEmail(email);
     if (existing) return res.status(409).json({ error: 'An account with that email already exists' });
-    const u = await db.users.create({ name, email, phone, password, refCode, role: 'customer' });
+    // The server's own TERMS_VERSION, never the client's claim about what it
+    // displayed — otherwise the record says whatever the caller wanted.
+    const u = await db.users.create({ name, email, phone, password, refCode, role: 'customer', termsVersion: TERMS_VERSION });
     // Email verification is disabled — accounts are usable immediately. Mark
     // verified so no banner/gate ever appears.
     // This used to swallow the failure and tell the client emailVerified:true
@@ -2487,6 +2525,8 @@ app.get('/api/leaderboard', async (req, res) => {
 // ── Retention (admin) — returning vs new customers per month + lapsed list ──
 const LAPSED_AFTER_DAYS = 30;
 app.get('/api/admin/retention', requireAdmin, async (req, res) => {
+  // Returns name, email and phone for up to 500 customers in one response.
+  logPiiAccess(req, 'GET /api/admin/retention', 'up to 500');
   try {
     const { data: orderRows, error } = await db.sb.from('orders')
       .select('user_id, created_at')
