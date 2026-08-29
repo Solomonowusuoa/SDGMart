@@ -3,7 +3,7 @@
 //   updates during development are picked up on reload.
 // - Listens for `push` events and shows native OS notifications.
 // - On notification click, focuses an existing tab or opens the target URL.
-const CACHE_NAME = 'sdgmart-v81-search-keyboard-fix';
+const CACHE_NAME = 'sdgmart-v92-remaining-highs';
 const STATIC_ASSETS = [
   '/SDGMart.html',
   '/manifest.json',
@@ -30,7 +30,21 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
   const isCode = /\.(jsx|js|css|html)$/.test(url.pathname) || url.pathname === '/' || url.pathname === '/SDGMart.html';
-  if (url.pathname.startsWith('/api/') || url.pathname === '/data/products.js' || isCode) {
+
+  // API responses are NEVER cached. CacheStorage is per-origin, not per-user,
+  // and signing out only cleared sessionStorage — so on a shared phone (routine
+  // in this market) user A's order history, addresses and phone number could be
+  // replayed to user B the next time the network dropped. Because these users
+  // are frequently offline, that replay branch was the common path, not a rare
+  // one. Network-only: a failed API call must surface as a failure the app can
+  // report, not as someone else's stale data presented as current.
+  if (url.pathname.startsWith('/api/')) {
+    event.respondWith(fetch(request));
+    return;
+  }
+
+  // Public, non-personal payloads stay network-first with a cache fallback.
+  if (url.pathname === '/data/products.js' || isCode) {
     event.respondWith(
       fetch(request)
         .then(res => { try { const clone = res.clone(); caches.open(CACHE_NAME).then(c => c.put(request, clone)); } catch (_) {} return res; })
@@ -45,6 +59,13 @@ self.addEventListener('fetch', (event) => {
       return res;
     }))
   );
+});
+
+// Sign-out cache wipe. The page posts { type: 'sdg-clear-cache' } when a user
+// signs out, so nothing from their session can outlive the handover.
+self.addEventListener('message', (event) => {
+  if (!event.data || event.data.type !== 'sdg-clear-cache') return;
+  event.waitUntil(caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k)))));
 });
 
 // ── Web Push ──────────────────────────────────────────────────────────────

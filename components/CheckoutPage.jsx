@@ -112,6 +112,17 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // Online payment (Paystack) availability + in-flight state
   const [paystackEnabled, setPaystackEnabled] = React.useState(false);
   const [paying, setPaying] = React.useState(false);
+  // Duplicate-order protection (server pairs this with orders.client_request_id).
+  // Deliberately stable across retries of the same attempt, so tapping again
+  // after a dropped connection returns the original order rather than a second
+  // one. Regenerated only once an order actually succeeds.
+  const newRequestId = () => 'cr_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+  const requestIdRef = React.useRef(newRequestId());
+  // Credit this order will earn once delivered. 0 for most baskets — the tier
+  // only crosses every GHS 1,000 — so the line is shown only when non-zero.
+  const [loyaltyPending, setLoyaltyPending] = React.useState(0);
+  // null | 'network' | 'server' — drives the retry panel above the buttons.
+  const [submitError, setSubmitError] = React.useState(null);
 
   React.useEffect(() => {
     fetch('/api/paystack/config').then(r => r.ok ? r.json() : {}).then(cfg => {
@@ -306,6 +317,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // The order payload sent to the server (same shape for COD + Paystack).
   const buildDraft = (snap) => ({
     id: orderId,
+    clientRequestId: requestIdRef.current,
     customer: snap.familyMode ? snap.form.recipientName : snap.form.name,
     phone: snap.familyMode ? snap.form.recipientPhone : snap.form.phone,
     neighborhood: snap.neighborhood,
@@ -332,7 +344,23 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // After an order is created (paid or COD): set up recurring, refresh the
   // user, show the success screen, clear the cart. `serverId` is the real DB
   // order id used for the display code + tracking.
-  const finishOrder = async (snap, serverId, trackToken) => {
+  const finishOrder = async (snap, serverId, trackToken, pendingCredit, serverPricing) => {
+    setLoyaltyPending(Number(pendingCredit || 0));
+    // The server is the only authority on what was charged. The client computes
+    // its own preview with different rounding — it rounds nothing, while the
+    // server rounds each discounted unit price before multiplying — so the two
+    // can disagree by a few pesewas per line (B-05). Everything below (success
+    // screen, PDF receipt, WhatsApp message, GA4 revenue) used the client copy,
+    // which meant a customer's receipt could state a different amount from the
+    // order in your database. Overwrite the snapshot with the real figures.
+    if (serverPricing && serverPricing.total != null) {
+      snap = { ...snap, total: Number(serverPricing.total) };
+      if (serverPricing.subtotal != null) snap.subtotal = Number(serverPricing.subtotal);
+      if (serverPricing.delivery != null) snap.delivery = Number(serverPricing.delivery);
+      if (serverPricing.discount != null) snap.discount = Number(serverPricing.discount);
+      if (serverPricing.loyaltyUsed != null) snap.loyaltyUsed = Number(serverPricing.loyaltyUsed);
+      setOrderSnapshot(snap);
+    }
     const code = serverId != null ? window.orderCode(serverId) : orderId;
     if (serverId != null) { setPlacedOrderId(serverId); setOrderId(code); }
     if (trackToken) setPlacedTrackToken(trackToken);
@@ -368,6 +396,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     }
     setOrderPlaced(true);
     setCart([]);
+    requestIdRef.current = newRequestId();   // next checkout is a new attempt
     // Switch the URL to /order-confirmed + fire the Analytics conversion view,
     // then the GA4 purchase event (value + items) on the confirmation page.
     try { if (onOrderPlaced) onOrderPlaced(); } catch (_) {}
@@ -375,15 +404,44 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   };
 
   // Cash on Delivery — create the order directly.
+  // The success screen is shown ONLY when the server confirms it saved the
+  // order and returns a real id. finishOrder() clears the cart and issues the
+  // tracking code, so reaching it after a failure would tell the customer their
+  // order is placed when it does not exist.
   const placeOrder = async () => {
+    if (paying) return;               // double-tap guard: one order per intent
+    // Fail fast rather than sending into a void: without this the request goes
+    // out, fails, and the customer waits through the whole timeout first.
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      setSubmitError('network');
+      return;
+    }
+    setSubmitError(null);
+    setPaying(true);
     const snap = takeSnapshot();
-    let serverId = null;
     try {
       const r = await apiFetch('/api/orders', { method: 'POST', body: JSON.stringify(buildDraft(snap)) });
-      const d = await r.json();
-      if (d && d.id != null) { serverId = d.id; var codTrackToken = d.trackToken; }
-    } catch (_) { /* proceed even if backend is unreachable */ }
-    await finishOrder(snap, serverId, typeof codTrackToken !== 'undefined' ? codTrackToken : null);
+      // fetch does NOT reject on 4xx/5xx — an error status arrives as a normal
+      // response, so it must be checked explicitly or it slips straight past.
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        // A 4xx is a decision about this basket (sold out, empty, paused) and
+        // the server's wording is more useful than anything generic.
+        const err = new Error(d.error || 'server');
+        err.kind = (r.status >= 400 && r.status < 500) ? 'rejected' : 'server';
+        err.unavailable = d.unavailable || [];
+        throw err;
+      }
+      if (!d || d.id == null) throw new Error('server');
+      await finishOrder(snap, d.id, d.trackToken || null, d.loyaltyPending, d);
+      // paying stays true — the success screen replaces this view.
+    } catch (e) {
+      // Cart is deliberately left intact so retrying is a single tap.
+      setSubmitError(e && e.kind === 'rejected'
+        ? { kind: 'rejected', message: e.message, unavailable: e.unavailable || [] }
+        : (e && e.message === 'server' ? 'server' : 'network'));
+      setPaying(false);
+    }
   };
 
   // Load the Paystack inline popup script on demand.
@@ -398,6 +456,10 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
 
   // Pay online (card / mobile money) via Paystack, then create the order.
   const payWithPaystack = async () => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      setSubmitError('network');
+      return;
+    }
     const snap = takeSnapshot();
     const draft = buildDraft(snap);
     setPaying(true);
@@ -416,7 +478,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
             const vr = await apiFetch('/api/paystack/verify', { method: 'POST', body: JSON.stringify({ reference: initData.reference, draft }) });
             const vd = await vr.json();
             if (!vr.ok) { alert(vd.error || 'We could not confirm your payment. If you were charged, contact us on WhatsApp.'); setPaying(false); return; }
-            await finishOrder(snap, vd && vd.id != null ? vd.id : null, (vd && vd.trackToken) || null);
+            await finishOrder(snap, vd && vd.id != null ? vd.id : null, (vd && vd.trackToken) || null, vd && vd.loyaltyPending, vd);
           } catch (_) { alert('Payment confirmed but the order could not be saved — please contact us on WhatsApp.'); }
           finally { setPaying(false); }
         },
@@ -485,6 +547,17 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
             </div>
           );
         })()}
+
+        {loyaltyPending > 0 && (
+          <div style={{ marginTop: 18, display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', border: '1px solid var(--rule-2)', borderLeft: '2px solid var(--accent)', background: 'var(--surface-warm)', padding: '13px 16px', textAlign: 'left' }}>
+            <span style={{ fontFamily: 'var(--f-display)', fontSize: 20, fontWeight: 700, letterSpacing: '-.02em' }}>
+              GHS {Number(loyaltyPending).toFixed(2)}
+            </span>
+            <span style={{ fontSize: 13.5, color: 'var(--rd-body)', lineHeight: 1.5 }}>
+              in credit lands in your account once this order is delivered.
+            </span>
+          </div>
+        )}
 
         <div style={{ marginTop: 16 }}>
           {window.NotifyOptIn && <window.NotifyOptIn label="Get notified the moment your rider sets off" />}
@@ -879,6 +952,42 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                 </div>
               </div>
 
+              {submitError && (
+                <div style={{ border: '1px solid var(--rule-2)', borderLeft: '3px solid var(--accent)', background: 'var(--surface-warm, #FFF7F2)', padding: '14px 16px', marginBottom: 12 }}>
+                  <div style={{ fontFamily: 'var(--f-ui)', fontSize: 14, fontWeight: 700, marginBottom: 5 }}>
+                    {submitError.kind === 'rejected' ? 'We couldn’t place this order'
+                      : submitError === 'network' ? 'Your order didn’t go through'
+                      : 'We couldn’t save your order'}
+                  </div>
+                  <div style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--rd-body)' }}>
+                    {submitError.kind === 'rejected' ? (
+                      <>
+                        {submitError.message}{' '}
+                        {!!(submitError.unavailable || []).length && (
+                          <span>Affected: {submitError.unavailable.map((u) => u.name || ('item #' + u.id)).join(', ')}. </span>
+                        )}
+                        <strong>Nothing was charged.</strong> Adjust your cart and try again.
+                      </>
+                    ) : (
+                      <>
+                        {submitError === 'network'
+                          ? 'Your connection dropped before we could send it. '
+                          : 'Something went wrong on our side. '}
+                        <strong>Nothing was charged and your items are still in your cart.</strong>{' '}
+                        {submitError === 'network'
+                          ? 'Check your internet, then tap Place Order again.'
+                          : 'Please tap Place Order again.'}
+                      </>
+                    )}
+                  </div>
+                  <a href={'https://wa.me/233599189773?text=' + encodeURIComponent('Hi SDGMart, I tried to place an order but it kept failing. Can you help?')}
+                     target="_blank" rel="noopener noreferrer"
+                     style={{ display: 'inline-block', marginTop: 10, fontFamily: 'var(--f-ui)', fontSize: 12.5, fontWeight: 600, color: 'var(--ink)', textDecoration: 'underline' }}>
+                    Still not working? Message us on WhatsApp →
+                  </a>
+                </div>
+              )}
+
               <div style={{ display: 'flex', gap: 10 }}>
                 <button onClick={() => setStep(2)} disabled={paying} style={{ flex: 1, background: 'transparent', color: 'var(--rd-muted)', border: '1px solid var(--border-input)', cursor: 'pointer', padding: '13px', fontFamily: 'var(--f-ui)', fontSize: 14, fontWeight: 600 }}>← Back</button>
                 {form.payMethod === 'paystack' ? (
@@ -888,7 +997,9 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                   </button>
                 ) : (
                   <button onClick={() => { setWaNumber(form.phone || ''); placeOrder(); }} disabled={paying}
-                    style={{ ...ckPrimary, flex: 2 }}>Place Order →</button>
+                    style={{ ...ckPrimary, flex: 2, opacity: paying ? .6 : 1, cursor: paying ? 'wait' : 'pointer' }}>
+                    {paying ? 'Placing your order…' : (submitError ? 'Place Order again →' : 'Place Order →')}
+                  </button>
                 )}
               </div>
             </>

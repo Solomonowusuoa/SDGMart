@@ -102,6 +102,7 @@ const App = () => {
     return () => clearTimeout(t);
   }, [cart, currentUser]);
   const [cartOpen, setCartOpen] = React.useState(false);
+  const [, setStaffReady] = React.useState(0);   // re-render once /app.staff.js lands
   const [searchQuery, setSearchQuery] = React.useState('');
 
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
@@ -224,6 +225,14 @@ const App = () => {
   }, []);
 
   const logout = async () => {
+
+    // Wipe any cached responses so nothing from this session survives a
+
+    // handover on a shared phone (audit A-12).
+
+    try { navigator.serviceWorker?.controller?.postMessage({ type: 'sdg-clear-cache' }); } catch (_) {}
+
+    try { if (window.caches) caches.keys().then(ks => ks.forEach(k => caches.delete(k))); } catch (_) {}
     try { await apiFetch('/api/auth/logout', { method: 'POST' }); } catch (_) {}
     setCurrentUser(null);
     // Cart intentionally survives sign-out (persisted in localStorage).
@@ -292,6 +301,7 @@ const App = () => {
   if (!currentUser) {
     return (
       <>
+        <OfflineBanner />
         <LoginPage
           onAuth={(user) => { setCurrentUser(user); setAuthChecked(true); }}
           onGuest={() => { setCurrentUser({ role: 'guest', name: 'Guest' }); setAuthChecked(true); }}
@@ -302,9 +312,31 @@ const App = () => {
   }
 
   // ── Admin: skip header, show admin page only ─────────────────────────────
+  // AdminPage and RiderPage are no longer in the customer bundle, so fetch the
+  // staff bundle the first time a staff account signs in.
+  if (currentUser.role === 'admin' || currentUser.role === 'rider') {
+    const ready = currentUser.role === 'admin' ? window.AdminPage : window.RiderPage;
+    if (!ready) {
+      if (!window.__staffLoading) {
+        window.__staffLoading = true;
+        const sc = document.createElement('script');
+        sc.src = '/app.staff.js';
+        sc.onload = () => { window.__staffLoading = false; setStaffReady(n => n + 1); };
+        sc.onerror = () => { window.__staffLoading = false; setStaffReady(n => n + 1); };
+        document.head.appendChild(sc);
+      }
+      return (
+        <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--cream)', fontFamily: 'var(--f-ui, sans-serif)', fontSize: 14, color: 'var(--warm-gray, #666)' }}>
+          Loading your dashboard…
+        </div>
+      );
+    }
+  }
+
   if (currentUser.role === 'admin') {
     return (
       <div style={{ minHeight: '100vh', background: 'var(--cream)' }}>
+        <OfflineBanner />
         <AdminPage setPage={navigateTo} onLogout={logout} currentUser={currentUser} setCurrentUser={setCurrentUser} />
         <WhatsAppFloat />
       <IOSInstallHint />
@@ -314,12 +346,13 @@ const App = () => {
 
   // ── Rider: dedicated rider PWA (no shopping UI) ───────────────────────────
   if (currentUser.role === 'rider') {
-    return <RiderPage currentUser={currentUser} onLogout={logout} />;
+    return (<><OfflineBanner /><RiderPage currentUser={currentUser} onLogout={logout} /></>);
   }
 
   // ── Normal shopping app ──────────────────────────────────────────────────
   return (
     <div style={{ minHeight: '100vh', background: 'var(--cream)' }}>
+      <OfflineBanner />
       <Header
         cart={cart}
         page={page}
@@ -449,6 +482,19 @@ const App = () => {
 };
 
 // Error boundary — a render error in any screen no longer blanks the whole app.
+// Connectivity notice. Rendered by every branch of App: a rider marking an
+// order delivered on patchy signal needs this more than a shopper does.
+function OfflineBanner() {
+  const online = useOnline();
+  if (online) return null;
+  return (
+    <div role="status" aria-live="polite"
+      style={{ position: 'sticky', top: 0, zIndex: 999, background: '#8A3D10', color: '#fff', padding: '9px 16px', fontSize: 13.5, fontWeight: 600, textAlign: 'center', lineHeight: 1.4 }}>
+      You are offline. Anything shown may be out of date, and changes cannot be saved until you reconnect.
+    </div>
+  );
+}
+
 class AppErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { error: null }; }
   static getDerivedStateFromError(error) { return { error }; }

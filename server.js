@@ -5,6 +5,7 @@
 try { require('dotenv').config({ path: require('path').join(__dirname, '.env') }); } catch (_) {}
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const path = require('path');
 const zlib = require('zlib');
 const fs = require('fs');
@@ -30,13 +31,28 @@ if (process.env.SENTRY_DSN) {
 // ── Paystack (online card + mobile money) ────────────────────────────────
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || '';
 const PAYSTACK_PUBLIC_KEY = process.env.PAYSTACK_PUBLIC_KEY || '';
+// Node's fetch has no default timeout. A Paystack instance that stops responding
+// rather than refusing would hang the request forever, and on a single process
+// those accumulate until nothing is served — a slow dependency becoming a full
+// outage. 15s is generous for their API and far short of a customer giving up.
+const PAYSTACK_TIMEOUT_MS = Number(process.env.PAYSTACK_TIMEOUT_MS || 15000);
 async function paystackApi(path, method = 'GET', body) {
-  const r = await fetch('https://api.paystack.co' + path, {
-    method,
-    headers: { Authorization: 'Bearer ' + PAYSTACK_SECRET_KEY, 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  return r.json();
+  try {
+    const r = await fetch('https://api.paystack.co' + path, {
+      method,
+      headers: { Authorization: 'Bearer ' + PAYSTACK_SECRET_KEY, 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(PAYSTACK_TIMEOUT_MS),
+    });
+    return r.json();
+  } catch (e) {
+    // Surface as a clear failure rather than an undefined that every caller
+    // then has to guess about.
+    const timedOut = e && (e.name === 'TimeoutError' || e.name === 'AbortError');
+    throw new Error(timedOut
+      ? 'Payment provider did not respond in time'
+      : 'Could not reach the payment provider: ' + (e && e.message ? e.message : 'unknown error'));
+  }
 }
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
@@ -51,11 +67,22 @@ function getResend() {
     return _resend;
   } catch (_) { return null; }
 }
+// Bound any promise so a hung dependency cannot hold a request open forever.
+function withTimeout(promise, ms, label) {
+  let t;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => { t = setTimeout(() => reject(new Error(label + ' timed out after ' + ms + 'ms')), ms); }),
+  ]).finally(() => clearTimeout(t));
+}
+
 async function sendEmail({ to, subject, html, text }) {
   const client = getResend();
   if (!client) return { skipped: true, reason: 'RESEND_API_KEY not set' };
   try {
-    const r = await client.emails.send({ from: RESEND_FROM_EMAIL, to, subject, html, text });
+    const r = await withTimeout(
+      client.emails.send({ from: RESEND_FROM_EMAIL, to, subject, html, text }),
+      15000, 'email send');
     return { ok: true, id: r.data && r.data.id };
   } catch (e) {
     console.warn('email send failed:', e.message);
@@ -95,6 +122,10 @@ function getGoogleClient() {
 }
 
 const app = express();
+// Compress every response. The app bundle alone goes from 344 KB to ~76 KB
+// gzipped. Cloudflare compresses proxied traffic today, but that is a setting
+// outside this repo and does not cover the onrender.com origin.
+app.use(compression());
 const PORT = process.env.PORT || 3000;
 app.set('trust proxy', 1);
 // CORS locked to our known web origins. Same-origin app calls and
@@ -267,6 +298,10 @@ ensureIcons();
 // and transform JSX → JS once (minified) on the server. The browser then runs
 // a single fast bundle instead of compiling 22 files on every visit.
 // In dev we rebuild on each request; in production we build once and cache.
+// Every customer downloaded the full admin console — 130 KB of source they can
+// never open, 38% of the bundle — plus the rider PWA and a design-prototyping
+// panel left over from the refresh (G-07). Those now live in a second bundle
+// fetched only when an admin or rider actually signs in (D-05).
 const BUNDLE_FILES = [
   'hooks.js',
   'components/receipt.js',
@@ -277,37 +312,46 @@ const BUNDLE_FILES = [
   'components/CartDrawer.jsx',
   'components/CheckoutPage.jsx',
   'components/SquadPage.jsx',
-  'components/AdminPage.jsx',
   'components/LoginPage.jsx',
   'components/MapPicker.jsx',
-  'components/RiderPage.jsx',
   'components/MyOrdersPage.jsx',
   'components/AccountPage.jsx',
   'components/ReviewPromptModal.jsx',
   'components/FeedbackBox.jsx',
   'components/RequestProductButton.jsx',
   'components/OrderTrackingPage.jsx',
+  // tweaks-panel.jsx stays in the customer bundle: App.jsx calls useTweaks() for
+  // the active theme and renders <TweaksPanel>, so it is NOT dead code. My
+  // earlier reading (audit G-07) was wrong. Its unvalidated postMessage listener
+  // is still worth removing, but that is a surgical change to the file, not a
+  // matter of dropping it from the build.
   'tweaks-panel.jsx',
   'App.jsx',
+];
+
+// Staff-only. Loaded on demand by App.jsx; never sent to a shopper.
+const STAFF_BUNDLE_FILES = [
+  'components/AdminPage.jsx',
+  'components/RiderPage.jsx',
 ];
 let _esbuild = null;
 let _bundleCache = null;
 let _bundleBuiltAt = 0;   // newest source mtime captured when we last built
 
 // Newest modification time across all bundle source files. Cheap (~20 stats).
-function newestSourceMtime() {
+function newestSourceMtime(files = BUNDLE_FILES) {
   let newest = 0;
-  for (const rel of BUNDLE_FILES) {
+  for (const rel of files) {
     try { const m = fs.statSync(path.join(__dirname, rel)).mtimeMs; if (m > newest) newest = m; }
     catch (_) {}
   }
   return newest;
 }
 
-function buildAppBundle() {
+function buildAppBundle(files = BUNDLE_FILES) {
   if (!_esbuild) _esbuild = require('esbuild');
   // Concatenate sources with a banner per file (helps stack traces).
-  const parts = BUNDLE_FILES.map(rel => {
+  const parts = files.map(rel => {
     const full = path.join(__dirname, rel);
     const src = fs.readFileSync(full, 'utf8');
     return `\n/* ==== ${rel} ==== */\n${src}\n`;
@@ -326,6 +370,24 @@ function buildAppBundle() {
   });
   return result.code;
 }
+
+let _staffCache = null;
+let _staffBuiltAt = 0;
+app.get('/app.staff.js', (req, res) => {
+  try {
+    const newest = newestSourceMtime(STAFF_BUNDLE_FILES);
+    if (!_staffCache || newest > _staffBuiltAt) {
+      _staffCache = buildAppBundle(STAFF_BUNDLE_FILES);
+      _staffBuiltAt = newest;
+    }
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.send(_staffCache);
+  } catch (e) {
+    console.error('staff bundle build failed:', e.message);
+    res.status(500).type('application/javascript').send('console.error("SDGMart staff bundle error");');
+  }
+});
 
 app.get('/app.bundle.js', (req, res) => {
   try {
@@ -348,6 +410,8 @@ app.get('/app.bundle.js', (req, res) => {
 });
 
 // Build the bundle once at startup so the very first visitor doesn't pay for it.
+// Fail loudly on schema drift rather than discovering it from a customer (B-07).
+db.checkSchema().catch((e) => console.warn('schema check skipped:', e.message));
 try { _bundleCache = buildAppBundle(); _bundleBuiltAt = newestSourceMtime(); console.log('📦 App bundle pre-built'); }
 catch (e) { console.warn('⚠️  initial bundle build failed (will retry on first request):', e.message); }
 
@@ -356,10 +420,14 @@ catch (e) { console.warn('⚠️  initial bundle build failed (will retry on fir
 let _orderCountsCache = { counts: null, at: 0 };
 async function getOrderItemCounts() {
   if (_orderCountsCache.counts && Date.now() - _orderCountsCache.at < 5 * 60 * 1000) return _orderCountsCache.counts;
-  const ordersList = await db.orders.list();
+  // Was db.orders.list(): every column of every order ever placed, loaded into
+  // memory to count line items — on a path every anonymous page view triggers.
+  // Now one column over a bounded recent window, which is also a better answer:
+  // "popular right now" should not be dominated by last year's baskets.
+  const itemArrays = await db.orders.recentItemsForCounts({ days: 90, limit: 5000 });
   const counts = {};
-  ordersList.forEach(o => {
-    let items = o.items;
+  itemArrays.forEach(raw => {
+    let items = raw;
     if (typeof items === 'string') { try { items = JSON.parse(items); } catch (_) { items = []; } }
     (items || []).forEach(i => { counts[i.id] = (counts[i.id] || 0) + (i.qty || 1); });
   });
@@ -428,7 +496,7 @@ if (typeof window !== 'undefined') {
 // ── Products API ─────────────────────────────────────────────────────────
 app.get('/api/products', async (req, res) => {
   try { res.json((await db.products.list()).map(p => ({ ...p, bestseller: !!p.bestseller, img: p.img || null }))); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 app.get('/api/products/top', async (req, res) => {
@@ -444,7 +512,7 @@ app.get('/api/products/top', async (req, res) => {
       realTop.push(...remaining.slice(0, limit - realTop.length));
     }
     res.json(realTop);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 app.get('/api/products/:id', async (req, res) => {
@@ -452,7 +520,7 @@ app.get('/api/products/:id', async (req, res) => {
     const p = await db.products.get(req.params.id);
     if (!p) return res.status(404).json({ error: 'Not found' });
     res.json({ ...p, bestseller: !!p.bestseller });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 app.post('/api/products', requireAdmin, async (req, res) => {
@@ -475,19 +543,19 @@ app.put('/api/products/:id', requireAdmin, async (req, res) => {
 
 app.delete('/api/products/:id', requireAdmin, async (req, res) => {
   try { await db.products.delete(req.params.id); invalidateCatalog(); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 // Admin: low-stock products (uses per-product threshold, default 5)
 app.get('/api/admin/inventory/low', requireAdmin, async (req, res) => {
   try { res.json(await db.products.lowStock()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 // ── Orders API ───────────────────────────────────────────────────────────
 app.get('/api/orders', requireAdmin, async (req, res) => {
   try { res.json(await db.orders.list({ limit: Math.min(2000, parseInt(req.query.limit, 10) || 500) })); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 // Birthday gift eligibility — valid in the user's birth MONTH, once per year,
@@ -511,31 +579,182 @@ async function birthdayGiftStatus(user) {
 const STANDARD_DELIVERY = 10;
 const FREE_DELIVERY_MIN = 150;
 const FIRST_ORDER_FREE_MIN = 50; // first-order free delivery only when the order is ≥ this (GHS)
+// A cart cannot legitimately contain more distinct products than this; the cap
+// exists so one request cannot be turned into an unbounded amount of work.
+const MAX_ORDER_LINES = 100;
+
+// Last successfully loaded promotions, so a momentary Supabase failure cannot
+// quietly turn a sale off for everyone. Beyond this age we would rather refuse
+// to price than guess.
+let _promoCache = { map: null, at: 0 };
+const PROMO_STALE_MS = 10 * 60 * 1000;
+
+// Lets pricing reject a basket with a real status code instead of a 500.
+// ── Kill switches ────────────────────────────────────────────────────────
+// Admin-flippable stops for the paths that can lose money. Without these the
+// only way to halt an exploit in progress is a code change and a deploy — with
+// no staging to verify it against. Default ON, so an unset key changes nothing.
+async function switchOn(key) {
+  try {
+    const v = await db.appConfig.get(key);
+    return v === undefined || v === null ? true : !!v;
+  } catch (_) { return true; }   // never let a config read block trading
+}
+
+// Every route used to end in `catch (e) { res.status(500).json({ error: e.message }) }`:
+// the error was never recorded anywhere searchable, and because the handler dealt
+// with it itself it never reached the global middleware that would have logged it.
+// So the incidents most worth diagnosing were the ones least likely to be captured
+// (E-04) — and raw Postgres text went to the browser, naming columns and
+// constraints (E-07). This does both jobs in one call.
+function fail(res, e, req, where) {
+  if (e && e.status) {
+    return res.status(e.status).json({ error: e.message, ...(e.unavailable ? { unavailable: e.unavailable } : {}) });
+  }
+  const path = where || (req && req.path) || 'unknown';
+  console.error('[' + path + ']', e && e.message ? e.message : e);
+  db.errorLog.record({
+    message: path + ': ' + (e && e.message ? e.message : String(e)),
+    stack: (e && e.stack) || '', path,
+    method: (req && req.method) || null, status: 500,
+    userId: req && req.user ? req.user.id : null,
+  }).catch(() => {});
+  if (Sentry) { try { Sentry.captureException(e); } catch (_) {} }
+  return res.status(500).json({ error: 'Something went wrong on our end. Please try again.' });
+}
+
+// The checkout form validates carefully; the server accepted almost anything
+// (F-04). A direct POST could create an order with no name, no phone and no
+// address — undeliverable, and impossible to follow up because there is no
+// contact detail on it. This mirrors CheckoutPage's validate1 so the rule lives
+// where it cannot be bypassed, and caps every free-text field so one request
+// cannot push megabytes into unbounded text columns (B-09).
+const NEIGHBOURHOODS = ['Tamale Central', 'Kalpohin', 'Lamashegu', 'Sagnarigu', 'Nyohini',
+  'Choggu', 'Vittin', 'Tishigu', 'Gumbihini', 'Jisonayili'];
+const PHONE_RE = /^\+?[\d\s-]{9,20}$/;
+const cap = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
+
+function validateDelivery(body, extra = {}) {
+  const familyMode = !!body.familyMode;
+  const out = {
+    customer: cap(body.customer, 80),
+    phone: cap(body.phone, 20),
+    address: cap(body.address, 300),
+    neighborhood: cap(body.neighborhood, 60),
+    recipientName: cap(body.recipientName, 80),
+    recipientPhone: cap(body.recipientPhone, 20),
+    recipientAddress: cap(body.recipientAddress, 300),
+    giftMessage: cap(body.giftMessage, 300),
+    momoNumber: cap(body.momoNumber, 20),
+  };
+  const bad = [];
+  if (!out.customer) bad.push('a name');
+  if (!out.phone || !PHONE_RE.test(out.phone)) bad.push('a valid phone number');
+  if (!out.neighborhood) bad.push('a neighbourhood');
+
+  // Either a typed landmark or a map pin — the same rule the form applies,
+  // because Tamale addressing is informal and the pin often carries it.
+  const loc = body.location;
+  const hasPin = !!(loc && typeof loc.lat === 'number' && typeof loc.lng === 'number'
+    && Math.abs(loc.lat) <= 90 && Math.abs(loc.lng) <= 180);
+  if (!out.address && !hasPin) bad.push('a landmark or a map pin');
+
+  if (familyMode) {
+    if (!out.recipientName) bad.push("the recipient's name");
+    if (!out.recipientPhone || !PHONE_RE.test(out.recipientPhone)) bad.push("a valid recipient phone number");
+  }
+  if (bad.length) {
+    throw new HttpError(400, 'Your order is missing ' + bad.join(', ') + '.', { missing: bad });
+  }
+
+  // A delivery slot must be one the shop actually offers, and a neighbourhood
+  // outside the known list is allowed (customers do type their own area) but is
+  // flagged so a typo does not quietly fragment the admin route grouping.
+  out.unknownNeighborhood = !NEIGHBOURHOODS.some((n) => n.toLowerCase() === out.neighborhood.toLowerCase());
+  out.hasPin = hasPin;
+  return out;
+}
+
+class HttpError extends Error {
+  constructor(status, message, extra) { super(message); this.status = status; Object.assign(this, extra || {}); }
+}
+
 async function computeOrderPricing(reqUser, body) {
   const clientItems = Array.isArray(body.items) ? body.items : [];
+  let deductStock = false;
+  try { deductStock = !!(await db.appConfig.get('deduct_stock')); } catch (_) {}
+  // A swallowed failure here silently priced every basket at FULL price with no
+  // error, no log and no alert — and it would bite hardest during a flash sale,
+  // when a promo push has just gone out and load is at its peak. Now: serve the
+  // last known good set on a blip, and refuse to price at all if we have never
+  // loaded one, because overcharging is worse than asking the customer to retry.
   let promoMap = {};
   try {
     const promos = await db.promotions.listActive();
     (promos || []).forEach(p => (p.productIds || []).forEach(id => {
       if (!promoMap[id] || p.discountPercent > promoMap[id]) promoMap[id] = p.discountPercent;
     }));
-  } catch (_) {}
-  const items = [];
+    _promoCache = { map: promoMap, at: Date.now() };
+  } catch (e) {
+    console.error('promotions lookup failed:', e.message);
+    db.errorLog.record({ message: 'promotions lookup failed during pricing: ' + e.message, path: '/pricing', status: 500 }).catch(() => {});
+    if (_promoCache.map && Date.now() - _promoCache.at < PROMO_STALE_MS) {
+      promoMap = _promoCache.map;
+      console.warn('pricing with promotions cached ' + Math.round((Date.now() - _promoCache.at) / 1000) + 's ago');
+    } else {
+      throw new HttpError(503, 'We could not confirm current prices just now. Please try again in a moment.');
+    }
+  }
+  // Collapse duplicate ids into one line before clamping (C-04). The 99 cap was
+  // per LINE, so 200 lines of the same product meant 19,800 units — and each
+  // line cost its own sequential products.get, letting one 3 MB request tie the
+  // single Node process up in tens of thousands of round-trips.
+  const wanted = new Map();
   for (const ci of clientItems) {
     if (!ci || ci.birthdayGift) continue; // gift is appended separately, always free
-    const p = await db.products.get(ci.id);
-    if (!p) continue; // unknown id → drop (can't be trusted)
-    const qty = Math.max(1, Math.min(99, parseInt(ci.qty, 10) || 1));
+    const id = parseInt(ci.id, 10);
+    if (!Number.isFinite(id)) continue;
+    // `parseInt(x) || 1` would turn an explicit qty of 0 — "remove this line" —
+    // into 1, quietly adding an item the customer took out.
+    const raw = parseInt(ci.qty, 10);
+    const qty = Number.isFinite(raw) ? Math.max(0, Math.min(99, raw)) : 1;
+    if (!qty) continue;
+    wanted.set(id, Math.min(99, (wanted.get(id) || 0) + qty));
+    if (wanted.size > MAX_ORDER_LINES) throw new HttpError(400, 'That order has too many different items.');
+  }
+  // One query instead of one per line.
+  const found = await db.products.listByIds([...wanted.keys()]);
+  const byId = new Map(found.map((p) => [String(p.id), p]));
+  const items = [];
+  const unavailable = [];
+  for (const [id, qty] of wanted) {
+    const p = byId.get(String(id));
+    if (!p) { unavailable.push({ id, reason: 'gone' }); continue; }
+    // Availability was enforced only by hiding "Sold out" products in the UI,
+    // so a direct POST could order any quantity of something with no stock
+    // (B-03). Only meaningful while the deduct_stock toggle is on.
+    if (deductStock && Number(p.stock || 0) < qty) {
+      unavailable.push({ id, name: p.name, reason: Number(p.stock || 0) ? 'partial' : 'out', have: Number(p.stock || 0) });
+      continue;
+    }
     const pct = Number(promoMap[p.id] || 0);
-    const price = +(Number(p.price) * (1 - pct / 100)).toFixed(2);
+    const price = Math.max(0, +(Number(p.price) * (1 - pct / 100)).toFixed(2));
     items.push({ id: p.id, name: p.name, category: p.category, unit: p.unit, price, qty, ...(pct ? { originalPrice: Number(p.price), promoPercent: pct } : {}) });
   }
+  if (!items.length) {
+    // An empty or all-invalid basket used to produce a real queued order for the
+    // delivery fee alone, and a rider dispatched to deliver nothing (C-03).
+    throw new HttpError(400, unavailable.length
+      ? 'Those items are no longer available.'
+      : 'Your cart is empty.', { unavailable });
+  }
   const subtotal = +items.reduce((s, i) => s + i.price * i.qty, 0).toFixed(2);
+  const loyaltyAllowed = await switchOn('loyalty_redemption_enabled');
   const discountApplied = !!(reqUser && reqUser.discountPending);
   const discount = discountApplied ? +(subtotal * 0.05).toFixed(2) : 0;
   const afterDiscount = +(subtotal - discount).toFixed(2);
   let loyaltyUsed = 0;
-  if (reqUser && Number(body.loyaltyUsed || 0) > 0) {
+  if (loyaltyAllowed && reqUser && Number(body.loyaltyUsed || 0) > 0) {
     loyaltyUsed = +Math.min(Number(body.loyaltyUsed), Number(reqUser.loyaltyBalance || 0), afterDiscount).toFixed(2);
   }
   const afterLoyalty = +(afterDiscount - loyaltyUsed).toFixed(2);
@@ -543,13 +762,95 @@ async function computeOrderPricing(reqUser, body) {
     && afterLoyalty >= FIRST_ORDER_FREE_MIN);
   const delivery = (firstOrderFree || afterLoyalty >= FREE_DELIVERY_MIN) ? 0 : STANDARD_DELIVERY;
   const total = +(afterLoyalty + delivery).toFixed(2);
-  return { items, subtotal, discount, discountApplied, loyaltyUsed, delivery, total, firstOrderFree };
+  return { items, subtotal, discount, discountApplied, loyaltyUsed, delivery, total, firstOrderFree, unavailable };
 }
 
 // Shared order-creation logic. Used by Cash-on-Delivery (/api/orders) and the
 // Paystack verify/webhook paths. `reqUser` may be null (guest). `extra` carries
 // payment status (paid, paystackRef).
+// ── Checkout reservations (Paystack) ─────────────────────────────────────
+// Online payment prices the order at `init` but only creates it at `verify`,
+// minutes later, after the customer approves on their phone. Recomputing the
+// price at `verify` meant the stored total could drift from the amount actually
+// charged (audit C-07), and taking the loyalty at `verify` meant a second
+// checkout could spend the same credit in between.
+//
+// So: take the value at `init`, when the price is locked, and carry both the
+// resolved pricing and a ledger of what was taken on the pending_payments draft.
+// `verify` then just creates the order from that — no second pricing pass, no
+// second consumption. If the customer never pays, releaseReservation() hands it
+// all back.
+async function reserveForCheckout(reqUser, pricing, giftClaimYear) {
+  const userId = reqUser ? reqUser.id : null;
+  const ledger = { userId, loyalty: 0, discount: false, firstOrder: false, giftYear: null };
+  if (!userId) return ledger;
+  if (pricing.discountApplied && await db.squads.consumeDiscount(userId)) ledger.discount = true;
+  if (pricing.loyaltyUsed) {
+    const used = await db.squads.consumeLoyalty(userId, pricing.loyaltyUsed);
+    ledger.loyalty = used;
+    if (used < pricing.loyaltyUsed) {
+      // Nothing is charged yet, so the honest move is to bill what they will
+      // actually receive rather than absorbing the difference later.
+      pricing.total = +(Number(pricing.total) + (pricing.loyaltyUsed - used)).toFixed(2);
+      pricing.loyaltyUsed = used;
+    }
+  }
+  if (!reqUser.firstOrderDone && pricing.firstOrderFree && await db.squads.claimFirstOrder(userId)) ledger.firstOrder = true;
+  if (giftClaimYear != null && await db.squads.claimBirthdayGift(userId, giftClaimYear)) ledger.giftYear = giftClaimYear;
+  return ledger;
+}
+
+async function releaseReservation(ledger) {
+  if (!ledger || !ledger.userId) return;
+  const { userId } = ledger;
+  try { if (ledger.loyalty > 0) await db.squads.addLoyalty(userId, ledger.loyalty); }
+  catch (e) { console.error('RESERVATION RELEASE FAILED (loyalty) for user ' + userId + ':', e.message); }
+  try { if (ledger.discount) await db.squads.restoreDiscount(userId); } catch (_) {}
+  try { if (ledger.firstOrder) await db.squads.releaseFirstOrder(userId); } catch (_) {}
+  try { if (ledger.giftYear != null) await db.squads.releaseBirthdayGift(userId, ledger.giftYear); } catch (_) {}
+}
+
+// Hand back anything this customer reserved on a checkout they walked away
+// from, so their credit is spendable again the moment they come back. Only
+// releases when Paystack confirms the payment did NOT succeed — otherwise the
+// webhook or the Reconcile screen may still turn it into an order.
+async function releaseStaleReservations(userId) {
+  if (!userId) return;
+  let stale = [];
+  try { stale = await db.pendingPayments.listStaleForUser(userId, 30); } catch (_) { return; }
+  for (const row of stale) {
+    try {
+      if (PAYSTACK_SECRET_KEY) {
+        const ver = await paystackApi('/transaction/verify/' + encodeURIComponent(row.reference));
+        if (ver && ver.status && ver.data && ver.data.status === 'success') continue; // paid — leave it
+      }
+      await releaseReservation((row.draft && row.draft._reserved) || null);
+      await db.pendingPayments.delete(row.reference);
+    } catch (e) { console.warn('stale reservation release failed for ' + row.reference + ':', e.message); }
+  }
+}
+
 async function createOrderFromBody(reqUser, body, extra = {}) {
+  // Never block an order whose payment has already been taken.
+  if (!extra.paid && !(await switchOn('ordering_enabled'))) {
+    throw new HttpError(503, 'We have paused new orders for a short while. Please try again soon, or message us on WhatsApp.');
+  }
+  // Duplicate-order protection: the client sends one key per checkout attempt
+  // and reuses it when retrying. If that attempt already produced an order —
+  // because the response was lost rather than the request failing — return the
+  // original instead of creating a second one.
+  const idemKey = String(body.clientRequestId || '').slice(0, 64) || null;
+  if (idemKey) {
+    const prior = await db.orders.findByClientRequestId(idemKey);
+    if (prior) {
+      return {
+        ok: true, id: prior.id, total: prior.total, duplicate: true,
+        deliveryDate: prior.deliveryDate, deliverySlot: prior.deliverySlot,
+        priority: prior.priority, loyaltyPending: 0, squadGoalHit: false,
+        trackToken: orderTrackToken(prior.id),
+      };
+    }
+  }
   const {
     customer, phone, neighborhood, address,
     recipientName, recipientPhone, recipientAddress, payMethod, momoNumber, location,
@@ -578,14 +879,18 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
 
   // Authoritative pricing — recomputed on the server from DB prices + promos +
   // the signed-in user's discount/loyalty. Client prices/subtotal/total ignored.
-  const pricing = await computeOrderPricing(reqUser, body);
+  // A Paystack order carries the pricing that was locked at `init` and already
+  // paid for. Recomputing it here is what let the stored total drift away from
+  // the amount charged (C-07), so the locked copy wins whenever it is present.
+  const locked = extra.locked || null;
+  const pricing = locked ? locked.pricing : await computeOrderPricing(reqUser, body);
   const itemsList = [...pricing.items];
 
   // Birthday free gift — server-validated, appended at price 0. The claim is
   // recorded only AFTER a successful create (below), so a failed create can't
   // burn the once-a-year gift.
   let giftClaimYear = null;
-  if (reqUser && body.birthdayGift) {
+  if (reqUser && body.birthdayGift && !locked) {
     const { cfg, eligible, year } = await birthdayGiftStatus(reqUser);
     const gid = parseInt(body.birthdayGift, 10);
     if (eligible && (cfg.productIds || []).map(Number).includes(gid)) {
@@ -594,43 +899,124 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
     }
   }
 
-  const created = await db.orders.create({
-    userId,
-    customerName: customer || '', customerPhone: phone || '',
-    recipientName: recipientName || '', recipientPhone: recipientPhone || '',
-    address: address || recipientAddress || '', neighborhood: neighborhood || '',
-    items: itemsList, subtotal: pricing.subtotal, deliveryFee: pricing.delivery,
-    discount: pricing.discount, loyaltyUsed: pricing.loyaltyUsed, total: pricing.total,
-    paymentMethod: payMethod || (extra.paid ? 'paystack' : 'cash'),
-    momoNumber: momoNumber || '',
-    paid: !!extra.paid, paystackRef: extra.paystackRef || null,
-    status: 'queued', location: loc, deliveryDate: deliveryDateStr, deliverySlot, priority,
-  });
-
-  // Record the birthday-gift claim now that the order exists.
-  if (giftClaimYear != null) {
-    try { await db.sb.from('users').update({ birthday_gift_claimed_year: giftClaimYear }).eq('id', reqUser.id); } catch (_) {}
-  }
-  // Optional stock depletion — OFF by default (admin toggle 'deduct_stock').
-  try { if (await db.appConfig.get('deduct_stock')) await db.products.decrementStock(itemsList); } catch (_) {}
-
-  let squadInfo = null;
-  if (userId) {
-    if (pricing.discountApplied) await db.squads.consumeDiscount(userId);
-    if (pricing.loyaltyUsed) await db.squads.consumeLoyalty(userId, pricing.loyaltyUsed);
-    squadInfo = await db.squads.recordSpend(userId, pricing.subtotal);
-    // The first-order-free-delivery perk persists until it is actually used:
-    // small (< GHS 50) first orders don't consume it. Referral credit rides the
-    // same flag, so the referrer is credited on the referee's first QUALIFYING
-    // order (also blocks GHS-1 referral farming).
-    if (!reqUser.firstOrderDone && pricing.firstOrderFree) {
-      await db.sb.from('users').update({ first_order_done: true }).eq('id', userId);
-      // Credit the referrer (GHS 5) now that this referred user has actually bought.
-      await db.referrals.creditFirstPurchase(reqUser);
+  // Validate and cap the delivery details before anything is consumed or
+  // written. A locked (already-paid) order skips this: it was validated at init,
+  // and rejecting it now would take the money without creating the order.
+  let clean = null;
+  if (!locked) {
+    clean = validateDelivery(body, extra);
+    if (clean.unknownNeighborhood) {
+      console.warn('order uses an unlisted neighbourhood: ' + JSON.stringify(clean.neighborhood));
     }
-    if (loc) await db.addresses.markLastUsed(userId, loc, neighborhood);
   }
-  db.stats.invalidateDelivered();
+
+  // ── Step 1: CONSUME what this order spends, BEFORE the order row exists ──
+  // Supabase's REST client has no multi-statement transaction, so the sequence
+  // is ordered to fail safe instead. Consumption runs first because it is fully
+  // reversible: if anything below throws, `compensate` hands it all back and no
+  // order was created. The previous order (create first, consume after) meant a
+  // failure at the consume step left the customer with the discount applied to
+  // a real order AND their balance intact.
+  const compensate = [];
+  if (userId && !locked) {
+    if (pricing.discountApplied) {
+      const took = await db.squads.consumeDiscount(userId);
+      if (took) compensate.push(() => db.squads.restoreDiscount(userId));
+    }
+    if (pricing.loyaltyUsed) {
+      // Throws (rather than silently under-charging) if the row is too contended.
+      const used = await db.squads.consumeLoyalty(userId, pricing.loyaltyUsed);
+      if (used > 0) compensate.push(() => db.squads.addLoyalty(userId, used));
+      if (used < pricing.loyaltyUsed) {
+        // Someone else spent the credit first. For an UNPAID (cash) order, bill
+        // only the credit actually applied. For a Paystack order the money is
+        // already collected at the quoted amount, so raising the total would
+        // make a paid customer look like they owe the difference — record what
+        // was really consumed and absorb the rest.
+        if (!extra.paid) pricing.total = +(Number(pricing.total) + (pricing.loyaltyUsed - used)).toFixed(2);
+        else console.warn('loyalty short by GHS ' + (pricing.loyaltyUsed - used).toFixed(2) + ' on PAID order for user ' + userId + ' — absorbed');
+        pricing.loyaltyUsed = used;
+      }
+    }
+    // The first-order-free-delivery perk: exactly one order can claim it.
+    if (!reqUser.firstOrderDone && pricing.firstOrderFree) {
+      const won = await db.squads.claimFirstOrder(userId);
+      if (won) compensate.push(() => db.squads.releaseFirstOrder(userId));
+      // If another concurrent order claimed it first we still honour the price
+      // the customer was quoted — charging more than they agreed at checkout
+      // would be worse than occasionally absorbing one delivery fee.
+      else console.warn('first-order perk already claimed by a concurrent order for user ' + userId);
+    }
+    if (giftClaimYear != null) {
+      const claimed = await db.squads.claimBirthdayGift(userId, giftClaimYear);
+      if (!claimed) {
+        // Gift already taken this year — drop it rather than give a second one.
+        for (let i = itemsList.length - 1; i >= 0; i--) if (itemsList[i].birthdayGift) itemsList.splice(i, 1);
+      }
+    }
+  }
+
+  // ── Step 2: create the order. On failure, undo step 1 completely. ────────
+  let created;
+  try {
+    created = await db.orders.create({
+      userId,
+      clientRequestId: idemKey,
+      customerName: clean ? clean.customer : (customer || ''),
+      customerPhone: clean ? clean.phone : (phone || ''),
+      recipientName: clean ? clean.recipientName : (recipientName || ''),
+      recipientPhone: clean ? clean.recipientPhone : (recipientPhone || ''),
+      address: clean ? (clean.address || clean.recipientAddress) : (address || recipientAddress || ''),
+      neighborhood: clean ? clean.neighborhood : (neighborhood || ''),
+      items: itemsList, subtotal: pricing.subtotal, deliveryFee: pricing.delivery,
+      discount: pricing.discount, loyaltyUsed: pricing.loyaltyUsed, total: pricing.total,
+      paymentMethod: payMethod || (extra.paid ? 'paystack' : 'cash'),
+      momoNumber: clean ? clean.momoNumber : (momoNumber || ''),
+      paid: !!extra.paid, paystackRef: extra.paystackRef || null,
+      status: 'queued', location: loc, deliveryDate: deliveryDateStr, deliverySlot, priority,
+    });
+  } catch (e) {
+    for (const undo of compensate.reverse()) {
+      try { await undo(); } catch (u) { console.error('COMPENSATION FAILED after order insert error:', u.message); }
+    }
+    // A locked (already-paid) order must NOT release its reservation here: the
+    // customer's money has been taken, so the value stays spent and the webhook
+    // or the Reconcile screen retries creating the order.
+
+    // Two retries of the same attempt raced each other. The unique index did its
+    // job — return the order the winner created rather than surfacing an error.
+    // The unique index on paystack_ref (added by supabase-schema-constraints.sql)
+    // now settles the verify-vs-webhook race in the database: whichever arrives
+    // second gets a duplicate-key error, and the order the winner created is the
+    // right answer to return (A-09).
+    if (extra.paystackRef && e && /duplicate key|23505/i.test(e.message || '')) {
+      const won = await db.orders.findByPaystackRef(extra.paystackRef);
+      if (won) return { ok: true, id: won.id, total: won.total, duplicate: true,
+        subtotal: won.subtotal, delivery: won.deliveryFee, discount: won.discount, loyaltyUsed: won.loyaltyUsed,
+        deliveryDate: won.deliveryDate, deliverySlot: won.deliverySlot, priority: won.priority,
+        loyaltyPending: 0, squadGoalHit: false, trackToken: orderTrackToken(won.id) };
+    }
+    if (idemKey && e && /duplicate key|23505/i.test(e.message || '')) {
+      const won = await db.orders.findByClientRequestId(idemKey);
+      if (won) return { ok: true, id: won.id, total: won.total, duplicate: true,
+        deliveryDate: won.deliveryDate, deliverySlot: won.deliverySlot, priority: won.priority,
+        loyaltyPending: 0, squadGoalHit: false, trackToken: orderTrackToken(won.id) };
+    }
+    throw e;
+  }
+
+  // ── Step 3: everything after the commit is BEST EFFORT ───────────────────
+  // The order exists and the customer is owed it. None of the bookkeeping below
+  // may turn that into a 500, because the client would report failure for a real
+  // order and the customer's retry would create a duplicate.
+  try {
+    if (await db.appConfig.get('deduct_stock')) await db.products.decrementStock(itemsList);
+  } catch (e) { console.warn('stock decrement failed for order ' + created.id + ':', e.message); }
+  if (userId && loc) {
+    try { await db.addresses.markLastUsed(userId, loc, neighborhood); }
+    catch (e) { console.warn('markLastUsed failed for order ' + created.id + ':', e.message); }
+  }
+  try { db.stats.invalidateDelivered(); } catch (_) {}
   // Ping admins so a new order is never missed.
   notifyAdmins({
     title: '🛒 New order #' + created.id,
@@ -639,13 +1025,188 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
   }).catch(() => {});
   return {
     ok: true, id: created.id, total: pricing.total,
+    // The client renders the receipt and reports revenue from these, so the
+    // full breakdown is returned rather than just the total (B-05).
+    subtotal: pricing.subtotal, delivery: pricing.delivery,
+    discount: pricing.discount, loyaltyUsed: pricing.loyaltyUsed,
     deliveryDate: deliveryDateStr, deliverySlot, priority,
-    loyaltyEarned: squadInfo ? squadInfo.loyaltyEarned : 0,
-    squadGoalHit: !!(squadInfo && squadInfo.squadGoalHit),
+    // Earned on DELIVERY now, not at checkout — see the rewards note above.
+    // Projected so the success screen can say what is coming. Only the tier
+    // credit is promised: the squad bonus also depends on other members and
+    // could change before this order arrives, so it stays a surprise.
+    loyaltyPending: (() => {
+      if (!reqUser) return 0;
+      const prev = Number(reqUser.totalSpent || 0);
+      const after = prev + Number(pricing.subtotal || 0);
+      return (Math.floor(after / 1000) - Math.floor(prev / 1000)) * 50;
+    })(),
+    squadGoalHit: false,
     // Lets guests track this order later (stored client-side; see orderTrackToken)
     trackToken: orderTrackToken(created.id),
   };
 }
+
+// ── Daily revenue + rider cash reconciliation ────────────────────────────
+// Splits a day's takings by how the money arrives, and — because cash is
+// collected by hand — breaks the cash side down per rider. "Collected" counts
+// only delivered orders, so the figure is what each rider should actually have
+// handed in; anything still out is listed separately rather than being counted
+// as revenue you hold.
+app.get('/api/admin/revenue', requireAdmin, async (req, res) => {
+  try {
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || ''))
+      ? req.query.date : new Date().toISOString().slice(0, 10);
+    const [dayOrders, riders] = await Promise.all([db.orders.forDay(date), db.riders.list()]);
+    const riderName = new Map(riders.map((r) => [String(r.id), r.name]));
+
+    const online = { count: 0, total: 0, orders: [] };
+    const collected = { count: 0, total: 0 };
+    const outstanding = { count: 0, total: 0 };
+    const byRider = new Map();
+    const bucket = (key, name) => {
+      if (!byRider.has(key)) byRider.set(key, { riderId: key === 'unassigned' ? null : Number(key), name, collected: 0, collectedCount: 0, outstanding: 0, outstandingCount: 0 });
+      return byRider.get(key);
+    };
+
+    for (const o of dayOrders) {
+      const amount = Number(o.total || 0);
+      if (o.paid) {
+        online.count++; online.total += amount;
+        online.orders.push({ id: o.id, total: amount, method: o.paymentMethod || 'paystack', customer: o.customerName || '' });
+        continue;
+      }
+      const key = o.riderId != null ? String(o.riderId) : 'unassigned';
+      const b = bucket(key, o.riderId != null ? (riderName.get(key) || 'Rider #' + o.riderId) : 'Not yet assigned');
+      if (o.status === 'delivered') {
+        collected.count++; collected.total += amount;
+        b.collected += amount; b.collectedCount++;
+      } else {
+        outstanding.count++; outstanding.total += amount;
+        b.outstanding += amount; b.outstandingCount++;
+      }
+    }
+    const round = (n) => +Number(n).toFixed(2);
+    res.json({
+      date,
+      online: { count: online.count, total: round(online.total), orders: online.orders.slice(0, 100) },
+      cash: {
+        collected: { count: collected.count, total: round(collected.total) },
+        outstanding: { count: outstanding.count, total: round(outstanding.total) },
+        byRider: [...byRider.values()]
+          .map((b) => ({ ...b, collected: round(b.collected), outstanding: round(b.outstanding) }))
+          .sort((a, b) => b.collected - a.collected),
+      },
+      totalTakings: round(online.total + collected.total),
+      orderCount: dayOrders.length,
+    });
+  } catch (e) { fail(res, e, req); }
+});
+
+// Tracking is polled every few seconds per watching customer, and each response
+// costs several sequential queries. A short server-side cache collapses a
+// delivery window's worth of watchers onto one set of reads, without making the
+// page feel stale — status changes are minutes apart, not seconds (D-03).
+const _trackCache = new Map();
+const TRACK_CACHE_MS = 5000;
+async function getTrackingCached(orderId) {
+  const key = String(orderId);
+  const hit = _trackCache.get(key);
+  if (hit && Date.now() - hit.at < TRACK_CACHE_MS) return hit.value;
+  const value = await db.orders.getWithTracking(orderId);
+  _trackCache.set(key, { value, at: Date.now() });
+  // Bound the map so a long day of tracking cannot grow it without limit.
+  if (_trackCache.size > 500) {
+    const cutoff = Date.now() - TRACK_CACHE_MS;
+    for (const [k, v] of _trackCache) if (v.at < cutoff) _trackCache.delete(k);
+  }
+  return value;
+}
+
+// ── Payment reconciliation ───────────────────────────────────────────────
+// Answers "did Paystack take money we never turned into an order?" — the
+// recovery path for a webhook or verify that failed. Each orphan is checked
+// against Paystack itself so PAID (needs action) is separated from ABANDONED
+// (customer never completed; safe to dismiss).
+app.get('/api/admin/payments/orphans', requireAdmin, async (req, res) => {
+  try {
+    const orphans = await db.pendingPayments.listOrphans({
+      olderThanMinutes: Math.max(1, parseInt(req.query.minutes, 10) || 15),
+      limit: Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 25)),
+    });
+    const out = [];
+    for (const o of orphans) {
+      let paid = null, paystackAmount = null, channel = null;
+      if (PAYSTACK_SECRET_KEY) {
+        try {
+          const ver = await paystackApi('/transaction/verify/' + encodeURIComponent(o.reference));
+          if (ver && ver.status && ver.data) {
+            paid = ver.data.status === 'success';
+            paystackAmount = ver.data.amount != null ? ver.data.amount / 100 : null;
+            channel = ver.data.channel || null;
+          }
+        } catch (_) { /* unknown — shown as such, never guessed */ }
+      }
+      const d = o.draft || {};
+      out.push({
+        reference: o.reference, createdAt: o.createdAt, userId: o.userId,
+        amount: o.amount, paid, paystackAmount, channel,
+        customer: d.customer || '', phone: d.phone || '',
+        neighborhood: d.neighborhood || '', address: d.address || '',
+        itemCount: Array.isArray(d.items) ? d.items.length : 0,
+        items: Array.isArray(d.items) ? d.items.slice(0, 40).map((i) => ({ id: i.id, name: i.name || ('#' + i.id), qty: i.qty || 1 })) : [],
+      });
+    }
+    res.json(out);
+  } catch (e) { fail(res, e, req); }
+});
+
+// Turn a stranded draft into a real order — but ONLY after Paystack confirms
+// the money was actually collected. Never create a free order by hand.
+app.post('/api/admin/payments/orphans/:reference/recover', requireAdmin, async (req, res) => {
+  const reference = req.params.reference;
+  try {
+    const existing = await db.orders.findByPaystackRef(reference);
+    if (existing) return res.status(409).json({ error: 'An order already exists for this payment', id: existing.id });
+    const pending = await db.pendingPayments.get(reference);
+    if (!pending || !pending.draft) return res.status(404).json({ error: 'No stored draft for this reference' });
+    if (!PAYSTACK_SECRET_KEY) return res.status(503).json({ error: 'Paystack is not configured — cannot confirm payment' });
+    const ver = await paystackApi('/transaction/verify/' + encodeURIComponent(reference));
+    if (!ver || !ver.status || !ver.data || ver.data.status !== 'success') {
+      return res.status(400).json({ error: 'Paystack does not report this payment as successful — not recovering' });
+    }
+    const reqUser = pending.userId ? await db.users.get(pending.userId) : null;
+    const result = await createOrderFromBody(reqUser, pending.draft, {
+      paid: true, paystackRef: reference, locked: pending.draft._locked || null,
+    });
+    await db.pendingPayments.delete(reference);
+    res.json({ ok: true, id: result.id, total: result.total });
+  } catch (e) {
+    // Admin-only diagnostic: the detail is what makes a stuck payment fixable,
+    // so it is kept here rather than genericised — but it is now recorded too.
+    console.error('orphan recovery failed for ' + reference + ':', e.message);
+    db.errorLog.record({ message: 'orphan recovery failed for ' + reference + ': ' + e.message, stack: e.stack || '', path: '/api/admin/payments/orphans/recover', method: 'POST', status: 500, userId: req.user ? req.user.id : null }).catch(() => {});
+    if (Sentry) { try { Sentry.captureException(e); } catch (_) {} }
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Discard an abandoned checkout. Refuses while Paystack still reports the
+// payment as successful, so money that was taken cannot be tidied away.
+app.delete('/api/admin/payments/orphans/:reference', requireAdmin, async (req, res) => {
+  const reference = req.params.reference;
+  try {
+    if (PAYSTACK_SECRET_KEY) {
+      const ver = await paystackApi('/transaction/verify/' + encodeURIComponent(reference));
+      if (ver && ver.status && ver.data && ver.data.status === 'success') {
+        return res.status(409).json({ error: 'This payment succeeded — recover it into an order instead of dismissing it.' });
+      }
+    }
+    const row = await db.pendingPayments.get(reference);
+    if (row && row.draft && row.draft._reserved) await releaseReservation(row.draft._reserved);
+    await db.pendingPayments.delete(reference);
+    res.json({ ok: true });
+  } catch (e) { fail(res, e, req); }
+});
 
 // ── Recurring orders (auto-reorder) ──────────────────────────────────────
 // Places any recurring order whose next_run_at has arrived, reusing the same
@@ -734,12 +1295,17 @@ app.post('/api/orders', async (req, res) => {
   try {
     const result = await createOrderFromBody(req.user, req.body, { paid: false });
     res.status(201).json(result);
-  } catch (e) { console.error('order create failed:', e); res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    if (e && e.status) return res.status(e.status).json({ error: e.message, unavailable: e.unavailable || [] });
+    console.error('order create failed:', e);
+    await db.errorLog.record({ message: 'order create failed: ' + e.message, stack: e.stack || '', path: '/api/orders', method: 'POST', status: 500, userId: req.user ? req.user.id : null });
+    res.status(500).json({ error: 'We could not place your order. Please try again.' });
+  }
 });
 
 app.put('/api/orders/:id', requireAdmin, async (req, res) => {
   try { await db.orders.update(req.params.id, req.body || {}); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 app.get('/api/orders/:id', requireAdmin, async (req, res) => {
@@ -747,13 +1313,13 @@ app.get('/api/orders/:id', requireAdmin, async (req, res) => {
     const o = await db.orders.get(req.params.id);
     if (!o) return res.status(404).json({ error: 'Not found' });
     res.json(o);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // Admin: delete an order
 app.delete('/api/orders/:id', requireAdmin, async (req, res) => {
   try { await db.sb.from('orders').delete().eq('id', req.params.id); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 // ── Paystack: online payment (card + mobile money) ───────────────────────
@@ -767,10 +1333,31 @@ app.get('/api/paystack/config', (req, res) => {
 //    payment is confirmed.
 app.post('/api/paystack/init', async (req, res) => {
   if (!PAYSTACK_SECRET_KEY) return res.status(503).json({ error: 'Online payment is not configured' });
+  if (!(await switchOn('online_payment_enabled'))) return res.status(503).json({ error: 'Online payment is temporarily unavailable — please choose Cash on Delivery.' });
+  if (!(await switchOn('ordering_enabled'))) return res.status(503).json({ error: 'We have paused new orders for a short while. Please try again soon.' });
   const { email, draft } = req.body || {};
   if (!draft || !Array.isArray(draft.items) || !draft.items.length) return res.status(400).json({ error: 'Empty order' });
   // Amount is computed server-side from the cart — never trust the client amount.
-  const pricing = await computeOrderPricing(req.user, draft);
+  // Give this customer back anything they reserved on a checkout they walked
+  // away from, before pricing the new one.
+  await releaseStaleReservations(req.user ? req.user.id : null);
+  // Validate before charging: taking money for an order that cannot be created
+  // is the worst possible ordering of these two steps.
+  try { validateDelivery(draft); }
+  catch (e) { if (e && e.status) return res.status(e.status).json({ error: e.message, missing: e.missing || [] }); throw e; }
+  let pricing;
+  try { pricing = await computeOrderPricing(req.user, draft); }
+  catch (e) { if (e && e.status) return res.status(e.status).json({ error: e.message, unavailable: e.unavailable || [] }); throw e; }
+  // Resolve the birthday gift here too, so the locked item list is complete.
+  let giftYear = null;
+  if (req.user && draft.birthdayGift) {
+    const { cfg, eligible, year } = await birthdayGiftStatus(req.user);
+    const gid = parseInt(draft.birthdayGift, 10);
+    if (eligible && (cfg.productIds || []).map(Number).includes(gid)) {
+      const gp = await db.products.get(gid);
+      if (gp) { pricing.items.push({ id: gp.id, name: gp.name, category: gp.category, unit: gp.unit, qty: 1, price: 0, birthdayGift: true }); giftYear = year; }
+    }
+  }
   const ghs = pricing.total;
   if (!(ghs > 0)) return res.status(400).json({ error: 'Invalid amount' });
   const customerEmail = (email && /\S+@\S+\.\S+/.test(email)) ? email
@@ -780,14 +1367,35 @@ app.post('/api/paystack/init', async (req, res) => {
   try {
     const init = await paystackApi('/transaction/initialize', 'POST', {
       email: customerEmail,
-      amount: Math.round(ghs * 100), // pesewas
+      amount: Math.round(pricing.total * 100), // pesewas — the reserved-adjusted total
       currency: 'GHS',
       reference,
       channels: ['mobile_money', 'card'],
-      metadata: { order_for: draft.customer || '', phone: draft.phone || '' },
+      // Last-resort recovery copy: if our pending_payments draft is ever lost,
+      // the order can still be reconstructed from Paystack's own record.
+      metadata: {
+        order_for: draft.customer || '', phone: draft.phone || '',
+        neighborhood: draft.neighborhood || '',
+        items: (pricing.items || []).map((i) => i.id + 'x' + i.qty).join(',').slice(0, 900),
+      },
     });
     if (!init || !init.status || !init.data) return res.status(502).json({ error: (init && init.message) || 'Could not start payment' });
-    await db.pendingPayments.create(reference, req.user ? req.user.id : null, draft, ghs);
+    // Take the value NOW, while the price is locked and before the customer is
+    // charged, so a second checkout cannot spend the same credit. Released by
+    // releaseStaleReservations() / the verify failure path if they never pay.
+    let reserved;
+    try {
+      reserved = await reserveForCheckout(req.user, pricing, giftYear);
+    } catch (e) {
+      return res.status(409).json({ error: e.message || 'Could not hold your credit — please try again' });
+    }
+    const lockedDraft = { ...draft, _reserved: reserved, _locked: { pricing, giftYear } };
+    try {
+      await db.pendingPayments.create(reference, req.user ? req.user.id : null, lockedDraft, pricing.total);
+    } catch (e) {
+      await releaseReservation(reserved);   // nothing is charged yet — give it straight back
+      throw e;
+    }
     res.json({ reference, accessCode: init.data.access_code, publicKey: PAYSTACK_PUBLIC_KEY });
   } catch (e) { console.error('paystack init failed:', e.message); res.status(500).json({ error: 'Payment init failed' }); }
 });
@@ -803,16 +1411,38 @@ app.post('/api/paystack/verify', async (req, res) => {
 
     const ver = await paystackApi('/transaction/verify/' + encodeURIComponent(reference));
     if (!ver || !ver.status || !ver.data || ver.data.status !== 'success') {
+      // Not paid: hand back the loyalty and perks reserved at init straight
+      // away, rather than leaving the customer's credit locked up.
+      const failed = await db.pendingPayments.get(reference);
+      if (failed && failed.draft && failed.draft._reserved) {
+        await releaseReservation(failed.draft._reserved);
+        await db.pendingPayments.delete(reference);
+      }
       return res.status(400).json({ error: 'Payment was not completed' });
     }
     const pending = await db.pendingPayments.get(reference);
     const draft = (pending && pending.draft) || req.body.draft;
     if (!draft) return res.status(400).json({ error: 'Order details not found' });
     const reqUser = pending && pending.userId ? await db.users.get(pending.userId) : req.user;
-    const result = await createOrderFromBody(reqUser, draft, { paid: true, paystackRef: reference });
+    // Use the price locked at init — never recompute against a catalogue that
+    // may have changed while the customer was approving on their phone (C-07).
+    const result = await createOrderFromBody(reqUser, draft, {
+      paid: true, paystackRef: reference, locked: draft._locked || null,
+    });
+    // The charge and the stored order must agree. If they ever diverge, say so
+    // loudly rather than letting it settle quietly into the books.
+    const charged = ver.data.amount != null ? ver.data.amount / 100 : null;
+    if (charged != null && Math.abs(charged - Number(result.total || 0)) > 0.005) {
+      const msg = 'PAYMENT MISMATCH — ref ' + reference + ' charged GHS ' + charged.toFixed(2)
+        + ' but order ' + result.id + ' totals GHS ' + Number(result.total || 0).toFixed(2);
+      console.error(msg);
+      await db.errorLog.record({ message: msg, path: '/api/paystack/verify', method: 'POST', status: 500 });
+      if (Sentry) { try { Sentry.captureException(new Error(msg)); } catch (_) {} }
+      notifyAdmins({ title: '⚠️ Payment mismatch', body: msg.slice(0, 120), url: '/admin', tag: 'admin-mismatch-' + reference }).catch(() => {});
+    }
     await db.pendingPayments.delete(reference);
     res.json(result);
-  } catch (e) { console.error('paystack verify failed:', e.message); res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req, '/api/paystack/verify'); }
 });
 
 // 3) Webhook safety net — if the customer paid but never hit verify (closed
@@ -831,13 +1461,39 @@ app.post('/api/paystack/webhook', async (req, res) => {
         const pending = await db.pendingPayments.get(ref);
         if (pending && pending.draft) {
           const reqUser = pending.userId ? await db.users.get(pending.userId) : null;
-          await createOrderFromBody(reqUser, pending.draft, { paid: true, paystackRef: ref });
+          await createOrderFromBody(reqUser, pending.draft, {
+            paid: true, paystackRef: ref, locked: pending.draft._locked || null,
+          });
           await db.pendingPayments.delete(ref);
+        } else {
+          // Paid, but the draft is gone and no order exists — a retry can never
+          // fix this, so we still ACK (200 below) to stop Paystack looping on
+          // something unrecoverable. This needs a human: the customer has been
+          // charged and has no order. Make it impossible to miss.
+          const msg = 'PAID BUT NO ORDER — Paystack ref ' + ref + ' has no pending draft and no order. Customer was charged; refund or create the order manually.';
+          console.error(msg);
+          await db.errorLog.record({ message: msg, path: '/api/paystack/webhook', method: 'POST', status: 500 });
+          if (Sentry) { try { Sentry.captureException(new Error(msg)); } catch (_) {} }
+          notifyAdmins({ title: '⚠️ Paid but no order', body: 'Ref ' + ref + ' — customer charged, no order created. Check Admin → Errors.', url: '/admin', tag: 'admin-payment-orphan-' + ref }).catch(() => {});
         }
       }
     }
     res.sendStatus(200);
-  } catch (e) { console.error('paystack webhook error:', e.message); res.sendStatus(200); }
+  } catch (e) {
+    // MUST be 500, never 200. A 2xx tells Paystack the event was durably
+    // handled and it will never resend it — silently losing a paid order on a
+    // transient failure (DB blip, timeout). A 500 makes Paystack retry on its
+    // own backoff schedule, which recovers exactly those cases.
+    // Safe to retry: the findByPaystackRef guard above means a retry that
+    // arrives after the order was created finds it and skips.
+    console.error('paystack webhook error:', e.message);
+    await db.errorLog.record({
+      message: 'paystack webhook failed (Paystack will retry): ' + e.message,
+      stack: e.stack || '', path: '/api/paystack/webhook', method: 'POST', status: 500,
+    });
+    if (Sentry) { try { Sentry.captureException(e); } catch (_) {} }
+    res.sendStatus(500);
+  }
 });
 
 // Admin: manually assign (or reassign / unassign) an order to a rider
@@ -855,7 +1511,7 @@ app.post('/api/admin/orders/:id/assign', requireAdmin, async (req, res) => {
       });
     }
     res.json(o);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Auth: signup / login / logout / me ───────────────────────────────────
@@ -886,10 +1542,7 @@ app.post('/api/auth/signup', async (req, res) => {
     u.emailVerified = true;
     const token = await db.sessions.create(u.id);
     res.status(201).json({ user: publicUser(u), token, message: 'Account created — welcome to SDGMart!' });
-  } catch (e) {
-    console.error('signup failed:', e);
-    res.status(500).json({ error: e.message || 'Signup failed' });
-  }
+  } catch (e) { fail(res, e, req, '/api/auth/signup'); }
 });
 
 const LOGIN_LIMIT = { windowMs: 5 * 60 * 1000, max: 5, blockMs: 15 * 60 * 1000 };
@@ -916,7 +1569,7 @@ app.post('/api/auth/login', async (req, res) => {
     db.rateClear(key);
     const token = await db.sessions.create(u.id, userType);
     res.json({ user: publicUser(u), token });
-  } catch (e) { console.error('login failed:', e); res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req, '/api/auth/login'); }
 });
 
 app.post('/api/auth/logout', async (req, res) => {
@@ -952,7 +1605,7 @@ app.get('/api/auth/verify', async (req, res) => {
   res.send('<h2 style="font-family:sans-serif;max-width:480px;margin:60px auto;color:#000">✅ Email verified.</h2><p style="font-family:sans-serif;max-width:480px;margin:0 auto;color:#666">You can return to SDGMart and continue shopping.</p>');
 });
 
-app.post('/api/auth/resend-verification', requireAuth, async (req, res) => {
+app.post('/api/auth/resend-verification', requireAuth, customerOnly, async (req, res) => {
   if (req.user.emailVerified) return res.json({ ok: true, alreadyVerified: true });
   const verifyToken = await db.makeEmailToken(req.user.id, 'verify');
   const verifyLink = `${req.protocol}://${req.get('host')}/api/auth/verify?token=${verifyToken}`;
@@ -967,7 +1620,8 @@ app.post('/api/auth/resend-verification', requireAuth, async (req, res) => {
     text: `Verify your email: ${verifyLink}`,
   });
   if (emailResult.skipped) console.log(`✉️  (no email config) re-sent for ${req.user.email}: ${verifyLink}`);
-  res.json({ ok: true, emailSent: !!emailResult.ok, verificationLink: emailResult.skipped ? verifyLink : undefined });
+  if (emailResult.skipped && process.env.NODE_ENV !== 'production') console.log('[dev] verification link:', verifyLink);
+  res.json({ ok: true, emailSent: !!emailResult.ok });
 });
 
 // ── Password reset ───────────────────────────────────────────────────────
@@ -994,8 +1648,13 @@ app.post('/api/auth/forgot-password', async (req, res) => {
       text: `Reset your SDGMart password: ${link}`,
     });
     if (emailResult.skipped) console.log(`🔑 (no email config) reset for ${u.email}: ${link}`);
-    res.json({ ok: true, emailSent: !!emailResult.ok, resetLink: emailResult.skipped ? link : undefined });
-  } catch (e) { console.error('forgot-password failed:', e); res.status(500).json({ error: e.message }); }
+    // Returning the link when RESEND_API_KEY is unset made forgot-password an
+    // unauthenticated password-reset oracle for any address, including admin.
+    if (emailResult.skipped && process.env.NODE_ENV !== 'production') console.log('[dev] password reset link:', link);
+    // Identical to the not-found and rate-limited branches above: three
+    // distinguishable responses were themselves an account-enumeration oracle.
+    res.json({ ok: true });
+  } catch (e) { fail(res, e, req, '/api/auth/forgot-password'); }
 });
 
 app.post('/api/auth/reset-password', async (req, res) => {
@@ -1009,10 +1668,13 @@ app.post('/api/auth/reset-password', async (req, res) => {
     await db.users.changePassword(result.userId, newPassword);
     await db.sessions.destroyAllForUser(result.userId);
     res.json({ ok: true });
-  } catch (e) { console.error('reset-password failed:', e); res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req, '/api/auth/reset-password'); }
 });
 
-app.post('/api/auth/change-password', requireAuth, async (req, res) => {
+// customerOnly (not just requireAuth): riders have their own id space, so a
+// rider reaching db.users.changePassword(req.user.id) would overwrite the
+// UNRELATED customer holding that same numeric id.
+app.post('/api/auth/change-password', requireAuth, customerOnly, async (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
   if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Both passwords required' });
   if (!db.verifyPassword(currentPassword, req.user.passwordHash)) return res.status(401).json({ error: 'Current password is incorrect' });
@@ -1023,19 +1685,19 @@ app.post('/api/auth/change-password', requireAuth, async (req, res) => {
     await db.sessions.destroyAllForUser(req.user.id);
     const token = await db.sessions.create(req.user.id);
     res.json({ ok: true, token });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
-app.get('/api/users/:id', requireAuth, async (req, res) => {
+app.get('/api/users/:id', requireAuth, customerOnly, async (req, res) => {
   if (String(req.user.id) !== String(req.params.id) && req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
   try {
     const u = await db.users.get(req.params.id);
     if (!u) return res.status(404).json({ error: 'Not found' });
     res.json(publicUser(u));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
-app.get('/api/squads/:userId', requireAuth, async (req, res) => {
+app.get('/api/squads/:userId', requireAuth, customerOnly, async (req, res) => {
   if (String(req.user.id) !== String(req.params.userId) && req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
   try {
     const u = await db.users.get(req.params.userId);
@@ -1044,20 +1706,50 @@ app.get('/api/squads/:userId', requireAuth, async (req, res) => {
       id: m.id, name: m.name, totalSpent: m.totalSpent || 0, discountPending: !!m.discountPending, isYou: m.id === u.id,
     }));
     res.json({ me: publicUser(u), referralCode: u.refCode, squadCode: u.squadCode, members, goal: 500 });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Persistent cart (signed-in; a customer's cart follows them across devices) ──
+// ── Data-subject requests (audit H-01) ───────────────────────────────────
+// The privacy notice promises both of these; neither existed.
+app.get('/api/me/export', requireAuth, async (req, res) => {
+  try {
+    const data = await db.dataRequests.exportForUser(req.user.id);
+    if (!data) return res.status(404).json({ error: 'Account not found' });
+    res.setHeader('Content-Disposition', 'attachment; filename="sdgmart-my-data.json"');
+    res.json(data);
+  } catch (e) { fail(res, e, req, '/api/me/export'); }
+});
+
+// Erasure is irreversible, so it requires the account password — or, for a
+// Google-only account with no password set, an explicit typed confirmation.
+app.post('/api/me/delete-account', requireAuth, async (req, res) => {
+  const { password, confirm } = req.body || {};
+  try {
+    const hasPassword = !!req.user.passwordHash;
+    if (hasPassword) {
+      if (!password || !db.verifyPassword(password, req.user.passwordHash)) {
+        return res.status(401).json({ error: 'Password is incorrect' });
+      }
+    } else if (String(confirm || '').trim().toUpperCase() !== 'DELETE') {
+      return res.status(400).json({ error: 'Type DELETE to confirm' });
+    }
+    await db.dataRequests.eraseUser(req.user.id);
+    console.warn('account erased on request: user ' + req.user.id);
+    res.json({ ok: true });
+  } catch (e) { fail(res, e, req, '/api/me/delete-account'); }
+});
+
 app.get('/api/me/cart', requireAuth, async (req, res) => {
   try { res.json({ items: await db.carts.get(req.user.id) }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.put('/api/me/cart', requireAuth, async (req, res) => {
   try {
     const items = Array.isArray(req.body && req.body.items) ? req.body.items.slice(0, 100) : [];
     await db.carts.save(req.user.id, items);
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Web Push ─────────────────────────────────────────────────────────────
@@ -1071,7 +1763,7 @@ async function pushToUser(userId, payload) {
     const subs = await db.pushSubs.forUser(userId);
     await Promise.all(subs.map(async (sub) => {
       try {
-        await webpush.sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, JSON.stringify(payload));
+        await withTimeout(webpush.sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, JSON.stringify(payload)), 10000, 'push send');
       } catch (e) {
         if (e.statusCode === 404 || e.statusCode === 410) await db.pushSubs.remove(sub.endpoint);
         else console.warn('push send failed:', e.statusCode, e.body);
@@ -1094,12 +1786,32 @@ async function notifyAdmins(payload) {
 // guarded by an app_config date-marker so the work happens at most once a day.
 let _dailyJobRunning = false;
 async function runDailyJobs() {
+  // Set synchronously, BEFORE any await. The old order set this flag after the
+  // config read, so two concurrent /healthz hits both got past it.
   if (_dailyJobRunning) return;
+  _dailyJobRunning = true;
   const today = new Date().toISOString().slice(0, 10);
   try {
-    if ((await db.appConfig.get('daily_job_last_run')) === today) return;
-    _dailyJobRunning = true;
-    await db.appConfig.set('daily_job_last_run', today);
+    // Claim the day in the database, not in memory. The in-process flag only
+    // guards one process; this is what actually decides the winner when
+    // UptimeRobot and a real visitor arrive together, or when there is ever
+    // more than one instance. Exactly one caller gets true (A-08).
+    if (!(await db.appConfig.claim('daily_job_last_run', today))) { _dailyJobRunning = false; return; }
+    // Release loyalty held by checkouts nobody came back to. releaseStale-
+    // Reservations covers the customer who returns; this covers the one who
+    // never does, so their credit is not locked up indefinitely.
+    try {
+      const abandoned = await db.pendingPayments.listOrphans({ olderThanMinutes: 24 * 60, limit: 50 });
+      for (const row of abandoned) {
+        if (!row.draft || !row.draft._reserved) continue;
+        if (PAYSTACK_SECRET_KEY) {
+          const ver = await paystackApi('/transaction/verify/' + encodeURIComponent(row.reference));
+          if (ver && ver.status && ver.data && ver.data.status === 'success') continue; // paid — leave for recovery
+        }
+        await releaseReservation(row.draft._reserved);
+        await db.pendingPayments.delete(row.reference);
+      }
+    } catch (e) { console.warn('abandoned-reservation sweep failed:', e.message); }
     const now = new Date();
     const m = now.getMonth() + 1, d = now.getDate(), year = now.getFullYear();
     const isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
@@ -1125,11 +1837,11 @@ app.get('/api/push/vapid-public-key', (req, res) => {
   if (!VAPID) return res.status(503).json({ error: 'Push not configured' });
   res.json({ publicKey: VAPID.publicKey });
 });
-app.post('/api/push/subscribe', requireAuth, async (req, res) => {
+app.post('/api/push/subscribe', requireAuth, customerOnly, async (req, res) => {
   const sub = req.body && req.body.subscription;
   if (!sub || !sub.endpoint || !sub.keys) return res.status(400).json({ error: 'Invalid subscription' });
   try { await db.pushSubs.add(req.user.id, sub); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.post('/api/push/unsubscribe', async (req, res) => {
   const endpoint = req.body && req.body.endpoint;
@@ -1140,7 +1852,7 @@ app.post('/api/push/unsubscribe', async (req, res) => {
 // ── Riders ───────────────────────────────────────────────────────────────
 app.get('/api/admin/riders', requireAdmin, async (req, res) => {
   try { res.json(await db.riders.list()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.post('/api/admin/riders', requireAdmin, async (req, res) => {
   const { name, email, phone, password } = req.body || {};
@@ -1155,7 +1867,7 @@ app.post('/api/rider/location', riderOnly, async (req, res) => {
   const { lat, lng } = req.body || {};
   if (typeof lat !== 'number' || typeof lng !== 'number') return res.status(400).json({ error: 'lat/lng required' });
   try { await db.riders.setLocation(req.user.id, lat, lng); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 app.post('/api/rider/online', riderOnly, async (req, res) => {
@@ -1173,12 +1885,12 @@ app.post('/api/rider/online', riderOnly, async (req, res) => {
       }
     }
     res.json({ ok: true, online: !!online });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 app.get('/api/rider/orders', riderOnly, async (req, res) => {
   try { await db.orders.assignQueuedForToday(); res.json(await db.orders.forRider(req.user.id)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 app.post('/api/rider/orders/:id/status', riderOnly, async (req, res) => {
@@ -1197,7 +1909,7 @@ app.post('/api/rider/orders/:id/status', riderOnly, async (req, res) => {
       }
     }
     res.json(o);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // Customer: list my own orders
@@ -1210,22 +1922,37 @@ app.get('/api/me/orders', requireAuth, async (req, res) => {
     // Mode recipient the link without an account).
     const out = db.rowsOut(data).map(o => ({ ...o, trackToken: orderTrackToken(o.id) }));
     res.json(out);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // Signed per-order track token so GUESTS can follow their order after closing
 // the app (no account, no session). Pure HMAC of the order id — nothing stored,
 // unguessable without the server secret, stable across restarts. Returned once
 // at order creation; the client keeps it in localStorage.
+// Guest tracking tokens are signed with their OWN secret. They used to derive
+// from SUPABASE_SERVICE_KEY, which meant rotating the most sensitive credential
+// you hold broke every tracking link a guest had saved and every code printed on
+// a WhatsApp receipt — a customer-visible cost attached to the one action you
+// most need to take quickly during an incident.
+//
+// Falls back to the service key when TRACK_TOKEN_SECRET is unset, so existing
+// tokens keep working; set the env var to decouple them for good.
+const TRACK_SECRET = process.env.TRACK_TOKEN_SECRET || process.env.SUPABASE_SERVICE_KEY || '';
+if (!process.env.TRACK_TOKEN_SECRET) {
+  console.warn('\u26a0\ufe0f  TRACK_TOKEN_SECRET is not set \u2014 guest tracking tokens are derived from');
+  console.warn('   SUPABASE_SERVICE_KEY, so rotating that key will invalidate every saved');
+  console.warn('   tracking link. Set TRACK_TOKEN_SECRET to decouple them.');
+}
+
 function orderTrackToken(orderId) {
-  return require('crypto').createHmac('sha256', process.env.SUPABASE_SERVICE_KEY)
+  return require('crypto').createHmac('sha256', TRACK_SECRET)
     .update('track:' + String(orderId)).digest('hex').slice(0, 20);
 }
 app.get('/api/orders/:id/tracking', async (req, res) => {
   try {
     const tokenOk = req.query.t && String(req.query.t) === orderTrackToken(req.params.id);
     if (!tokenOk && !req.user) return res.status(401).json({ error: 'Sign in required' });
-    const t = await db.orders.getWithTracking(req.params.id);
+    const t = await getTrackingCached(req.params.id);
     if (!t) return res.status(404).json({ error: 'Order not found' });
     // Guest links stop working 7 days after delivery, so an old shared link
     // can't expose the customer's name/address forever. Signed-in owners are
@@ -1243,11 +1970,11 @@ app.get('/api/orders/:id/tracking', async (req, res) => {
     }
     if (!tokenOk) {
       const isOwner = String(t.order.userId) === String(req.user.id);
-      const isRider = String(t.order.riderId) === String(req.user.id);
+      const isRider = req.user.role === 'rider' && String(t.order.riderId) === String(req.user.id);
       if (!isOwner && !isRider && req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
     }
     res.json(t);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Search analytics ─────────────────────────────────────────────────────
@@ -1258,17 +1985,17 @@ app.post('/api/search/log', async (req, res) => {
 });
 app.get('/api/admin/search/top', requireAdmin, async (req, res) => {
   try { res.json(await db.searchLog.topQueries({ days: parseInt(req.query.days) || 30, limit: parseInt(req.query.limit) || 20 })); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.get('/api/admin/search/unmatched', requireAdmin, async (req, res) => {
   try { res.json(await db.searchLog.unmatchedQueries({ days: parseInt(req.query.days) || 30, limit: parseInt(req.query.limit) || 20 })); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 // ── Saved addresses ──────────────────────────────────────────────────────
 app.get('/api/me/addresses', requireAuth, async (req, res) => {
   try { res.json(await db.addresses.list(req.user.id)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.post('/api/me/addresses', requireAuth, async (req, res) => {
   try { res.json(await db.addresses.create(req.user.id, req.body || {})); }
@@ -1280,7 +2007,7 @@ app.put('/api/me/addresses/:id', requireAuth, async (req, res) => {
 });
 app.delete('/api/me/addresses/:id', requireAuth, async (req, res) => {
   try { await db.addresses.delete(req.user.id, req.params.id); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 // Update profile (name + phone; birthday is captured ONCE then locked)
@@ -1300,24 +2027,24 @@ app.put('/api/me/profile', requireAuth, async (req, res) => {
     const { data, error } = await db.sb.from('users').update(patch).eq('id', req.user.id).select().single();
     if (error) throw error;
     res.json(db.rowOut(data));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Reviews ──────────────────────────────────────────────────────────────
 app.get('/api/products/:id/reviews', async (req, res) => {
   try { res.json(await db.reviews.forProduct(req.params.id)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.get('/api/products/reviews/summary', async (req, res) => {
   // ?ids=1,2,3
   try {
     const ids = String(req.query.ids || '').split(',').map(s => parseInt(s)).filter(Boolean);
     res.json(await db.reviews.summaryForProducts(ids));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 app.get('/api/me/pending-reviews', requireAuth, async (req, res) => {
   try { res.json(await db.reviews.pendingForUser(req.user.id)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.post('/api/me/reviews', requireAuth, async (req, res) => {
   const { productId, orderId, rating, message } = req.body || {};
@@ -1345,7 +2072,7 @@ app.post('/api/me/orders/:id/report-issue', requireAuth, async (req, res) => {
     const rep = await db.issueReports.create({ orderId: o.id, userId: req.user.id, issueType, description });
     notifyAdmins({ title: '⚠️ Order issue reported', body: 'Order #' + o.id + ': ' + String(description).slice(0, 80), url: '/admin', tag: 'admin-issue-' + o.id }).catch(() => {});
     res.json(rep);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 // General feedback / complaints (no order attached) — appear in Admin → Issues.
 // Requires supabase-schema-feedback.sql (issue_reports.order_id made nullable).
@@ -1365,11 +2092,11 @@ app.post('/api/feedback', requireAuth, async (req, res) => {
 });
 app.get('/api/admin/issue-reports', requireAdmin, async (req, res) => {
   try { res.json(await db.issueReports.listAll()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.put('/api/admin/issue-reports/:id/resolve', requireAdmin, async (req, res) => {
   try { await db.issueReports.resolve(req.params.id, (req.body && req.body.note) || ''); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 // ── Cancel order (customer, within 15 min of placement) ──────────────────
@@ -1381,6 +2108,24 @@ app.post('/api/me/orders/:id/cancel', requireAuth, async (req, res) => {
 
 // ── Health check (for UptimeRobot / load balancers) ──────────────────────
 // Lightweight: no DB hit, returns instantly so pings are cheap.
+// Liveness (/healthz) says the process is up. Readiness says the app can
+// actually serve — which is a different question, because every route depends on
+// Supabase. /healthz deliberately does no DB work: it is pinged every five
+// minutes and drives the daily job, so it must stay cheap. Point an uptime
+// monitor at BOTH: /healthz catches the process dying, /readyz catches the
+// database going away, which is the more likely outage and the one the old
+// setup could not see at all.
+app.get('/readyz', async (req, res) => {
+  const started = Date.now();
+  try {
+    await db.appConfig.get('daily_job_last_run');   // trivial, indexed, always present
+    res.json({ ok: true, db: 'up', ms: Date.now() - started });
+  } catch (e) {
+    console.error('readiness check failed:', e.message);
+    res.status(503).json({ ok: false, db: 'down', ms: Date.now() - started });
+  }
+});
+
 app.get('/healthz', (req, res) => { runDailyJobs(); res.json({ ok: true, ts: Date.now() }); });
 
 // ── Admin: operational metrics dashboard ─────────────────────────────────
@@ -1388,13 +2133,13 @@ app.get('/api/admin/metrics', requireAdmin, async (req, res) => {
   try {
     const days = Math.max(7, Math.min(90, parseInt(req.query.days) || 30));
     res.json(await db.metrics.overview({ days }));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Referral leaderboard ─────────────────────────────────────────────────
 app.get('/api/admin/leaderboard', requireAdmin, async (req, res) => {
   try { res.json(await db.leaderboard.topReferrers(parseInt(req.query.limit) || 10)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 // Public version (first names only) for the squad page gamification
 app.get('/api/leaderboard', async (req, res) => {
@@ -1406,7 +2151,7 @@ app.get('/api/leaderboard', async (req, res) => {
       name: (u.name || 'A friend').split(' ')[0],
       referralCount: u.referralCount,
     })));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Retention (admin) — returning vs new customers per month + lapsed list ──
@@ -1464,7 +2209,7 @@ app.get('/api/admin/retention', requireAdmin, async (req, res) => {
       }).sort((a, z) => z.daysSince - a.daysSince);
     }
     res.json({ months, lapsedAfterDays: LAPSED_AFTER_DAYS, lapsed });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 // Win-back push to selected lapsed customers (only lands for users with a
 // push subscription; pushToUser silently skips the rest).
@@ -1493,11 +2238,11 @@ app.post('/api/client-error', async (req, res) => {
 // ── Admin: error logs ────────────────────────────────────────────────────
 app.get('/api/admin/errors', requireAdmin, async (req, res) => {
   try { res.json(await db.errorLog.list(parseInt(req.query.limit) || 100)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.delete('/api/admin/errors', requireAdmin, async (req, res) => {
   try { await db.errorLog.clear(); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 // ── Live counter ─────────────────────────────────────────────────────────
@@ -1507,17 +2252,17 @@ app.get('/api/stats/delivered-count', async (req, res) => {
     // Show whichever is larger so the ticker shows from the very first order placed,
     // while still preferring the (more impressive) delivered count once it climbs.
     res.json({ count: Math.max(c.delivered, c.total), delivered: c.delivered, total: c.total });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Promotions ───────────────────────────────────────────────────────────
 app.get('/api/promotions/active', async (req, res) => {
   try { res.json(await db.promotions.listActive()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.get('/api/admin/promotions', requireAdmin, async (req, res) => {
   try { res.json(await db.promotions.listAll()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.post('/api/admin/promotions', requireAdmin, async (req, res) => {
   try { res.json(await db.promotions.create(req.body || {})); }
@@ -1525,7 +2270,7 @@ app.post('/api/admin/promotions', requireAdmin, async (req, res) => {
 });
 app.delete('/api/admin/promotions/:id', requireAdmin, async (req, res) => {
   try { await db.promotions.delete(req.params.id); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 // Publish + broadcast push notification to all subscribers
 app.post('/api/admin/promotions/:id/publish', requireAdmin, async (req, res) => {
@@ -1538,11 +2283,11 @@ app.post('/api/admin/promotions/:id/publish', requireAdmin, async (req, res) => 
         const { data: subs } = await db.sb.from('push_subscriptions').select('user_id, endpoint, keys');
         await Promise.all((subs || []).map(async s => {
           try {
-            await webpush.sendNotification({ endpoint: s.endpoint, keys: s.keys }, JSON.stringify({
+            await withTimeout(webpush.sendNotification({ endpoint: s.endpoint, keys: s.keys }, JSON.stringify({
               title: `⚡ ${promo.title}`,
               body: promo.description || `Up to ${promo.discountPercent}% off — limited time`,
               url: '/', tag: `promo-${promo.id}`,
-            }));
+            })), 10000, 'promo push');
           } catch (e) {
             if (e.statusCode === 404 || e.statusCode === 410) await db.pushSubs.remove(s.endpoint);
           }
@@ -1551,7 +2296,7 @@ app.post('/api/admin/promotions/:id/publish', requireAdmin, async (req, res) => 
       })().catch(e => console.warn('promo broadcast failed:', e.message));
     }
     res.json(promo);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Product requests ─────────────────────────────────────────────────────
@@ -1566,18 +2311,18 @@ app.post('/api/product-requests', async (req, res) => {
     });
     notifyAdmins({ title: '🔍 Product request', body: (name || 'Someone') + ' wants: ' + String(productName).slice(0, 70), url: '/admin', tag: 'admin-request' }).catch(() => {});
     res.json({ ok: true, id: r.id });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 app.get('/api/admin/product-requests', requireAdmin, async (req, res) => {
   try { res.json(await db.productRequests.listAll({ status: req.query.status || null })); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.put('/api/admin/product-requests/:id', requireAdmin, async (req, res) => {
   try {
     const patch = req.body || {};
     if (patch.status === 'contacted') patch.contactedAt = new Date().toISOString();
     res.json(await db.productRequests.update(req.params.id, patch));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Admin: upload product photo ──────────────────────────────────────────
@@ -1592,7 +2337,7 @@ app.post('/api/admin/upload-image', requireAdmin, async (req, res) => {
     if (buf.length > 1.5 * 1024 * 1024) return res.status(413).json({ error: 'image too large (max ~1.5MB)' });
     const url = await db.uploadProductPhoto(buf, mime);
     res.json({ url });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Admin: surprise extra on an order ────────────────────────────────────
@@ -1601,7 +2346,7 @@ app.post('/api/admin/orders/:id/surprise', requireAdmin, async (req, res) => {
   try {
     await db.sb.from('orders').update({ surprise_extra: String(note || '').slice(0, 200) }).eq('id', req.params.id);
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Delivery time slots (admin-configured, read by checkout) ─────────────
@@ -1609,7 +2354,7 @@ app.get('/api/delivery/slots', async (req, res) => {
   try {
     const slots = (await db.appConfig.get('delivery_slots')) || ['12:00-14:00', '14:00-16:00', '16:00-18:00'];
     res.json({ slots, maxDaysAhead: 7 });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── MoMo merchant numbers (admin-configured, read by checkout) ───────────
@@ -1618,7 +2363,7 @@ app.get('/api/momo/numbers', async (req, res) => {
   try {
     const cfg = (await db.appConfig.get('momo_numbers')) || {};
     res.json(cfg);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 app.post('/api/admin/momo/numbers', requireAdmin, async (req, res) => {
   const { mtn, telecel, at, name } = req.body || {};
@@ -1629,7 +2374,7 @@ app.post('/api/admin/momo/numbers', requireAdmin, async (req, res) => {
       mtn: clean(mtn), telecel: clean(telecel), at: clean(at), name: clean(name),
     });
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Store settings (admin-toggleable site behaviour) ─────────────────────
@@ -1640,12 +2385,28 @@ app.get('/api/admin/settings', requireAdmin, async (req, res) => {
       deductStock: !!(await db.appConfig.get('deduct_stock')),
       storeName: (await db.appConfig.get('store_name')) || 'SDGMart',
       deliverySlots: (await db.appConfig.get('delivery_slots')) || ['12:00-14:00', '14:00-16:00', '16:00-18:00'],
+      orderingEnabled: await switchOn('ordering_enabled'),
+      onlinePaymentEnabled: await switchOn('online_payment_enabled'),
+      loyaltyRedemptionEnabled: await switchOn('loyalty_redemption_enabled'),
     });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 app.post('/api/admin/settings', requireAdmin, async (req, res) => {
-  const { showFreshness, storeName, deliverySlots, deductStock } = req.body || {};
+  const { showFreshness, storeName, deliverySlots, deductStock,
+    orderingEnabled, onlinePaymentEnabled, loyaltyRedemptionEnabled } = req.body || {};
   try {
+    // Kill switches. Logged, because turning trading off is worth an audit trail.
+    for (const [k, v] of [['ordering_enabled', orderingEnabled],
+      ['online_payment_enabled', onlinePaymentEnabled],
+      ['loyalty_redemption_enabled', loyaltyRedemptionEnabled]]) {
+      if (v == null) continue;
+      await db.appConfig.set(k, !!v);
+      if (!v) {
+        const msg = 'KILL SWITCH: ' + k + ' turned OFF by admin ' + req.user.id;
+        console.warn(msg);
+        await db.errorLog.record({ message: msg, path: '/api/admin/settings', method: 'POST', status: 200, userId: req.user.id });
+      }
+    }
     if (showFreshness != null) await db.appConfig.set('show_freshness', !!showFreshness);
     if (deductStock != null) await db.appConfig.set('deduct_stock', !!deductStock);
     if (storeName != null) await db.appConfig.set('store_name', String(storeName).slice(0, 60));
@@ -1655,13 +2416,13 @@ app.post('/api/admin/settings', requireAdmin, async (req, res) => {
     }
     invalidateCatalog(); // show_freshness is baked into /data/products.js
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Birthday gifts (admin config + customer eligibility) ─────────────────
 app.get('/api/admin/birthday-gifts', requireAdmin, async (req, res) => {
   try { res.json((await db.appConfig.get('birthday_gifts')) || { enabled: false, productIds: [] }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.post('/api/admin/birthday-gifts', requireAdmin, async (req, res) => {
   const { enabled, productIds } = req.body || {};
@@ -1669,9 +2430,9 @@ app.post('/api/admin/birthday-gifts', requireAdmin, async (req, res) => {
     const ids = Array.isArray(productIds) ? productIds.map(n => parseInt(n, 10)).filter(Boolean).slice(0, 50) : [];
     await db.appConfig.set('birthday_gifts', { enabled: !!enabled, productIds: ids });
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
-app.get('/api/birthday/gifts', requireAuth, async (req, res) => {
+app.get('/api/birthday/gifts', requireAuth, customerOnly, async (req, res) => {
   try {
     const { cfg, eligible } = await birthdayGiftStatus(req.user);
     if (!eligible) return res.json({ eligible: false, products: [] });
@@ -1681,27 +2442,27 @@ app.get('/api/birthday/gifts', requireAuth, async (req, res) => {
       if (p && (p.stock == null || p.stock > 0)) products.push(p);
     }
     res.json({ eligible: products.length > 0, products });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Recurring orders ─────────────────────────────────────────────────────
 app.get('/api/me/recurring', requireAuth, async (req, res) => {
   try { res.json(await db.recurring.listForUser(req.user.id)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.post('/api/me/recurring', requireAuth, async (req, res) => {
   const { items, cadenceDays, nextRunAt, deliveryInfo } = req.body || {};
   if (!Array.isArray(items) || !items.length || !cadenceDays || !nextRunAt) return res.status(400).json({ error: 'items, cadenceDays, nextRunAt required' });
   try { res.json(await db.recurring.create({ userId: req.user.id, items, cadenceDays: parseInt(cadenceDays), nextRunAt, deliveryInfo })); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.put('/api/me/recurring/:id', requireAuth, async (req, res) => {
   try { res.json(await db.recurring.setActive(req.params.id, req.user.id, !!req.body.active)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.delete('/api/me/recurring/:id', requireAuth, async (req, res) => {
   try { await db.recurring.delete(req.params.id, req.user.id); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 // Service worker must never be cached long — browsers poll it to discover new
@@ -1719,13 +2480,14 @@ app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, 'terms.html'))
 app.get('/about', (req, res) => res.sendFile(path.join(__dirname, 'about.html')));
 
 // ── Block direct download of source, configs, docs, and schema ───────────
-// express.static(__dirname) below would otherwise serve server.js, database.js,
+// express.static(__dirname, { dotfiles: 'ignore' }) below would otherwise serve server.js, database.js,
 // HANDOFF.md, package.json, *.sql, etc. as plain text. The client only ever
 // needs the built bundle (/app.bundle.js), /data, /icons, the HTML, css, sw.js
 // and manifest — all of which are unaffected by this guard.
 app.use((req, res, next) => {
   const p = req.path;
-  if (/^\/(components|scripts)\//.test(p)
+  if (/(^|\/)\.[^\/]/.test(p)                       // any dot-segment: /.git/, /.env, /a/.ssh/…
+    || /^\/(components|scripts)\//.test(p)
     || /^\/(server|database|hooks|tweaks-panel|App)\.jsx?$/.test(p)
     || /^\/package(-lock)?\.json$/.test(p)
     || /\.(md|sql|log|sh|ya?ml|env)$/i.test(p)) {
@@ -1735,7 +2497,7 @@ app.use((req, res, next) => {
 });
 
 // ── Static files ─────────────────────────────────────────────────────────
-app.use('/icons', express.static(path.join(__dirname, 'icons')));
+app.use('/icons', express.static(path.join(__dirname, 'icons'), { dotfiles: 'ignore' }));
 app.use(express.static(__dirname, { index: 'SDGMart.html' }));
 
 // ── SPA client routes ────────────────────────────────────────────────────
@@ -1775,7 +2537,14 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception:', err);
   if (Sentry) { try { Sentry.captureException(err); } catch (_) {} }
-  db.errorLog.record({ message: 'uncaughtException: ' + err.message, stack: err.stack });
+  // Exit, do not continue. After an uncaught exception the stack unwound from
+  // somewhere unknown, leaving work half-finished; carrying on serves subtly
+  // wrong results indefinitely. Render restarts an exited process in seconds,
+  // so losing the in-flight requests is the cheaper trade. The delay gives the
+  // log write and the Sentry flush a chance to land first.
+  Promise.resolve(db.errorLog.record({ message: 'uncaughtException: ' + err.message, stack: err.stack }))
+    .catch(() => {})
+    .finally(() => setTimeout(() => process.exit(1), 500).unref());
 });
 
 // ── Startup ──────────────────────────────────────────────────────────────

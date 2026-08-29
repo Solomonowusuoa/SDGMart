@@ -363,8 +363,8 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   const setEditField = (k, v) => setEditDraft(d => ({ ...d, [k]: v }));
 
   const tabs = [
-    ['overview','📊 Overview'],['dashboard','📈 Dashboard'],['orders','📦 Orders'],['inventory','🏪 Inventory'],
-    ['expiry','⏰ Expiry'],['routes','🗺 Routes'],['riders','🛵 Riders'],
+    ['overview','📊 Overview'],['dashboard','📈 Dashboard'],['revenue','💰 Revenue'],['orders','📦 Orders'],['inventory','🏪 Inventory'],
+    ['expiry','⏰ Expiry'],['reconcile','💳 Reconcile'],['routes','🗺 Routes'],['riders','🛵 Riders'],
     ['promotions','⚡ Promotions'],['requests','🛒 Requests'],['issues','🚨 Issues'],
     ['analytics','🔎 Analytics'],['retention','🔁 Retention'],['leaderboard','🏆 Leaderboard'],['comms','📣 Comms'],
     ['errors','🐞 Errors'],['birthday','🎂 Birthday Gifts'],['settings','⚙️ Settings'],['security','🔐 Security'],
@@ -411,12 +411,67 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   }, []);
   React.useEffect(() => { if (adminTab === 'errors') loadErrors(); }, [adminTab, loadErrors]);
 
+  // ── Daily revenue / rider cash-up ────────────────────────────────────────
+  const [revDate, setRevDate] = React.useState(() => new Date().toISOString().slice(0, 10));
+  const [dayRev, setDayRev] = React.useState(null);
+  const [revLoading, setRevLoading] = React.useState(false);
+  const [revError, setRevError] = React.useState('');
+  const loadRevenue = React.useCallback(async (d) => {
+    setRevLoading(true); setRevError('');
+    try {
+      const r = await apiFetch('/api/admin/revenue?date=' + encodeURIComponent(d));
+      if (!r.ok) throw new Error('Could not load revenue');
+      setDayRev(await r.json());
+    } catch (e) { setRevError(e.message || 'Could not load revenue'); setDayRev(null); }
+    finally { setRevLoading(false); }
+  }, [apiFetch]);
+  React.useEffect(() => { if (adminTab === 'revenue') loadRevenue(revDate); }, [adminTab, revDate, loadRevenue]);
+
+  // ── Payment reconciliation ───────────────────────────────────────────────
+  const [orphans, setOrphans] = React.useState([]);
+  const [orphansLoading, setOrphansLoading] = React.useState(false);
+  const [orphansError, setOrphansError] = React.useState('');
+  const [orphanBusy, setOrphanBusy] = React.useState('');
+  const loadOrphans = React.useCallback(async () => {
+    setOrphansLoading(true); setOrphansError('');
+    try {
+      const r = await apiFetch('/api/admin/payments/orphans');
+      if (!r.ok) throw new Error('Could not load payments');
+      setOrphans(await r.json());
+    } catch (e) { setOrphansError(e.message || 'Could not load payments'); }
+    finally { setOrphansLoading(false); }
+  }, [apiFetch]);
+  React.useEffect(() => { if (adminTab === 'reconcile') loadOrphans(); }, [adminTab, loadOrphans]);
+  const recoverOrphan = async (ref) => {
+    if (!window.confirm('Create the real order for this payment? The customer has already been charged.')) return;
+    setOrphanBusy(ref);
+    try {
+      const r = await apiFetch('/api/admin/payments/orphans/' + encodeURIComponent(ref) + '/recover', { method: 'POST' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'Recovery failed');
+      alert('Order ' + window.orderCode(d.id) + ' created (GHS ' + Number(d.total || 0).toFixed(2) + ').');
+      loadOrphans(); loadOrders && loadOrders();
+    } catch (e) { alert(e.message); }
+    finally { setOrphanBusy(''); }
+  };
+  const dismissOrphan = async (ref) => {
+    if (!window.confirm('Discard this abandoned checkout? This only removes the saved basket, never a payment.')) return;
+    setOrphanBusy(ref);
+    try {
+      const r = await apiFetch('/api/admin/payments/orphans/' + encodeURIComponent(ref), { method: 'DELETE' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'Could not dismiss');
+      loadOrphans();
+    } catch (e) { alert(e.message); }
+    finally { setOrphanBusy(''); }
+  };
+
   // ── Settings tab state ──
-  const [settings, setSettings] = React.useState({ showFreshness: false, deductStock: false });
+  const [settings, setSettings] = React.useState({ showFreshness: false, deductStock: false, orderingEnabled: true, onlinePaymentEnabled: true, loyaltyRedemptionEnabled: true });
   const [settingsSaved, setSettingsSaved] = React.useState('');
   const [slotsText, setSlotsText] = React.useState('');
   const loadSettings = React.useCallback(() => {
-    apiFetch('/api/admin/settings').then(r => r.ok ? r.json() : {}).then(s => { setSettings({ showFreshness: !!s.showFreshness, deductStock: !!s.deductStock }); setSlotsText((s.deliverySlots || []).join('\n')); }).catch(() => {});
+    apiFetch('/api/admin/settings').then(r => r.ok ? r.json() : {}).then(s => { setSettings({ showFreshness: !!s.showFreshness, deductStock: !!s.deductStock, orderingEnabled: s.orderingEnabled !== false, onlinePaymentEnabled: s.onlinePaymentEnabled !== false, loyaltyRedemptionEnabled: s.loyaltyRedemptionEnabled !== false }); setSlotsText((s.deliverySlots || []).join('\n')); }).catch(() => {});
   }, []);
   React.useEffect(() => { if (adminTab === 'settings') loadSettings(); }, [adminTab, loadSettings]);
   const saveSettings = async (patch) => {
@@ -998,6 +1053,164 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                       <span style={{ color: 'var(--sage-dark)', fontWeight: 700 }}>Clearance: GHS {(p.price*(1-disc/100)).toFixed(2)} (-{disc}%)</span>
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 6 }}>BB: {new Date(p.bestBefore).toLocaleDateString('en-GB')} · Stock: {p.stock}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* REVENUE — a day's takings, split by how the money arrives */}
+        {adminTab === 'revenue' && (
+          <div>
+            <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Revenue &amp; rider cash-up</h2>
+            <p style={{ fontSize: 13, color: 'var(--warm-gray)', maxWidth: 660, lineHeight: 1.6, marginBottom: 18 }}>
+              Orders placed on the chosen day, excluding cancelled ones. <strong>Collected</strong> counts
+              only delivered cash orders — that is what each rider should have handed in. Anything not yet
+              delivered is listed as still out, not as money you hold.
+            </p>
+
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 18 }}>
+              <input type="date" value={revDate} onChange={(e) => setRevDate(e.target.value)}
+                style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid var(--cream-dark)', fontSize: 13 }} />
+              <button onClick={() => setRevDate(new Date().toISOString().slice(0, 10))}
+                style={{ background: 'var(--cream-dark)', borderRadius: 8, padding: '9px 14px', fontSize: 13, fontWeight: 600 }}>Today</button>
+              <button onClick={() => setRevDate(new Date(Date.now() - 86400000).toISOString().slice(0, 10))}
+                style={{ background: 'var(--cream-dark)', borderRadius: 8, padding: '9px 14px', fontSize: 13, fontWeight: 600 }}>Yesterday</button>
+              <button onClick={() => loadRevenue(revDate)} disabled={revLoading}
+                style={{ background: 'var(--sage-dark)', color: '#fff', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 600, opacity: revLoading ? .6 : 1 }}>
+                {revLoading ? 'Loading…' : 'Refresh'}
+              </button>
+            </div>
+
+            {revError && <div style={{ background: '#FDECEA', color: '#8A1C13', padding: '12px 14px', borderRadius: 8, fontSize: 13, marginBottom: 14 }}>{revError}</div>}
+
+            {dayRev && (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, 1fr)', gap: 12, marginBottom: 22 }}>
+                  {[
+                    ['Total takings', dayRev.totalTakings, 'Online + cash collected', 'var(--sage-dark)'],
+                    ['Mobile money / card', dayRev.online.total, dayRev.online.count + ' paid online', '#1B6349'],
+                    ['Cash collected', dayRev.cash.collected.total, dayRev.cash.collected.count + ' delivered', '#8A3D10'],
+                    ['Cash still out', dayRev.cash.outstanding.total, dayRev.cash.outstanding.count + ' not yet delivered', 'var(--warm-gray)'],
+                  ].map(([label, value, sub, colour]) => (
+                    <div key={label} style={{ background: 'var(--white)', borderRadius: 12, padding: '16px 18px', boxShadow: 'var(--shadow)' }}>
+                      <div style={{ fontSize: 11.5, color: 'var(--warm-gray)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em' }}>{label}</div>
+                      <div style={{ fontFamily: 'var(--font-head)', fontSize: 26, fontWeight: 700, color: colour, marginTop: 6 }}>
+                        GHS {Number(value || 0).toFixed(2)}
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 3 }}>{sub}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ background: 'var(--white)', borderRadius: 12, padding: '20px 22px', boxShadow: 'var(--shadow)', maxWidth: 760 }}>
+                  <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Cash on delivery — by rider</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--warm-gray)', marginBottom: 14 }}>
+                    What each rider should hand in for {dayRev.date}.
+                  </div>
+                  {!dayRev.cash.byRider.length && (
+                    <div style={{ fontSize: 13, color: 'var(--warm-gray)', padding: '16px 0' }}>No cash orders on this day.</div>
+                  )}
+                  {dayRev.cash.byRider.map((b) => (
+                    <div key={String(b.riderId)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14, padding: '12px 0', borderTop: '1px solid var(--cream-dark)', flexWrap: 'wrap' }}>
+                      <div style={{ flex: 1, minWidth: 140 }}>
+                        <div style={{ fontWeight: 600, fontSize: 14 }}>{b.name}</div>
+                        <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 2 }}>
+                          {b.collectedCount} delivered{b.outstandingCount ? ' + ' + b.outstandingCount + ' still out' : ''}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontFamily: 'var(--font-head)', fontSize: 19, fontWeight: 700 }}>GHS {Number(b.collected).toFixed(2)}</div>
+                        {!!b.outstanding && <div style={{ fontSize: 12, color: 'var(--warm-gray)' }}>+ GHS {Number(b.outstanding).toFixed(2)} still out</div>}
+                      </div>
+                    </div>
+                  ))}
+                  {!!dayRev.cash.byRider.length && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 14, marginTop: 4, borderTop: '2px solid var(--sage-dark)', fontWeight: 700, fontSize: 15 }}>
+                      <span>Total to hand in</span>
+                      <span>GHS {Number(dayRev.cash.collected.total).toFixed(2)}</span>
+                    </div>
+                  )}
+                </div>
+
+                {!!dayRev.online.count && (
+                  <div style={{ background: 'var(--white)', borderRadius: 12, padding: '20px 22px', boxShadow: 'var(--shadow)', maxWidth: 760, marginTop: 20 }}>
+                    <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Paid online — already in your Paystack balance</div>
+                    <div style={{ fontSize: 12.5, color: 'var(--warm-gray)', marginBottom: 12 }}>No cash to collect for these.</div>
+                    {dayRev.online.orders.map((o) => (
+                      <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '9px 0', borderTop: '1px solid var(--cream-dark)', fontSize: 13.5 }}>
+                        <span>{window.orderCode(o.id)} — {o.customer || 'Customer'} <span style={{ color: 'var(--warm-gray)', fontSize: 12 }}>({o.method})</span></span>
+                        <span style={{ fontWeight: 600 }}>GHS {Number(o.total).toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* RECONCILE — payments taken with no order against them */}
+        {adminTab === 'reconcile' && (
+          <div>
+            <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Payment reconciliation</h2>
+            <p style={{ fontSize: 13, color: 'var(--warm-gray)', maxWidth: 640, lineHeight: 1.6, marginBottom: 18 }}>
+              Checkouts started more than 15 minutes ago that never became an order. Each one is checked against Paystack:
+              <strong> PAID</strong> means money was collected and the customer is waiting — recover it.
+              <strong> Abandoned</strong> means they never completed payment and it can be discarded.
+            </p>
+            <button onClick={loadOrphans} disabled={orphansLoading}
+              style={{ background: 'var(--sage-dark)', color: '#fff', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 600, marginBottom: 16, opacity: orphansLoading ? .6 : 1 }}>
+              {orphansLoading ? 'Checking…' : '↻ Refresh'}
+            </button>
+
+            {orphansError && <div style={{ background: '#FDECEA', color: '#8A1C13', padding: '12px 14px', borderRadius: 8, fontSize: 13, marginBottom: 14 }}>{orphansError}</div>}
+            {!orphansLoading && !orphansError && !orphans.length && (
+              <div style={{ border: '1px dashed var(--rule-2, #ddd)', padding: '28px 20px', textAlign: 'center', color: 'var(--warm-gray)', fontSize: 13.5, borderRadius: 8 }}>
+                Nothing unreconciled. Every payment has an order against it.
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {orphans.map((o) => {
+                const isPaid = o.paid === true;
+                const unknown = o.paid === null;
+                return (
+                  <div key={o.reference} style={{ border: '1px solid ' + (isPaid ? '#C9601F' : '#E4E4E4'), borderLeft: '4px solid ' + (isPaid ? '#C9601F' : unknown ? '#B9A44A' : '#CFCFCF'), borderRadius: 8, padding: '14px 16px', background: '#fff' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginBottom: 8 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.08em', padding: '3px 8px', borderRadius: 999, background: isPaid ? '#FBE9DC' : unknown ? '#FAF5E2' : '#F0F0F0', color: isPaid ? '#8A3D10' : unknown ? '#6F5A00' : '#666' }}>
+                        {isPaid ? 'PAID — NEEDS ACTION' : unknown ? 'STATUS UNKNOWN' : 'ABANDONED'}
+                      </span>
+                      <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--warm-gray)' }}>{o.reference}</span>
+                      <span style={{ fontSize: 12, color: 'var(--warm-gray)' }}>{new Date(o.createdAt).toLocaleString()}</span>
+                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 3 }}>
+                      {o.customer || 'Unknown customer'}{o.phone ? ' · ' + o.phone : ''}
+                    </div>
+                    <div style={{ fontSize: 13, color: 'var(--warm-gray)', marginBottom: 8 }}>
+                      GHS {Number(o.paystackAmount != null ? o.paystackAmount : o.amount || 0).toFixed(2)}
+                      {o.channel ? ' · ' + o.channel : ''}
+                      {o.neighborhood ? ' · ' + o.neighborhood : ''}
+                      {o.itemCount ? ' · ' + o.itemCount + ' item' + (o.itemCount === 1 ? '' : 's') : ''}
+                    </div>
+                    {!!(o.items && o.items.length) && (
+                      <div style={{ fontSize: 12.5, color: 'var(--warm-gray)', background: '#FAFAFA', borderRadius: 6, padding: '8px 10px', marginBottom: 10, lineHeight: 1.6 }}>
+                        {o.items.map((i) => i.name + ' ×' + i.qty).join(', ')}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button onClick={() => recoverOrphan(o.reference)} disabled={orphanBusy === o.reference || o.paid === false}
+                        title={o.paid === false ? 'Paystack reports no successful payment' : ''}
+                        style={{ background: o.paid === false ? '#DDD' : 'var(--sage-dark)', color: o.paid === false ? '#888' : '#fff', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 600, cursor: o.paid === false ? 'not-allowed' : 'pointer', opacity: orphanBusy === o.reference ? .6 : 1 }}>
+                        {orphanBusy === o.reference ? 'Working…' : 'Create the order'}
+                      </button>
+                      <button onClick={() => dismissOrphan(o.reference)} disabled={orphanBusy === o.reference || isPaid}
+                        title={isPaid ? 'Cannot discard a payment that succeeded' : ''}
+                        style={{ background: 'transparent', color: isPaid ? '#BBB' : 'var(--warm-gray)', border: '1px solid #DDD', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 600, cursor: isPaid ? 'not-allowed' : 'pointer' }}>
+                        Discard
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -1598,6 +1811,40 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                 </button>
               </div>
               {settingsSaved && <div style={{ marginTop: 16, fontSize: 13, color: 'var(--sage)' }}>✓ {settingsSaved}</div>}
+            </div>
+
+            {/* KILL SWITCHES — stop a money-losing path without a code deploy */}
+            <div style={{ background: 'var(--white)', borderRadius: 12, padding: '20px 22px', boxShadow: 'var(--shadow)', maxWidth: 620, marginTop: 20, borderLeft: '4px solid #C9601F' }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>⚠️ Emergency switches</div>
+              <div style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 4, marginBottom: 4, lineHeight: 1.5 }}>
+                Turn a feature off immediately if something is going wrong — no code change, no deploy.
+                Customers see a clear message and are pointed at WhatsApp. Turning one off is recorded in the Errors tab.
+                Orders that have already been paid for are never blocked.
+              </div>
+              {[
+                ['orderingEnabled', 'Accept new orders', 'OFF puts the shop in browse-only mode. Use if orders are being abused or you cannot fulfil.'],
+                ['onlinePaymentEnabled', 'Accept online payment (Card / MoMo)', 'OFF hides Pay Now and leaves Cash on Delivery. Use if Paystack is misbehaving.'],
+                ['loyaltyRedemptionEnabled', 'Allow spending loyalty credit', 'OFF stops credit being applied at checkout. Use if balances look wrong.'],
+              ].map(([key, label, help]) => (
+                <div key={key} style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--cream-dark)' }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>
+                      {label}{' '}
+                      <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: settings[key] ? '#E9F4EF' : '#FBE9DC', color: settings[key] ? '#1B6349' : '#8A3D10' }}>
+                        {settings[key] ? 'ON' : 'OFF'}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 12.5, color: 'var(--warm-gray)', marginTop: 4, lineHeight: 1.5 }}>{help}</div>
+                  </div>
+                  <button onClick={() => {
+                      if (settings[key] && !window.confirm('Turn OFF "' + label + '"? Customers will be blocked from this until you turn it back on.')) return;
+                      saveSettings({ [key]: !settings[key] });
+                    }}
+                    style={{ flexShrink: 0, width: 52, height: 30, borderRadius: 999, background: settings[key] ? 'var(--sage)' : '#C9601F', position: 'relative', transition: 'background .2s', border: 'none', cursor: 'pointer' }}>
+                    <span style={{ position: 'absolute', top: 3, left: settings[key] ? 25 : 3, width: 24, height: 24, borderRadius: '50%', background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.2)' }} />
+                  </button>
+                </div>
+              ))}
             </div>
 
             <div style={{ background: 'var(--white)', borderRadius: 12, padding: '20px 22px', boxShadow: 'var(--shadow)', maxWidth: 620, marginTop: 20 }}>

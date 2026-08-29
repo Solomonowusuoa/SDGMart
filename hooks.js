@@ -101,4 +101,23 @@ async function unsubscribeFromPush() {
   } catch (_) {}
 }
 
-Object.assign(window, { useMobile, apiFetch, subscribeToPush, unsubscribeFromPush });
+// Connectivity. The app is installable, ships a service worker, and targets
+// customers on intermittent mobile data — but nothing ever checked whether the
+// device was actually online (F-03). Reads fell back silently to whatever was
+// cached, so the app looked current while showing data of unknown age, and
+// writes failed into empty catches.
+function useOnline() {
+  const [online, setOnline] = React.useState(
+    () => (typeof navigator === 'undefined' || navigator.onLine === undefined ? true : navigator.onLine),
+  );
+  React.useEffect(() => {
+    const up = () => setOnline(true);
+    const down = () => setOnline(false);
+    window.addEventListener('online', up);
+    window.addEventListener('offline', down);
+    return () => { window.removeEventListener('online', up); window.removeEventListener('offline', down); };
+  }, []);
+  return online;
+}
+
+Object.assign(window, { useMobile, useOnline, apiFetch, subscribeToPush, unsubscribeFromPush });

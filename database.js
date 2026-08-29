@@ -18,9 +18,66 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
   console.error('    Put them in .env locally and in Render → Environment in production.');
   process.exit(1);
 }
+// Every Supabase call gets a deadline. Node fetch has no default timeout, so a
+// Supabase instance that stops responding rather than refusing — the usual shape
+// of a degraded service — would leave requests hanging forever. On a single
+// process those pile up until nothing is served at all: a slow dependency
+// becomes a full outage. 10s is far above normal (single-digit ms) and far
+// below a customer giving up.
+const SUPABASE_TIMEOUT_MS = Number(process.env.SUPABASE_TIMEOUT_MS || 10000);
 const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
+  global: {
+    fetch: (url, opts = {}) => fetch(url, { ...opts, signal: AbortSignal.timeout(SUPABASE_TIMEOUT_MS) }),
+  },
 });
+
+// ── Schema drift check (audit B-07) ──────────────────────────────────────
+// Shipping code that writes a column before its migration has run took every
+// order down for a day (HANDOFF §10), and the failure was silent — inserts just
+// errored into a swallowed catch. This asserts at startup that the columns the
+// code actually writes exist, and says plainly which migration is missing.
+// It only reports: a missing OPTIONAL column is a warning, so the app still
+// boots and serves, but nobody has to discover the gap from a customer.
+const REQUIRED_SCHEMA = [
+  ['orders',   'paystack_ref',        'supabase-schema-paystack.sql',        true],
+  ['orders',   'delivered_at',        'supabase-schema-delivered-at.sql',    true],
+  ['orders',   'delivery_slot',       'supabase-schema-tweaks.sql',          true],
+  ['orders',   'client_request_id',   'supabase-schema-order-idempotency.sql', false],
+  ['users',    'referred_by',         'supabase-schema-referrals.sql',       true],
+  ['users',    'first_order_done',    'supabase-schema-additions.sql',       true],
+  ['users',    'birthday_gift_claimed_year', 'supabase-schema-tweaks.sql',   true],
+  ['carts',    'items',               'supabase-schema-cart.sql',            true],
+  ['referrals', 'month',              'supabase-schema-referrals.sql',       true],
+  ['pending_payments', 'draft',       'supabase-schema-paystack.sql',        true],
+];
+
+async function checkSchema() {
+  const missing = [];
+  for (const [table, column, migration, required] of REQUIRED_SCHEMA) {
+    try {
+      const { error } = await sb.from(table).select(column).limit(1);
+      if (error) missing.push({ table, column, migration, required });
+    } catch (_) {
+      missing.push({ table, column, migration, required });
+    }
+  }
+  if (!missing.length) { console.log('\u2713  Database schema matches what the code expects'); return { ok: true, missing }; }
+
+  const blocking = missing.filter((m) => m.required);
+  console.error('');
+  console.error('\u26a0\ufe0f  SCHEMA DRIFT \u2014 ' + missing.length + ' expected column(s) are missing:');
+  for (const m of missing) {
+    console.error('     ' + (m.required ? 'REQUIRED' : 'optional') + '  ' + m.table + '.' + m.column + '   \u2192 run ' + m.migration);
+  }
+  if (blocking.length) {
+    console.error('');
+    console.error('   Writes touching these columns WILL FAIL. Run the migrations above');
+    console.error('   (node scripts/migrate.js status) before taking orders.');
+  }
+  console.error('');
+  return { ok: false, missing };
+}
 
 // ── Admin bootstrap ──────────────────────────────────────────────────────
 const ADMIN_EMAIL = 'solomonowusuoa@gmail.com';
@@ -89,6 +146,13 @@ const products = {
     if (error) throw error;
     return rowsOut(data);
   },
+  // One round-trip for a whole basket, instead of one per line.
+  async listByIds(ids) {
+    if (!ids || !ids.length) return [];
+    const { data, error } = await sb.from('products').select('*').in('id', ids);
+    if (error) throw error;
+    return rowsOut(data);
+  },
   async get(id) {
     const { data, error } = await sb.from('products').select('*').eq('id', id).maybeSingle();
     if (error) throw error;
@@ -138,7 +202,10 @@ const users = {
     return rowOut(data);
   },
   async findByEmail(email) {
-    const { data, error } = await sb.from('users').select('*').ilike('email', email).maybeSingle();
+    // .eq, not .ilike: ilike made caller-supplied % and _ into SQL wildcards, so
+    // probing a%, ab%, abc% binary-searched the whole user table. Every insert
+    // already lowercases, and the accompanying migration normalises legacy rows.
+    const { data, error } = await sb.from('users').select('*').eq('email', String(email || '').toLowerCase().trim()).maybeSingle();
     if (error) throw error;
     return rowOut(data);
   },
@@ -167,14 +234,22 @@ const users = {
       squadCode = crypto.randomBytes(4).toString('hex').toUpperCase();
       ownsSquad = true;
     }
-    const myRefCode = crypto.randomBytes(3).toString('hex').toUpperCase();
+    // 6 bytes, not 3: 281 trillion codes instead of 16.7 million. Retried below
+    // on the unique violation, so even a collision no longer breaks signup.
+    const myRefCode = crypto.randomBytes(6).toString('hex').toUpperCase();
     const insert = {
       name, email: String(email).toLowerCase().trim(), phone, password_hash: passwordHash, role,
       ref_code: myRefCode, squad_code: squadCode, owns_squad: ownsSquad,
       // Record who referred them — credited only AFTER their first purchase.
       referred_by: referrer ? referrer.id : null,
     };
-    const { data, error } = await sb.from('users').insert(insert).select().single();
+    let { data, error } = await sb.from('users').insert(insert).select().single();
+    // A ref_code collision must not cost someone their signup. Retry with a
+    // fresh code; anything else (a duplicate email, say) is a real error.
+    for (let attempt = 0; attempt < 3 && error && /ref_code/i.test(error.message || ''); attempt++) {
+      insert.ref_code = crypto.randomBytes(6).toString('hex').toUpperCase();
+      ({ data, error } = await sb.from('users').insert(insert).select().single());
+    }
     if (error) throw error;
     return rowOut(data);
   },
@@ -204,13 +279,29 @@ const users = {
       u = rowOut(r.data);
     }
     if (!u) {
-      const r = await sb.from('users').select('*').ilike('email', lower).maybeSingle();
+      const r = await sb.from('users').select('*').eq('email', lower.trim()).maybeSingle();
       u = rowOut(r.data);
       if (u) {
-        // Link google_id to existing email user and mark verified
-        const upd = await sb.from('users').update({ google_id: googleId, email_verified: true, picture: picture || u.picture })
-          .eq('id', u.id).select().single();
+        // Linking a Google identity to a row that ALREADY has a password is the
+        // pre-hijacking case: because email verification is disabled, an
+        // attacker can register victim@gmail.com with a password of their
+        // choosing and wait. When the real owner later signs in with Google
+        // they are linked into that existing row — and the attacker still holds
+        // a working password for it.
+        //
+        // So on link, the pre-existing password and every session it created are
+        // destroyed. The rightful owner keeps the account and their Google
+        // sign-in; anyone holding a password for it is locked out and would have
+        // to prove control of the mailbox to set a new one.
+        const hijackRisk = !!u.passwordHash;
+        const patch = { google_id: googleId, email_verified: true, picture: picture || u.picture };
+        if (hijackRisk) patch.password_hash = null;
+        const upd = await sb.from('users').update(patch).eq('id', u.id).select().single();
         u = rowOut(upd.data);
+        if (hijackRisk) {
+          console.warn('Google link cleared a pre-existing password on user ' + u.id + ' (possible pre-registration)');
+          try { await sessions.destroyAllForUser(u.id); } catch (_) {}
+        }
       }
     }
     if (!u) {
@@ -225,6 +316,35 @@ const users = {
 };
 
 // ── Squads ───────────────────────────────────────────────────────────────
+// ── Atomic balance updates (compare-and-swap) ────────────────────────────
+// PostgREST cannot express `set x = x - $1`, and a plain read-modify-write
+// loses money under concurrency: ten simultaneous checkouts all read the same
+// loyalty balance, all pass the affordability check, and all get the discount —
+// GHS 50 of credit paying out GHS 500. Here the write is made CONDITIONAL on
+// the value the decision was based on (`expect`), so only one racer can win;
+// the losers re-read and decide again. Needs no schema change.
+//
+// decide(user) returns null to decline, or { patch, expect, value }.
+const CAS_ATTEMPTS = 5;
+const money = (n) => Number(n || 0).toFixed(2);
+async function casUser(userId, decide) {
+  for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
+    const u = await users.get(userId);
+    if (!u) return { ok: false, reason: 'no-user' };
+    const step = decide(u);
+    if (!step) return { ok: false, reason: 'declined' };
+    let q = sb.from('users').update(step.patch).eq('id', userId);
+    for (const [col, expected] of Object.entries(step.expect || {})) {
+      q = expected === null ? q.is(col, null) : q.eq(col, expected);
+    }
+    const { data, error } = await q.select('id');
+    if (error) throw error;
+    if (data && data.length) return { ok: true, value: step.value };
+    // Lost the race — another request changed the row first. Re-read and retry.
+  }
+  return { ok: false, reason: 'contention' };
+}
+
 const squads = {
   async members(squadCode) {
     if (!squadCode) return [];
@@ -239,12 +359,23 @@ const squads = {
     const u = await users.get(userId);
     if (!u) return null;
     // Loyalty: every GHS 1000 of TOTAL spend across all time gives GHS 50
-    const newTotal = Number(u.totalSpent || 0) + Number(spendAmount || 0);
-    const prevTiers = Math.floor(Number(u.totalSpent || 0) / 1000);
-    const newTiers = Math.floor(newTotal / 1000);
-    const loyaltyEarned = (newTiers - prevTiers) * 50;
-    const newLoyalty = Number(u.loyaltyBalance || 0) + loyaltyEarned;
-    await sb.from('users').update({ total_spent: newTotal, loyalty_balance: newLoyalty }).eq('id', userId);
+    // Conditional write: two deliveries settling at once must not both read the
+    // same total_spent and both award a tier. casUser re-reads and retries.
+    const spend = Number(spendAmount || 0);
+    const applied = await casUser(userId, (cur) => {
+      const prev = Number(cur.totalSpent || 0);
+      const total = prev + spend;
+      const earned = (Math.floor(total / 1000) - Math.floor(prev / 1000)) * 50;
+      return {
+        patch: { total_spent: money(total), loyalty_balance: money(Number(cur.loyaltyBalance || 0) + earned) },
+        expect: { total_spent: money(prev), loyalty_balance: money(cur.loyaltyBalance) },
+        value: { newTotal: total, loyaltyEarned: earned, newLoyalty: Number(cur.loyaltyBalance || 0) + earned },
+      };
+    });
+    if (!applied.ok) { console.warn('recordSpend could not settle for user ' + userId + ' (' + applied.reason + ')'); return null; }
+    const newTotal = applied.value.newTotal;
+    const loyaltyEarned = applied.value.loyaltyEarned;
+    const newLoyalty = applied.value.newLoyalty;
 
     // ── Squad goal logic ─────────────────────────────────────────────────
     // When every squad member's totalSpent has hit GHS 500 (the target),
@@ -267,13 +398,17 @@ const squads = {
           const effectiveTotal = String(m.id) === String(userId) ? newTotal : Number(m.totalSpent || 0);
           const rollover = Math.max(0, effectiveTotal - 500);
           if (String(m.id) === String(userId)) myRollover = rollover;
-          const newBal = Number(m.loyaltyBalance || 0) + 25
-            + (String(m.id) === String(userId) ? loyaltyEarned : 0);
-          await sb.from('users').update({
-            total_spent: rollover,
-            loyalty_balance: newBal,
-            discount_pending: false, // clear any legacy flag
-          }).eq('id', m.id);
+          // Conditional per member: the squad bonus must not double-pay if two
+          // members' deliveries land at the same moment.
+          await casUser(m.id, (cur) => ({
+            patch: {
+              total_spent: money(rollover),
+              loyalty_balance: money(Number(cur.loyaltyBalance || 0) + 25),
+              discount_pending: false, // clear any legacy flag
+            },
+            expect: { loyalty_balance: money(cur.loyaltyBalance) },
+            value: true,
+          }));
         }
         // Return the awarding user's fresh balance so the UI updates right away
         return { totalSpent: myRollover, loyaltyEarned: loyaltyEarned + 25, loyaltyBalance: Number(u.loyaltyBalance || 0) + loyaltyEarned + 25, squadGoalHit: true };
@@ -281,17 +416,82 @@ const squads = {
     }
     return { totalSpent: newTotal, loyaltyEarned, loyaltyBalance: newLoyalty, squadGoalHit: false };
   },
+  // Claim the one-off squad discount. Succeeds for exactly one caller.
   async consumeDiscount(userId) {
-    await sb.from('users').update({ discount_pending: false }).eq('id', userId);
-    return true;
+    const r = await casUser(userId, (u) => (u.discountPending
+      ? { patch: { discount_pending: false }, expect: { discount_pending: true }, value: true }
+      : null));
+    return r.ok && r.value === true;
   },
-  // Subtract loyalty credit when used
+  // Spend loyalty credit. Returns the amount actually taken, and THROWS rather
+  // than silently under-charging if the row is too contended to settle.
   async consumeLoyalty(userId, amount) {
-    const u = await users.get(userId);
-    if (!u) return 0;
-    const used = Math.min(Number(u.loyaltyBalance || 0), Number(amount || 0));
-    await sb.from('users').update({ loyalty_balance: Number(u.loyaltyBalance) - used }).eq('id', userId);
-    return used;
+    const want = Number(amount || 0);
+    if (!(want > 0)) return 0;
+    const r = await casUser(userId, (u) => {
+      const bal = Number(u.loyaltyBalance || 0);
+      const used = Math.min(bal, want);
+      if (!(used > 0)) return null;
+      return {
+        patch: { loyalty_balance: money(bal - used) },
+        expect: { loyalty_balance: money(bal) },
+        value: used,
+      };
+    });
+    if (r.ok) return r.value;
+    if (r.reason === 'declined') return 0;          // no balance left
+    throw new Error('Could not apply your loyalty credit just now — please try again');
+  },
+  // Give loyalty back (cancellation, or compensating a failed order).
+  async addLoyalty(userId, amount) {
+    const add = Number(amount || 0);
+    if (!(add > 0)) return 0;
+    const r = await casUser(userId, (u) => {
+      const bal = Number(u.loyaltyBalance || 0);
+      return {
+        patch: { loyalty_balance: money(bal + add) },
+        expect: { loyalty_balance: money(bal) },
+        value: add,
+      };
+    });
+    if (!r.ok) throw new Error('Could not restore loyalty credit for user ' + userId);
+    return r.value;
+  },
+  // Hand the squad discount back after a failed or cancelled order.
+  async restoreDiscount(userId) {
+    const r = await casUser(userId, (u) => (u.discountPending
+      ? null
+      : { patch: { discount_pending: true }, expect: { discount_pending: false }, value: true }));
+    return r.ok;
+  },
+  // Claim the first-order-free-delivery perk. Exactly one order can win it, so
+  // parallel first orders can no longer each qualify (audit A-18).
+  async claimFirstOrder(userId) {
+    const r = await casUser(userId, (u) => (u.firstOrderDone
+      ? null
+      : { patch: { first_order_done: true }, expect: { first_order_done: false }, value: true }));
+    return r.ok && r.value === true;
+  },
+  // Claim this year's birthday gift. Exactly one order per calendar year wins.
+  async claimBirthdayGift(userId, year) {
+    const r = await casUser(userId, (u) => (Number(u.birthdayGiftClaimedYear || 0) === Number(year)
+      ? null
+      : { patch: { birthday_gift_claimed_year: year },
+          expect: { birthday_gift_claimed_year: u.birthdayGiftClaimedYear == null ? null : u.birthdayGiftClaimedYear },
+          value: true }));
+    return r.ok && r.value === true;
+  },
+  async releaseBirthdayGift(userId, year) {
+    const r = await casUser(userId, (u) => (Number(u.birthdayGiftClaimedYear || 0) === Number(year)
+      ? { patch: { birthday_gift_claimed_year: null }, expect: { birthday_gift_claimed_year: year }, value: true }
+      : null));
+    return r.ok;
+  },
+  async releaseFirstOrder(userId) {
+    const r = await casUser(userId, (u) => (u.firstOrderDone
+      ? { patch: { first_order_done: false }, expect: { first_order_done: true }, value: true }
+      : null));
+    return r.ok;
   },
 };
 
@@ -359,7 +559,7 @@ const riders = {
     return rowOut(data);
   },
   async findByEmail(email) {
-    const { data, error } = await sb.from('riders').select('*').ilike('email', email).maybeSingle();
+    const { data, error } = await sb.from('riders').select('*').eq('email', String(email || '').toLowerCase().trim()).maybeSingle();
     if (error) throw error;
     return rowOut(data);
   },
@@ -395,6 +595,23 @@ const _distKm = (a, b) => {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
 };
 
+// Does orders.client_request_id exist yet? Probed once, loudly, instead of
+// assuming — shipping code that writes a column before its migration has run is
+// exactly what silently broke every order insert for a day (HANDOFF §10).
+let _idempotencySupported = null;
+async function ordersSupportIdempotency() {
+  if (_idempotencySupported !== null) return _idempotencySupported;
+  try {
+    const { error } = await sb.from('orders').select('client_request_id').limit(1);
+    _idempotencySupported = !error;
+  } catch (_) { _idempotencySupported = false; }
+  if (!_idempotencySupported) {
+    console.warn('⚠️  orders.client_request_id is missing — run supabase-schema-order-idempotency.sql.');
+    console.warn('   Duplicate-order protection is DISABLED until then; everything else works normally.');
+  }
+  return _idempotencySupported;
+}
+
 const orders = {
   async list({ status = null, limit = null } = {}) {
     let q = sb.from('orders').select('*').order('created_at', { ascending: false });
@@ -409,13 +626,52 @@ const orders = {
     if (error) throw error;
     return rowOut(data);
   },
+  // Has this exact checkout attempt already produced an order? Lets a retry
+  // after a dropped response return the original instead of duplicating it.
+  // One day's orders, for the revenue / cash-reconciliation view. Ghana is
+  // UTC+0 with no daylight saving, so a UTC day boundary is the local day.
+  // Just the item arrays, from a bounded recent window — for the bestseller
+  // scan. orders.list() pulled EVERY column of EVERY order ever placed
+  // (addresses, phone numbers, the lot) into Node memory to count line items,
+  // on a path anonymous visitors trigger. That is the out-of-memory risk in a
+  // 512 MB instance; this reads one column over 90 days instead (D-02).
+  async recentItemsForCounts({ days = 90, limit = 5000 } = {}) {
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    const { data, error } = await sb.from('orders')
+      .select('items')
+      .gte('created_at', since)
+      .neq('status', 'cancelled')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    return (data || []).map((r) => r.items);
+  },
+  async forDay(dateStr) {
+    const start = dateStr + 'T00:00:00.000Z';
+    const end = new Date(new Date(start).getTime() + 86400000).toISOString();
+    const { data, error } = await sb.from('orders')
+      .select('id,total,paid,payment_method,status,rider_id,created_at,delivered_at,customer_name')
+      .gte('created_at', start).lt('created_at', end)
+      .neq('status', 'cancelled')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return rowsOut(data);
+  },
+  async findByClientRequestId(key) {
+    if (!key || !(await ordersSupportIdempotency())) return null;
+    const { data } = await sb.from('orders').select('*').eq('client_request_id', key).maybeSingle();
+    return data ? rowOut(data) : null;
+  },
   async findByPaystackRef(ref) {
     if (!ref) return null;
     const { data } = await sb.from('orders').select('*').eq('paystack_ref', ref).maybeSingle();
     return rowOut(data);
   },
   async create(payload) {
-    const { data, error } = await sb.from('orders').insert(rowIn(payload)).select().single();
+    const row = rowIn(payload);
+    if (row.client_request_id && !(await ordersSupportIdempotency())) delete row.client_request_id;
+    else if (!row.client_request_id) delete row.client_request_id;
+    const { data, error } = await sb.from('orders').insert(row).select().single();
     if (error) throw error;
     return rowOut(data);
   },
@@ -425,9 +681,46 @@ const orders = {
     return rowOut(data);
   },
   async setStatus(id, status, riderId = null) {
-    const patch = { status };
-    if (riderId != null) patch.rider_id = riderId;
-    const o = await orders.update(id, patch);
+    // Read the CURRENT state first: rewards are granted only on the transition
+    // INTO 'delivered', never on a repeat call (riders on flaky connections tap
+    // twice), and never on delivered -> delivered.
+    const before = await orders.get(id);
+    if (!before) return null;
+    // A rider may only move an order that is ALREADY assigned to them. Without
+    // this, any rider could walk sequential order ids, mark every live order
+    // delivered, and take assignment of each one on the way — sending false
+    // "Delivered" pushes and, now that rewards accrue on delivery, granting
+    // them on orders that never arrived. Assignment is the admin's operation
+    // (orders.assignToRider), so this path must never write rider_id.
+    if (riderId != null && String(before.riderId || '') !== String(riderId)) return null;
+    // Legal transitions only. A repeat call (a rider tapping twice on a flaky
+    // connection is the normal case, not an attack) now changes nothing rather
+    // than re-stamping delivered_at — which silently extended the guest
+    // tracking window — and re-sending the customer's "Delivered" push.
+    const LEGAL = {
+      queued: ['assigned', 'in_transit', 'delivered', 'cancelled'],
+      assigned: ['in_transit', 'delivered', 'queued', 'cancelled'],
+      in_transit: ['delivered', 'assigned', 'cancelled'],
+      delivered: [],      // terminal
+      cancelled: [],      // terminal
+    };
+    const allowed = LEGAL[before.status] || [];
+    if (before.status === status || !allowed.includes(status)) {
+      console.warn('rejected order ' + id + ' transition ' + before.status + ' -> ' + status);
+      return { ...before, unchanged: true };
+    }
+    const o = await orders.update(id, { status });
+    if (status === 'delivered' && before && before.status !== 'delivered' && before.userId) {
+      // Accrual lives here, not at checkout — see createOrderFromBody. Best
+      // effort: a failure must not block the rider marking the order delivered.
+      try {
+        const u = await users.get(before.userId);
+        if (u) {
+          await squads.recordSpend(before.userId, Number(before.subtotal || 0));
+          await referrals.creditFirstPurchase(u);
+        }
+      } catch (e) { console.warn('reward accrual on delivery failed for order ' + id + ':', e.message); }
+    }
     // Stamp the delivery time (separate best-effort write so the status
     // update above still succeeds if supabase-schema-delivered-at.sql
     // hasn't been run yet).
@@ -470,17 +763,24 @@ const orders = {
     // Position in this rider's route (1 = next, 2 = after that, etc.)
     let queuePosition = null;
     if (o.riderId && o.status === 'assigned') {
-      const route = await orders.forRider(o.riderId);
-      const idx = route.findIndex((x) => String(x.id) === String(orderId));
-      queuePosition = idx >= 0 ? idx + 1 : null;
+      // Count only what is ahead of this order, in the database, instead of
+      // pulling the rider's whole route back and re-sorting it in JavaScript
+      // just to read off an index (D-03).
+      const { count } = await sb.from('orders')
+        .select('id', { count: 'exact', head: true })
+        .eq('rider_id', o.riderId).in('status', ['assigned', 'in_transit'])
+        .lt('created_at', o.createdAt);
+      queuePosition = (count || 0) + 1;
     }
     return { order: o, rider, queuePosition };
   },
-  async assignToNearestOnlineRider(orderId) {
-    const o = await orders.get(orderId);
+  // `order` and `onlineRiders` may be passed in by a caller that already has
+  // them, which is what turns assignQueuedForToday from 3 round-trips per order
+  // into one (D-04).
+  async assignToNearestOnlineRider(orderId, order = null, onlineRiders = null) {
+    const o = order || await orders.get(orderId);
     if (!o || !o.location) return null;
-    const all = await riders.list();
-    const online = all.filter((r) => r.online && r.lat != null);
+    const online = onlineRiders || (await riders.list()).filter((r) => r.online && r.lat != null);
     if (!online.length) return null;
     online.sort((a, b) => _distKm(o.location, a) - _distKm(o.location, b));
     await orders.update(orderId, { riderId: online[0].id, status: 'assigned' });
@@ -498,9 +798,13 @@ const orders = {
       if (!!b.priority - !!a.priority !== 0) return !!b.priority - !!a.priority;
       return new Date(a.createdAt) - new Date(b.createdAt);
     });
+    // Fetch the rider list ONCE for the whole sweep, and pass each order through
+    // rather than making the callee read it back.
+    const online = (await riders.list()).filter((r) => r.online && r.lat != null);
+    if (!online.length) return [];
     const assigned = [];
     for (const o of eligible) {
-      const r = await orders.assignToNearestOnlineRider(o.id);
+      const r = await orders.assignToNearestOnlineRider(o.id, o, online);
       if (r) assigned.push({ orderId: o.id, riderId: r.id });
     }
     return assigned;
@@ -644,6 +948,20 @@ const appConfig = {
     const { error } = await sb.from('app_config').upsert({ key, value, updated_at: new Date().toISOString() });
     if (error) throw error;
   },
+  // Claim a once-per-period marker. Returns true for exactly ONE caller, even
+  // when several arrive at the same moment: the update only matches rows whose
+  // value differs, so the database decides the winner rather than a read
+  // followed by a write. This is what stops two concurrent /healthz hits both
+  // running the recurring-order job and placing every due order twice (A-08).
+  async claim(key, value) {
+    // Ensure the row exists without disturbing an existing value.
+    await sb.from('app_config').upsert({ key, value: '__unclaimed__' }, { onConflict: 'key', ignoreDuplicates: true });
+    const { data, error } = await sb.from('app_config')
+      .update({ value, updated_at: new Date().toISOString() })
+      .eq('key', key).neq('value', value).select('key');
+    if (error) throw error;
+    return !!(data && data.length);
+  },
 };
 
 // ── VAPID keys (env > app_config) ─────────────────────────────────────────
@@ -699,8 +1017,16 @@ const addresses = {
     return rowOut(data);
   },
   async update(userId, id, patch) {
-    if (patch.isDefault) await sb.from('addresses').update({ is_default: false }).eq('user_id', userId);
-    const { data, error } = await sb.from('addresses').update(rowIn(patch)).eq('id', id).eq('user_id', userId).select().single();
+    // Explicit allowlist. The patch was previously passed through wholesale, so
+    // `{"userId": <victim id>, "isDefault": true}` moved the row into someone
+    // else's account and became their default — rerouting their next delivery
+    // to an address the attacker controls.
+    const safe = {};
+    for (const k of ['label', 'neighborhood', 'address', 'location', 'isDefault', 'isLastUsed']) {
+      if (Object.prototype.hasOwnProperty.call(patch || {}, k)) safe[k] = patch[k];
+    }
+    if (safe.isDefault) await sb.from('addresses').update({ is_default: false }).eq('user_id', userId);
+    const { data, error } = await sb.from('addresses').update(rowIn(safe)).eq('id', id).eq('user_id', userId).select().single();
     if (error) throw error;
     return rowOut(data);
   },
@@ -721,10 +1047,22 @@ const addresses = {
     }
     if (match) {
       await sb.from('addresses').update({ is_last_used: true }).eq('id', match.id);
-    } else {
-      await sb.from('addresses').insert({
-        user_id: userId, label: 'Recent', neighborhood, location, is_last_used: true,
-      });
+      return;
+    }
+    // Previously this INSERTED a new "Recent" address for every delivery pin
+    // more than ~50m from a saved one — silently accumulating a dated map of
+    // everywhere a customer has had groceries delivered, which they never asked
+    // to save and the privacy notice describes as an address they *choose*
+    // (H-02). Nothing is created automatically now. The customer saves an
+    // address deliberately, from the Account page or at checkout.
+    //
+    // A small bound is still kept on any legacy "Recent" rows so existing
+    // accounts stop carrying an unbounded history.
+    const { data: recents } = await sb.from('addresses').select('id, created_at')
+      .eq('user_id', userId).eq('label', 'Recent').order('created_at', { ascending: false });
+    if (recents && recents.length > 3) {
+      const stale = recents.slice(3).map((r) => r.id);
+      await sb.from('addresses').delete().in('id', stale);
     }
   },
 };
@@ -963,6 +1301,35 @@ const pendingPayments = {
   async delete(reference) {
     await sb.from('pending_payments').delete().eq('reference', reference);
   },
+  // Drafts old enough that the customer has either paid or walked away, which
+  // still have no order against their reference. A draft is only deleted after
+  // its order is successfully created, so anything left here is either an
+  // abandoned checkout (harmless) or a payment we took and failed to fulfil.
+  // This customer's own abandoned checkouts. Used to hand their reserved
+  // loyalty back the moment they start a new one, rather than making them wait
+  // for a sweep.
+  async listStaleForUser(userId, olderThanMinutes = 30) {
+    if (!userId) return [];
+    const cutoff = new Date(Date.now() - olderThanMinutes * 60000).toISOString();
+    const { data } = await sb.from('pending_payments').select('*')
+      .eq('user_id', userId).lt('created_at', cutoff).limit(10);
+    return (data || []).map((r) => ({ reference: r.reference, userId: r.user_id, draft: r.draft, createdAt: r.created_at }));
+  },
+  async listOrphans({ olderThanMinutes = 15, limit = 50 } = {}) {
+    const cutoff = new Date(Date.now() - olderThanMinutes * 60000).toISOString();
+    const { data, error } = await sb.from('pending_payments').select('*')
+      .lt('created_at', cutoff).order('created_at', { ascending: false }).limit(limit);
+    if (error) throw error;
+    const rows = data || [];
+    if (!rows.length) return [];
+    const refs = rows.map((r) => r.reference);
+    const { data: matched } = await sb.from('orders').select('paystack_ref').in('paystack_ref', refs);
+    const claimed = new Set((matched || []).map((m) => m.paystack_ref));
+    return rows.filter((r) => !claimed.has(r.reference)).map((r) => ({
+      reference: r.reference, userId: r.user_id, amount: r.amount,
+      createdAt: r.created_at, draft: r.draft,
+    }));
+  },
 };
 
 // ── Referrals: credit the referrer after the referee's FIRST purchase ─────
@@ -976,12 +1343,22 @@ const referrals = {
       const referrer = await users.get(referrerId);
       if (!referrer) return;
       const month = new Date().toISOString().slice(0, 7); // YYYY-MM
+      // Claim the referee's credit FIRST, conditionally. Only one caller can
+      // flip referral_credited false -> true, so concurrent deliveries cannot
+      // pay the referrer twice (audit A-18).
+      const claimed = await casUser(refereeUser.id, (cur) => (cur.referralCredited
+        ? null
+        : { patch: { referral_credited: true }, expect: { referral_credited: false }, value: true }));
+      if (!claimed.ok) return;
       await sb.from('referrals').insert({ referrer_id: referrerId, referee_id: refereeUser.id, month });
-      await sb.from('users').update({
-        loyalty_balance: Number(referrer.loyaltyBalance || 0) + 5,
-        referral_count: Number(referrer.referralCount || 0) + 1,
-      }).eq('id', referrerId);
-      await sb.from('users').update({ referral_credited: true }).eq('id', refereeUser.id);
+      await casUser(referrerId, (cur) => ({
+        patch: {
+          loyalty_balance: money(Number(cur.loyaltyBalance || 0) + 5),
+          referral_count: Number(cur.referralCount || 0) + 1,
+        },
+        expect: { loyalty_balance: money(cur.loyaltyBalance) },
+        value: true,
+      }));
     } catch (e) { console.warn('referral credit failed (run schema-referrals.sql?):', e.message); }
   },
 };
@@ -1020,7 +1397,7 @@ const leaderboard = {
       const winnerId = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
       const winner = await users.get(winnerId);
       if (winner) {
-        await sb.from('users').update({ loyalty_balance: Number(winner.loyaltyBalance || 0) + 15 }).eq('id', winnerId);
+        await squads.addLoyalty(winnerId, 15);
       }
       await appConfig.set('leaderboard_awarded_month', lastMonth);
       return { winnerId, month: lastMonth };
@@ -1076,7 +1453,10 @@ async function uploadProductPhoto(buffer, mimeType = 'image/jpeg') {
 async function cancelOrder(orderId, userId, reason) {
   const o = await orders.get(orderId);
   if (!o) return null;
-  if (o.userId && String(o.userId) !== String(userId)) return { error: 'not yours' };
+  // A guest order has user_id NULL. The old `o.userId &&` short-circuit meant
+  // the check was SKIPPED for those, so any signed-in account could walk
+  // sequential ids and cancel every guest order inside its 15-minute window.
+  if (!o.userId || String(o.userId) !== String(userId)) return { error: 'not yours' };
   if (o.status !== 'queued') return { error: 'order is already being processed' };
   // 15-minute cancellation window
   const ageMin = (Date.now() - new Date(o.createdAt).getTime()) / 60000;
@@ -1086,8 +1466,99 @@ async function cancelOrder(orderId, userId, reason) {
     cancel_reason: String(reason || '').slice(0, 300),
     cancelled_at: new Date().toISOString(),
   }).eq('id', orderId);
+  // Hand back whatever this order consumed. Without this a customer who spent
+  // loyalty on an order and then cancelled simply lost the credit, and the
+  // first-delivery-free perk stayed burned on an order that never happened.
+  if (o.userId) { try { await reverseOrderRewards(o); } catch (e) { console.warn('reverseOrderRewards failed for order ' + orderId + ':', e.message); } }
   return { ok: true };
 }
+
+// Restore the value a cancelled order took from the customer. Accrual (spend
+// tiers, squad progress, referral credit) is NOT reversed here because it is
+// never granted until delivery — see orders.setStatus.
+async function reverseOrderRewards(o) {
+  const userId = o.userId;
+  if (!userId) return;
+  const u = await users.get(userId);
+  if (!u) return;
+  const patch = {};
+  // 1. Loyalty the customer spent on this order.
+  const spent = Number(o.loyaltyUsed || 0);
+  if (spent > 0) patch.loyalty_balance = Number(u.loyaltyBalance || 0) + spent;
+  // 2. The one-off squad discount, if this order used it.
+  if (Number(o.discount || 0) > 0 && !u.discountPending) patch.discount_pending = true;
+  // 3. The first-order-free-delivery perk: hand it back only when this customer
+  //    has no other live order, i.e. this really was the order that used it.
+  if (u.firstOrderDone) {
+    const { data: others } = await sb.from('orders').select('id')
+      .eq('user_id', userId).neq('status', 'cancelled').neq('id', o.id).limit(1);
+    if (!others || !others.length) patch.first_order_done = false;
+  }
+  if (Object.keys(patch).length) await sb.from('users').update(patch).eq('id', userId);
+}
+
+// ── Data-subject requests (audit H-01) ───────────────────────────────────
+// The privacy notice promises "You can ask us to delete your account and
+// associated personal data at any time" and names Ghana's Act 843. No deletion
+// path existed, and a plain user delete would not have honoured the promise:
+// orders keep DENORMALISED copies of the customer's name, phone and address,
+// with user_id set to null on delete — so the person's details would have
+// remained in the orders table indefinitely.
+//
+// Orders themselves are kept: they are accounting records, and a rider's
+// completed deliveries must still reconcile. What is removed is the ability to
+// identify a person from them.
+const dataRequests = {
+  async exportForUser(userId) {
+    const [user, addresses, orders_, reviews_, recurring_, referralsOut] = await Promise.all([
+      users.get(userId),
+      sb.from('addresses').select('*').eq('user_id', userId).then((r) => r.data || []),
+      sb.from('orders').select('*').eq('user_id', userId).then((r) => r.data || []),
+      sb.from('reviews').select('*').eq('user_id', userId).then((r) => r.data || []),
+      sb.from('recurring_orders').select('*').eq('user_id', userId).then((r) => r.data || []),
+      sb.from('referrals').select('*').eq('referrer_id', userId).then((r) => r.data || []),
+    ]);
+    if (!user) return null;
+    const { passwordHash, ...safeUser } = user;   // never export the hash
+    return {
+      exportedAt: new Date().toISOString(),
+      account: safeUser,
+      addresses, orders: orders_, reviews: reviews_,
+      recurringOrders: recurring_, referralsMade: referralsOut,
+    };
+  },
+
+  async eraseUser(userId) {
+    const tombstone = '[deleted]';
+    // 1. Scrub the personal details denormalised onto past orders. This is the
+    //    part a plain DELETE would have missed entirely.
+    await sb.from('orders').update({
+      customer_name: tombstone, customer_phone: null,
+      recipient_name: null, recipient_phone: null,
+      address: tombstone, momo_number: null, location: null,
+    }).eq('user_id', userId);
+
+    // 2. Anything else carrying contact details independently of the account.
+    await sb.from('product_requests').update({
+      name: tombstone, whatsapp_number: null, call_number: null,
+    }).eq('user_id', userId);
+
+    // 3. Detach from the referral graph so no one else's row points at them.
+    await sb.from('users').update({ referred_by: null }).eq('referred_by', userId);
+    await sb.from('referrals').delete().or('referrer_id.eq.' + userId + ',referee_id.eq.' + userId);
+
+    // 4. Session and cart state.
+    try { await sessions.destroyAllForUser(userId); } catch (_) {}
+    try { await sb.from('carts').delete().eq('user_id', userId); } catch (_) {}
+
+    // 5. The account itself. addresses, reviews, recurring_orders and
+    //    push_subscriptions are ON DELETE CASCADE and go with it; orders keep
+    //    ON DELETE SET NULL, which is why step 1 had to run first.
+    const { error } = await sb.from('users').delete().eq('id', userId);
+    if (error) throw error;
+    return { ok: true };
+  },
+};
 
 // ── Persistent cart (signed-in users; syncs across devices) ──────────────
 const carts = {
@@ -1108,7 +1579,7 @@ module.exports = {
   sb,
   users, squads, sessions, riders, orders, products,
   addresses, reviews, issueReports, promotions, productRequests, stats,
-  metrics, leaderboard, referrals, errorLog, pendingPayments,
+  metrics, leaderboard, referrals, errorLog, pendingPayments, checkSchema, dataRequests,
   pushSubs, searchLog, recurring, appConfig, carts,
   rowOut, rowsOut,
   hashPassword, verifyPassword, validatePasswordStrength,
