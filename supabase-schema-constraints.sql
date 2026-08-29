@@ -7,6 +7,19 @@
 -- Every fix in this session enforces these rules in JavaScript. These make the
 -- database enforce them too, so a future code path cannot quietly reintroduce
 -- the problem.
+--
+-- ⚠️  RUN supabase-schema-cart.sql FIRST. Section 5 adds a foreign key to
+--     `carts`, and that table does not exist yet — HANDOFF records its migration
+--     as applied, but the startup schema check proved otherwise (which is why
+--     the persistent cross-device cart has never worked). Without it, section 5
+--     fails on the carts statement.
+--
+-- Indexes here are plain CREATE INDEX, not CONCURRENTLY: the Supabase SQL editor
+-- wraps every submission in a transaction, and CONCURRENTLY cannot run inside
+-- one. A brief write lock is free on a table with no traffic. After launch, add
+-- indexes with CONCURRENTLY over a direct psql connection rather than the editor.
+--
+-- Each section is independent, so if one fails you can run the rest.
 
 
 -- ══ 1. MONEY CANNOT GO NEGATIVE ═══════════════════════════════════════════
@@ -44,7 +57,7 @@ alter table orders add  constraint orders_amounts_non_negative
 --
 -- If that returns rows, resolve the duplicates BEFORE running this.
 
-create unique index concurrently if not exists orders_paystack_ref_uniq
+create unique index if not exists orders_paystack_ref_uniq
   on orders (paystack_ref) where paystack_ref is not null;
 
 
@@ -55,7 +68,7 @@ create unique index concurrently if not exists orders_paystack_ref_uniq
 --   select referrer_id, referee_id, count(*) from referrals
 --   group by referrer_id, referee_id having count(*) > 1;
 
-create unique index concurrently if not exists referrals_pair_uniq
+create unique index if not exists referrals_pair_uniq
   on referrals (referrer_id, referee_id);
 
 
@@ -67,7 +80,7 @@ create unique index concurrently if not exists referrals_pair_uniq
 --   select user_id, count(*) from addresses where is_default
 --   group by user_id having count(*) > 1;
 
-create unique index concurrently if not exists addresses_one_default_per_user
+create unique index if not exists addresses_one_default_per_user
   on addresses (user_id) where is_default;
 
 
