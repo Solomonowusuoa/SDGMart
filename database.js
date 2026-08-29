@@ -32,6 +32,53 @@ const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
   },
 });
 
+// ── Schema drift check (audit B-07) ──────────────────────────────────────
+// Shipping code that writes a column before its migration has run took every
+// order down for a day (HANDOFF §10), and the failure was silent — inserts just
+// errored into a swallowed catch. This asserts at startup that the columns the
+// code actually writes exist, and says plainly which migration is missing.
+// It only reports: a missing OPTIONAL column is a warning, so the app still
+// boots and serves, but nobody has to discover the gap from a customer.
+const REQUIRED_SCHEMA = [
+  ['orders',   'paystack_ref',        'supabase-schema-paystack.sql',        true],
+  ['orders',   'delivered_at',        'supabase-schema-delivered-at.sql',    true],
+  ['orders',   'delivery_slot',       'supabase-schema-tweaks.sql',          true],
+  ['orders',   'client_request_id',   'supabase-schema-order-idempotency.sql', false],
+  ['users',    'referred_by',         'supabase-schema-referrals.sql',       true],
+  ['users',    'first_order_done',    'supabase-schema-additions.sql',       true],
+  ['users',    'birthday_gift_claimed_year', 'supabase-schema-tweaks.sql',   true],
+  ['carts',    'items',               'supabase-schema-cart.sql',            true],
+  ['referrals', 'month',              'supabase-schema-referrals.sql',       true],
+  ['pending_payments', 'draft',       'supabase-schema-paystack.sql',        true],
+];
+
+async function checkSchema() {
+  const missing = [];
+  for (const [table, column, migration, required] of REQUIRED_SCHEMA) {
+    try {
+      const { error } = await sb.from(table).select(column).limit(1);
+      if (error) missing.push({ table, column, migration, required });
+    } catch (_) {
+      missing.push({ table, column, migration, required });
+    }
+  }
+  if (!missing.length) { console.log('\u2713  Database schema matches what the code expects'); return { ok: true, missing }; }
+
+  const blocking = missing.filter((m) => m.required);
+  console.error('');
+  console.error('\u26a0\ufe0f  SCHEMA DRIFT \u2014 ' + missing.length + ' expected column(s) are missing:');
+  for (const m of missing) {
+    console.error('     ' + (m.required ? 'REQUIRED' : 'optional') + '  ' + m.table + '.' + m.column + '   \u2192 run ' + m.migration);
+  }
+  if (blocking.length) {
+    console.error('');
+    console.error('   Writes touching these columns WILL FAIL. Run the migrations above');
+    console.error('   (node scripts/migrate.js status) before taking orders.');
+  }
+  console.error('');
+  return { ok: false, missing };
+}
+
 // ── Admin bootstrap ──────────────────────────────────────────────────────
 const ADMIN_EMAIL = 'solomonowusuoa@gmail.com';
 const ADMIN_DEFAULT_PW = 'sdgadmin2026';
@@ -227,10 +274,26 @@ const users = {
       const r = await sb.from('users').select('*').eq('email', lower.trim()).maybeSingle();
       u = rowOut(r.data);
       if (u) {
-        // Link google_id to existing email user and mark verified
-        const upd = await sb.from('users').update({ google_id: googleId, email_verified: true, picture: picture || u.picture })
-          .eq('id', u.id).select().single();
+        // Linking a Google identity to a row that ALREADY has a password is the
+        // pre-hijacking case: because email verification is disabled, an
+        // attacker can register victim@gmail.com with a password of their
+        // choosing and wait. When the real owner later signs in with Google
+        // they are linked into that existing row — and the attacker still holds
+        // a working password for it.
+        //
+        // So on link, the pre-existing password and every session it created are
+        // destroyed. The rightful owner keeps the account and their Google
+        // sign-in; anyone holding a password for it is locked out and would have
+        // to prove control of the mailbox to set a new one.
+        const hijackRisk = !!u.passwordHash;
+        const patch = { google_id: googleId, email_verified: true, picture: picture || u.picture };
+        if (hijackRisk) patch.password_hash = null;
+        const upd = await sb.from('users').update(patch).eq('id', u.id).select().single();
         u = rowOut(upd.data);
+        if (hijackRisk) {
+          console.warn('Google link cleared a pre-existing password on user ' + u.id + ' (possible pre-registration)');
+          try { await sessions.destroyAllForUser(u.id); } catch (_) {}
+        }
       }
     }
     if (!u) {
@@ -1376,7 +1439,7 @@ module.exports = {
   sb,
   users, squads, sessions, riders, orders, products,
   addresses, reviews, issueReports, promotions, productRequests, stats,
-  metrics, leaderboard, referrals, errorLog, pendingPayments,
+  metrics, leaderboard, referrals, errorLog, pendingPayments, checkSchema,
   pushSubs, searchLog, recurring, appConfig, carts,
   rowOut, rowsOut,
   hashPassword, verifyPassword, validatePasswordStrength,

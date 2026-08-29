@@ -379,6 +379,8 @@ app.get('/app.bundle.js', (req, res) => {
 });
 
 // Build the bundle once at startup so the very first visitor doesn't pay for it.
+// Fail loudly on schema drift rather than discovering it from a customer (B-07).
+db.checkSchema().catch((e) => console.warn('schema check skipped:', e.message));
 try { _bundleCache = buildAppBundle(); _bundleBuiltAt = newestSourceMtime(); console.log('📦 App bundle pre-built'); }
 catch (e) { console.warn('⚠️  initial bundle build failed (will retry on first request):', e.message); }
 
@@ -977,6 +979,10 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
   }).catch(() => {});
   return {
     ok: true, id: created.id, total: pricing.total,
+    // The client renders the receipt and reports revenue from these, so the
+    // full breakdown is returned rather than just the total (B-05).
+    subtotal: pricing.subtotal, delivery: pricing.delivery,
+    discount: pricing.discount, loyaltyUsed: pricing.loyaltyUsed,
     deliveryDate: deliveryDateStr, deliverySlot, priority,
     // Earned on DELIVERY now, not at checkout — see the rewards note above.
     // Projected so the success screen can say what is coming. Only the tier
@@ -1533,7 +1539,7 @@ app.get('/api/auth/verify', async (req, res) => {
   res.send('<h2 style="font-family:sans-serif;max-width:480px;margin:60px auto;color:#000">✅ Email verified.</h2><p style="font-family:sans-serif;max-width:480px;margin:0 auto;color:#666">You can return to SDGMart and continue shopping.</p>');
 });
 
-app.post('/api/auth/resend-verification', requireAuth, async (req, res) => {
+app.post('/api/auth/resend-verification', requireAuth, customerOnly, async (req, res) => {
   if (req.user.emailVerified) return res.json({ ok: true, alreadyVerified: true });
   const verifyToken = await db.makeEmailToken(req.user.id, 'verify');
   const verifyLink = `${req.protocol}://${req.get('host')}/api/auth/verify?token=${verifyToken}`;
@@ -1616,7 +1622,7 @@ app.post('/api/auth/change-password', requireAuth, customerOnly, async (req, res
   } catch (e) { fail(res, e, req); }
 });
 
-app.get('/api/users/:id', requireAuth, async (req, res) => {
+app.get('/api/users/:id', requireAuth, customerOnly, async (req, res) => {
   if (String(req.user.id) !== String(req.params.id) && req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
   try {
     const u = await db.users.get(req.params.id);
@@ -1625,7 +1631,7 @@ app.get('/api/users/:id', requireAuth, async (req, res) => {
   } catch (e) { fail(res, e, req); }
 });
 
-app.get('/api/squads/:userId', requireAuth, async (req, res) => {
+app.get('/api/squads/:userId', requireAuth, customerOnly, async (req, res) => {
   if (String(req.user.id) !== String(req.params.userId) && req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
   try {
     const u = await db.users.get(req.params.userId);
@@ -1730,7 +1736,7 @@ app.get('/api/push/vapid-public-key', (req, res) => {
   if (!VAPID) return res.status(503).json({ error: 'Push not configured' });
   res.json({ publicKey: VAPID.publicKey });
 });
-app.post('/api/push/subscribe', requireAuth, async (req, res) => {
+app.post('/api/push/subscribe', requireAuth, customerOnly, async (req, res) => {
   const sub = req.body && req.body.subscription;
   if (!sub || !sub.endpoint || !sub.keys) return res.status(400).json({ error: 'Invalid subscription' });
   try { await db.pushSubs.add(req.user.id, sub); res.json({ ok: true }); }
@@ -1822,8 +1828,23 @@ app.get('/api/me/orders', requireAuth, async (req, res) => {
 // the app (no account, no session). Pure HMAC of the order id — nothing stored,
 // unguessable without the server secret, stable across restarts. Returned once
 // at order creation; the client keeps it in localStorage.
+// Guest tracking tokens are signed with their OWN secret. They used to derive
+// from SUPABASE_SERVICE_KEY, which meant rotating the most sensitive credential
+// you hold broke every tracking link a guest had saved and every code printed on
+// a WhatsApp receipt — a customer-visible cost attached to the one action you
+// most need to take quickly during an incident.
+//
+// Falls back to the service key when TRACK_TOKEN_SECRET is unset, so existing
+// tokens keep working; set the env var to decouple them for good.
+const TRACK_SECRET = process.env.TRACK_TOKEN_SECRET || process.env.SUPABASE_SERVICE_KEY || '';
+if (!process.env.TRACK_TOKEN_SECRET) {
+  console.warn('\u26a0\ufe0f  TRACK_TOKEN_SECRET is not set \u2014 guest tracking tokens are derived from');
+  console.warn('   SUPABASE_SERVICE_KEY, so rotating that key will invalidate every saved');
+  console.warn('   tracking link. Set TRACK_TOKEN_SECRET to decouple them.');
+}
+
 function orderTrackToken(orderId) {
-  return require('crypto').createHmac('sha256', process.env.SUPABASE_SERVICE_KEY)
+  return require('crypto').createHmac('sha256', TRACK_SECRET)
     .update('track:' + String(orderId)).digest('hex').slice(0, 20);
 }
 app.get('/api/orders/:id/tracking', async (req, res) => {
@@ -1848,7 +1869,7 @@ app.get('/api/orders/:id/tracking', async (req, res) => {
     }
     if (!tokenOk) {
       const isOwner = String(t.order.userId) === String(req.user.id);
-      const isRider = String(t.order.riderId) === String(req.user.id);
+      const isRider = req.user.role === 'rider' && String(t.order.riderId) === String(req.user.id);
       if (!isOwner && !isRider && req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
     }
     res.json(t);
@@ -2310,7 +2331,7 @@ app.post('/api/admin/birthday-gifts', requireAdmin, async (req, res) => {
     res.json({ ok: true });
   } catch (e) { fail(res, e, req); }
 });
-app.get('/api/birthday/gifts', requireAuth, async (req, res) => {
+app.get('/api/birthday/gifts', requireAuth, customerOnly, async (req, res) => {
   try {
     const { cfg, eligible } = await birthdayGiftStatus(req.user);
     if (!eligible) return res.json({ eligible: false, products: [] });

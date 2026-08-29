@@ -344,8 +344,23 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // After an order is created (paid or COD): set up recurring, refresh the
   // user, show the success screen, clear the cart. `serverId` is the real DB
   // order id used for the display code + tracking.
-  const finishOrder = async (snap, serverId, trackToken, pendingCredit) => {
+  const finishOrder = async (snap, serverId, trackToken, pendingCredit, serverPricing) => {
     setLoyaltyPending(Number(pendingCredit || 0));
+    // The server is the only authority on what was charged. The client computes
+    // its own preview with different rounding — it rounds nothing, while the
+    // server rounds each discounted unit price before multiplying — so the two
+    // can disagree by a few pesewas per line (B-05). Everything below (success
+    // screen, PDF receipt, WhatsApp message, GA4 revenue) used the client copy,
+    // which meant a customer's receipt could state a different amount from the
+    // order in your database. Overwrite the snapshot with the real figures.
+    if (serverPricing && serverPricing.total != null) {
+      snap = { ...snap, total: Number(serverPricing.total) };
+      if (serverPricing.subtotal != null) snap.subtotal = Number(serverPricing.subtotal);
+      if (serverPricing.delivery != null) snap.delivery = Number(serverPricing.delivery);
+      if (serverPricing.discount != null) snap.discount = Number(serverPricing.discount);
+      if (serverPricing.loyaltyUsed != null) snap.loyaltyUsed = Number(serverPricing.loyaltyUsed);
+      setOrderSnapshot(snap);
+    }
     const code = serverId != null ? window.orderCode(serverId) : orderId;
     if (serverId != null) { setPlacedOrderId(serverId); setOrderId(code); }
     if (trackToken) setPlacedTrackToken(trackToken);
@@ -418,7 +433,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
         throw err;
       }
       if (!d || d.id == null) throw new Error('server');
-      await finishOrder(snap, d.id, d.trackToken || null, d.loyaltyPending);
+      await finishOrder(snap, d.id, d.trackToken || null, d.loyaltyPending, d);
       // paying stays true — the success screen replaces this view.
     } catch (e) {
       // Cart is deliberately left intact so retrying is a single tap.
@@ -463,7 +478,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
             const vr = await apiFetch('/api/paystack/verify', { method: 'POST', body: JSON.stringify({ reference: initData.reference, draft }) });
             const vd = await vr.json();
             if (!vr.ok) { alert(vd.error || 'We could not confirm your payment. If you were charged, contact us on WhatsApp.'); setPaying(false); return; }
-            await finishOrder(snap, vd && vd.id != null ? vd.id : null, (vd && vd.trackToken) || null, vd && vd.loyaltyPending);
+            await finishOrder(snap, vd && vd.id != null ? vd.id : null, (vd && vd.trackToken) || null, vd && vd.loyaltyPending, vd);
           } catch (_) { alert('Payment confirmed but the order could not be saved — please contact us on WhatsApp.'); }
           finally { setPaying(false); }
         },

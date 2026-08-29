@@ -224,6 +224,14 @@ const App = () => {
   }, []);
 
   const logout = async () => {
+
+    // Wipe any cached responses so nothing from this session survives a
+
+    // handover on a shared phone (audit A-12).
+
+    try { navigator.serviceWorker?.controller?.postMessage({ type: 'sdg-clear-cache' }); } catch (_) {}
+
+    try { if (window.caches) caches.keys().then(ks => ks.forEach(k => caches.delete(k))); } catch (_) {}
     try { await apiFetch('/api/auth/logout', { method: 'POST' }); } catch (_) {}
     setCurrentUser(null);
     // Cart intentionally survives sign-out (persisted in localStorage).
