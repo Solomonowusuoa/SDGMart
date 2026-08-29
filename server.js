@@ -511,8 +511,30 @@ async function birthdayGiftStatus(user) {
 const STANDARD_DELIVERY = 10;
 const FREE_DELIVERY_MIN = 150;
 const FIRST_ORDER_FREE_MIN = 50; // first-order free delivery only when the order is ≥ this (GHS)
+// A cart cannot legitimately contain more distinct products than this; the cap
+// exists so one request cannot be turned into an unbounded amount of work.
+const MAX_ORDER_LINES = 100;
+
+// Lets pricing reject a basket with a real status code instead of a 500.
+// ── Kill switches ────────────────────────────────────────────────────────
+// Admin-flippable stops for the paths that can lose money. Without these the
+// only way to halt an exploit in progress is a code change and a deploy — with
+// no staging to verify it against. Default ON, so an unset key changes nothing.
+async function switchOn(key) {
+  try {
+    const v = await db.appConfig.get(key);
+    return v === undefined || v === null ? true : !!v;
+  } catch (_) { return true; }   // never let a config read block trading
+}
+
+class HttpError extends Error {
+  constructor(status, message, extra) { super(message); this.status = status; Object.assign(this, extra || {}); }
+}
+
 async function computeOrderPricing(reqUser, body) {
   const clientItems = Array.isArray(body.items) ? body.items : [];
+  let deductStock = false;
+  try { deductStock = !!(await db.appConfig.get('deduct_stock')); } catch (_) {}
   let promoMap = {};
   try {
     const promos = await db.promotions.listActive();
@@ -520,22 +542,56 @@ async function computeOrderPricing(reqUser, body) {
       if (!promoMap[id] || p.discountPercent > promoMap[id]) promoMap[id] = p.discountPercent;
     }));
   } catch (_) {}
-  const items = [];
+  // Collapse duplicate ids into one line before clamping (C-04). The 99 cap was
+  // per LINE, so 200 lines of the same product meant 19,800 units — and each
+  // line cost its own sequential products.get, letting one 3 MB request tie the
+  // single Node process up in tens of thousands of round-trips.
+  const wanted = new Map();
   for (const ci of clientItems) {
     if (!ci || ci.birthdayGift) continue; // gift is appended separately, always free
-    const p = await db.products.get(ci.id);
-    if (!p) continue; // unknown id → drop (can't be trusted)
-    const qty = Math.max(1, Math.min(99, parseInt(ci.qty, 10) || 1));
+    const id = parseInt(ci.id, 10);
+    if (!Number.isFinite(id)) continue;
+    // `parseInt(x) || 1` would turn an explicit qty of 0 — "remove this line" —
+    // into 1, quietly adding an item the customer took out.
+    const raw = parseInt(ci.qty, 10);
+    const qty = Number.isFinite(raw) ? Math.max(0, Math.min(99, raw)) : 1;
+    if (!qty) continue;
+    wanted.set(id, Math.min(99, (wanted.get(id) || 0) + qty));
+    if (wanted.size > MAX_ORDER_LINES) throw new HttpError(400, 'That order has too many different items.');
+  }
+  // One query instead of one per line.
+  const found = await db.products.listByIds([...wanted.keys()]);
+  const byId = new Map(found.map((p) => [String(p.id), p]));
+  const items = [];
+  const unavailable = [];
+  for (const [id, qty] of wanted) {
+    const p = byId.get(String(id));
+    if (!p) { unavailable.push({ id, reason: 'gone' }); continue; }
+    // Availability was enforced only by hiding "Sold out" products in the UI,
+    // so a direct POST could order any quantity of something with no stock
+    // (B-03). Only meaningful while the deduct_stock toggle is on.
+    if (deductStock && Number(p.stock || 0) < qty) {
+      unavailable.push({ id, name: p.name, reason: Number(p.stock || 0) ? 'partial' : 'out', have: Number(p.stock || 0) });
+      continue;
+    }
     const pct = Number(promoMap[p.id] || 0);
-    const price = +(Number(p.price) * (1 - pct / 100)).toFixed(2);
+    const price = Math.max(0, +(Number(p.price) * (1 - pct / 100)).toFixed(2));
     items.push({ id: p.id, name: p.name, category: p.category, unit: p.unit, price, qty, ...(pct ? { originalPrice: Number(p.price), promoPercent: pct } : {}) });
   }
+  if (!items.length) {
+    // An empty or all-invalid basket used to produce a real queued order for the
+    // delivery fee alone, and a rider dispatched to deliver nothing (C-03).
+    throw new HttpError(400, unavailable.length
+      ? 'Those items are no longer available.'
+      : 'Your cart is empty.', { unavailable });
+  }
   const subtotal = +items.reduce((s, i) => s + i.price * i.qty, 0).toFixed(2);
+  const loyaltyAllowed = await switchOn('loyalty_redemption_enabled');
   const discountApplied = !!(reqUser && reqUser.discountPending);
   const discount = discountApplied ? +(subtotal * 0.05).toFixed(2) : 0;
   const afterDiscount = +(subtotal - discount).toFixed(2);
   let loyaltyUsed = 0;
-  if (reqUser && Number(body.loyaltyUsed || 0) > 0) {
+  if (loyaltyAllowed && reqUser && Number(body.loyaltyUsed || 0) > 0) {
     loyaltyUsed = +Math.min(Number(body.loyaltyUsed), Number(reqUser.loyaltyBalance || 0), afterDiscount).toFixed(2);
   }
   const afterLoyalty = +(afterDiscount - loyaltyUsed).toFixed(2);
@@ -543,7 +599,7 @@ async function computeOrderPricing(reqUser, body) {
     && afterLoyalty >= FIRST_ORDER_FREE_MIN);
   const delivery = (firstOrderFree || afterLoyalty >= FREE_DELIVERY_MIN) ? 0 : STANDARD_DELIVERY;
   const total = +(afterLoyalty + delivery).toFixed(2);
-  return { items, subtotal, discount, discountApplied, loyaltyUsed, delivery, total, firstOrderFree };
+  return { items, subtotal, discount, discountApplied, loyaltyUsed, delivery, total, firstOrderFree, unavailable };
 }
 
 // Shared order-creation logic. Used by Cash-on-Delivery (/api/orders) and the
@@ -612,6 +668,10 @@ async function releaseStaleReservations(userId) {
 }
 
 async function createOrderFromBody(reqUser, body, extra = {}) {
+  // Never block an order whose payment has already been taken.
+  if (!extra.paid && !(await switchOn('ordering_enabled'))) {
+    throw new HttpError(503, 'We have paused new orders for a short while. Please try again soon, or message us on WhatsApp.');
+  }
   // Duplicate-order protection: the client sends one key per checkout attempt
   // and reuses it when retrying. If that attempt already produced an order —
   // because the response was lost rather than the request failing — return the
@@ -955,7 +1015,12 @@ app.post('/api/orders', async (req, res) => {
   try {
     const result = await createOrderFromBody(req.user, req.body, { paid: false });
     res.status(201).json(result);
-  } catch (e) { console.error('order create failed:', e); res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    if (e && e.status) return res.status(e.status).json({ error: e.message, unavailable: e.unavailable || [] });
+    console.error('order create failed:', e);
+    await db.errorLog.record({ message: 'order create failed: ' + e.message, stack: e.stack || '', path: '/api/orders', method: 'POST', status: 500, userId: req.user ? req.user.id : null });
+    res.status(500).json({ error: 'We could not place your order. Please try again.' });
+  }
 });
 
 app.put('/api/orders/:id', requireAdmin, async (req, res) => {
@@ -988,13 +1053,17 @@ app.get('/api/paystack/config', (req, res) => {
 //    payment is confirmed.
 app.post('/api/paystack/init', async (req, res) => {
   if (!PAYSTACK_SECRET_KEY) return res.status(503).json({ error: 'Online payment is not configured' });
+  if (!(await switchOn('online_payment_enabled'))) return res.status(503).json({ error: 'Online payment is temporarily unavailable — please choose Cash on Delivery.' });
+  if (!(await switchOn('ordering_enabled'))) return res.status(503).json({ error: 'We have paused new orders for a short while. Please try again soon.' });
   const { email, draft } = req.body || {};
   if (!draft || !Array.isArray(draft.items) || !draft.items.length) return res.status(400).json({ error: 'Empty order' });
   // Amount is computed server-side from the cart — never trust the client amount.
   // Give this customer back anything they reserved on a checkout they walked
   // away from, before pricing the new one.
   await releaseStaleReservations(req.user ? req.user.id : null);
-  const pricing = await computeOrderPricing(req.user, draft);
+  let pricing;
+  try { pricing = await computeOrderPricing(req.user, draft); }
+  catch (e) { if (e && e.status) return res.status(e.status).json({ error: e.message, unavailable: e.unavailable || [] }); throw e; }
   // Resolve the birthday gift here too, so the locked item list is complete.
   let giftYear = null;
   if (req.user && draft.birthdayGift) {
@@ -1961,12 +2030,28 @@ app.get('/api/admin/settings', requireAdmin, async (req, res) => {
       deductStock: !!(await db.appConfig.get('deduct_stock')),
       storeName: (await db.appConfig.get('store_name')) || 'SDGMart',
       deliverySlots: (await db.appConfig.get('delivery_slots')) || ['12:00-14:00', '14:00-16:00', '16:00-18:00'],
+      orderingEnabled: await switchOn('ordering_enabled'),
+      onlinePaymentEnabled: await switchOn('online_payment_enabled'),
+      loyaltyRedemptionEnabled: await switchOn('loyalty_redemption_enabled'),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/admin/settings', requireAdmin, async (req, res) => {
-  const { showFreshness, storeName, deliverySlots, deductStock } = req.body || {};
+  const { showFreshness, storeName, deliverySlots, deductStock,
+    orderingEnabled, onlinePaymentEnabled, loyaltyRedemptionEnabled } = req.body || {};
   try {
+    // Kill switches. Logged, because turning trading off is worth an audit trail.
+    for (const [k, v] of [['ordering_enabled', orderingEnabled],
+      ['online_payment_enabled', onlinePaymentEnabled],
+      ['loyalty_redemption_enabled', loyaltyRedemptionEnabled]]) {
+      if (v == null) continue;
+      await db.appConfig.set(k, !!v);
+      if (!v) {
+        const msg = 'KILL SWITCH: ' + k + ' turned OFF by admin ' + req.user.id;
+        console.warn(msg);
+        await db.errorLog.record({ message: msg, path: '/api/admin/settings', method: 'POST', status: 200, userId: req.user.id });
+      }
+    }
     if (showFreshness != null) await db.appConfig.set('show_freshness', !!showFreshness);
     if (deductStock != null) await db.appConfig.set('deduct_stock', !!deductStock);
     if (storeName != null) await db.appConfig.set('store_name', String(storeName).slice(0, 60));

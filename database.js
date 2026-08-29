@@ -89,6 +89,13 @@ const products = {
     if (error) throw error;
     return rowsOut(data);
   },
+  // One round-trip for a whole basket, instead of one per line.
+  async listByIds(ids) {
+    if (!ids || !ids.length) return [];
+    const { data, error } = await sb.from('products').select('*').in('id', ids);
+    if (error) throw error;
+    return rowsOut(data);
+  },
   async get(id) {
     const { data, error } = await sb.from('products').select('*').eq('id', id).maybeSingle();
     if (error) throw error;
@@ -856,8 +863,16 @@ const addresses = {
     return rowOut(data);
   },
   async update(userId, id, patch) {
-    if (patch.isDefault) await sb.from('addresses').update({ is_default: false }).eq('user_id', userId);
-    const { data, error } = await sb.from('addresses').update(rowIn(patch)).eq('id', id).eq('user_id', userId).select().single();
+    // Explicit allowlist. The patch was previously passed through wholesale, so
+    // `{"userId": <victim id>, "isDefault": true}` moved the row into someone
+    // else's account and became their default — rerouting their next delivery
+    // to an address the attacker controls.
+    const safe = {};
+    for (const k of ['label', 'neighborhood', 'address', 'location', 'isDefault', 'isLastUsed']) {
+      if (Object.prototype.hasOwnProperty.call(patch || {}, k)) safe[k] = patch[k];
+    }
+    if (safe.isDefault) await sb.from('addresses').update({ is_default: false }).eq('user_id', userId);
+    const { data, error } = await sb.from('addresses').update(rowIn(safe)).eq('id', id).eq('user_id', userId).select().single();
     if (error) throw error;
     return rowOut(data);
   },
@@ -1272,7 +1287,10 @@ async function uploadProductPhoto(buffer, mimeType = 'image/jpeg') {
 async function cancelOrder(orderId, userId, reason) {
   const o = await orders.get(orderId);
   if (!o) return null;
-  if (o.userId && String(o.userId) !== String(userId)) return { error: 'not yours' };
+  // A guest order has user_id NULL. The old `o.userId &&` short-circuit meant
+  // the check was SKIPPED for those, so any signed-in account could walk
+  // sequential ids and cancel every guest order inside its 15-minute window.
+  if (!o.userId || String(o.userId) !== String(userId)) return { error: 'not yours' };
   if (o.status !== 'queued') return { error: 'order is already being processed' };
   // 15-minute cancellation window
   const ageMin = (Date.now() - new Date(o.createdAt).getTime()) / 60000;

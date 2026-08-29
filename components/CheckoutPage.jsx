@@ -398,14 +398,23 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
       const r = await apiFetch('/api/orders', { method: 'POST', body: JSON.stringify(buildDraft(snap)) });
       // fetch does NOT reject on 4xx/5xx — an error status arrives as a normal
       // response, so it must be checked explicitly or it slips straight past.
-      if (!r.ok) throw new Error('server');
-      const d = await r.json();
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        // A 4xx is a decision about this basket (sold out, empty, paused) and
+        // the server's wording is more useful than anything generic.
+        const err = new Error(d.error || 'server');
+        err.kind = (r.status >= 400 && r.status < 500) ? 'rejected' : 'server';
+        err.unavailable = d.unavailable || [];
+        throw err;
+      }
       if (!d || d.id == null) throw new Error('server');
       await finishOrder(snap, d.id, d.trackToken || null);
       // paying stays true — the success screen replaces this view.
     } catch (e) {
       // Cart is deliberately left intact so retrying is a single tap.
-      setSubmitError(e && e.message === 'server' ? 'server' : 'network');
+      setSubmitError(e && e.kind === 'rejected'
+        ? { kind: 'rejected', message: e.message, unavailable: e.unavailable || [] }
+        : (e && e.message === 'server' ? 'server' : 'network'));
       setPaying(false);
     }
   };
@@ -906,16 +915,30 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
               {submitError && (
                 <div style={{ border: '1px solid var(--rule-2)', borderLeft: '3px solid var(--accent)', background: 'var(--surface-warm, #FFF7F2)', padding: '14px 16px', marginBottom: 12 }}>
                   <div style={{ fontFamily: 'var(--f-ui)', fontSize: 14, fontWeight: 700, marginBottom: 5 }}>
-                    {submitError === 'network' ? 'Your order didn’t go through' : 'We couldn’t save your order'}
+                    {submitError.kind === 'rejected' ? 'We couldn’t place this order'
+                      : submitError === 'network' ? 'Your order didn’t go through'
+                      : 'We couldn’t save your order'}
                   </div>
                   <div style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--rd-body)' }}>
-                    {submitError === 'network'
-                      ? 'Your connection dropped before we could send it. '
-                      : 'Something went wrong on our side. '}
-                    <strong>Nothing was charged and your items are still in your cart.</strong>{' '}
-                    {submitError === 'network'
-                      ? 'Check your internet, then tap Place Order again.'
-                      : 'Please tap Place Order again.'}
+                    {submitError.kind === 'rejected' ? (
+                      <>
+                        {submitError.message}{' '}
+                        {!!(submitError.unavailable || []).length && (
+                          <span>Affected: {submitError.unavailable.map((u) => u.name || ('item #' + u.id)).join(', ')}. </span>
+                        )}
+                        <strong>Nothing was charged.</strong> Adjust your cart and try again.
+                      </>
+                    ) : (
+                      <>
+                        {submitError === 'network'
+                          ? 'Your connection dropped before we could send it. '
+                          : 'Something went wrong on our side. '}
+                        <strong>Nothing was charged and your items are still in your cart.</strong>{' '}
+                        {submitError === 'network'
+                          ? 'Check your internet, then tap Place Order again.'
+                          : 'Please tap Place Order again.'}
+                      </>
+                    )}
                   </div>
                   <a href={'https://wa.me/233599189773?text=' + encodeURIComponent('Hi SDGMart, I tried to place an order but it kept failing. Can you help?')}
                      target="_blank" rel="noopener noreferrer"

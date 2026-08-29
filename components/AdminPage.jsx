@@ -451,11 +451,11 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   };
 
   // ── Settings tab state ──
-  const [settings, setSettings] = React.useState({ showFreshness: false, deductStock: false });
+  const [settings, setSettings] = React.useState({ showFreshness: false, deductStock: false, orderingEnabled: true, onlinePaymentEnabled: true, loyaltyRedemptionEnabled: true });
   const [settingsSaved, setSettingsSaved] = React.useState('');
   const [slotsText, setSlotsText] = React.useState('');
   const loadSettings = React.useCallback(() => {
-    apiFetch('/api/admin/settings').then(r => r.ok ? r.json() : {}).then(s => { setSettings({ showFreshness: !!s.showFreshness, deductStock: !!s.deductStock }); setSlotsText((s.deliverySlots || []).join('\n')); }).catch(() => {});
+    apiFetch('/api/admin/settings').then(r => r.ok ? r.json() : {}).then(s => { setSettings({ showFreshness: !!s.showFreshness, deductStock: !!s.deductStock, orderingEnabled: s.orderingEnabled !== false, onlinePaymentEnabled: s.onlinePaymentEnabled !== false, loyaltyRedemptionEnabled: s.loyaltyRedemptionEnabled !== false }); setSlotsText((s.deliverySlots || []).join('\n')); }).catch(() => {});
   }, []);
   React.useEffect(() => { if (adminTab === 'settings') loadSettings(); }, [adminTab, loadSettings]);
   const saveSettings = async (patch) => {
@@ -1704,6 +1704,40 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                 </button>
               </div>
               {settingsSaved && <div style={{ marginTop: 16, fontSize: 13, color: 'var(--sage)' }}>✓ {settingsSaved}</div>}
+            </div>
+
+            {/* KILL SWITCHES — stop a money-losing path without a code deploy */}
+            <div style={{ background: 'var(--white)', borderRadius: 12, padding: '20px 22px', boxShadow: 'var(--shadow)', maxWidth: 620, marginTop: 20, borderLeft: '4px solid #C9601F' }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>⚠️ Emergency switches</div>
+              <div style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 4, marginBottom: 4, lineHeight: 1.5 }}>
+                Turn a feature off immediately if something is going wrong — no code change, no deploy.
+                Customers see a clear message and are pointed at WhatsApp. Turning one off is recorded in the Errors tab.
+                Orders that have already been paid for are never blocked.
+              </div>
+              {[
+                ['orderingEnabled', 'Accept new orders', 'OFF puts the shop in browse-only mode. Use if orders are being abused or you cannot fulfil.'],
+                ['onlinePaymentEnabled', 'Accept online payment (Card / MoMo)', 'OFF hides Pay Now and leaves Cash on Delivery. Use if Paystack is misbehaving.'],
+                ['loyaltyRedemptionEnabled', 'Allow spending loyalty credit', 'OFF stops credit being applied at checkout. Use if balances look wrong.'],
+              ].map(([key, label, help]) => (
+                <div key={key} style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--cream-dark)' }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>
+                      {label}{' '}
+                      <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: settings[key] ? '#E9F4EF' : '#FBE9DC', color: settings[key] ? '#1B6349' : '#8A3D10' }}>
+                        {settings[key] ? 'ON' : 'OFF'}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 12.5, color: 'var(--warm-gray)', marginTop: 4, lineHeight: 1.5 }}>{help}</div>
+                  </div>
+                  <button onClick={() => {
+                      if (settings[key] && !window.confirm('Turn OFF "' + label + '"? Customers will be blocked from this until you turn it back on.')) return;
+                      saveSettings({ [key]: !settings[key] });
+                    }}
+                    style={{ flexShrink: 0, width: 52, height: 30, borderRadius: 999, background: settings[key] ? 'var(--sage)' : '#C9601F', position: 'relative', transition: 'background .2s', border: 'none', cursor: 'pointer' }}>
+                    <span style={{ position: 'absolute', top: 3, left: settings[key] ? 25 : 3, width: 24, height: 24, borderRadius: '50%', background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.2)' }} />
+                  </button>
+                </div>
+              ))}
             </div>
 
             <div style={{ background: 'var(--white)', borderRadius: 12, padding: '20px 22px', boxShadow: 'var(--shadow)', maxWidth: 620, marginTop: 20 }}>
