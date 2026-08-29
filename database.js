@@ -1504,6 +1504,74 @@ const referrals = {
   },
 };
 
+// ── Retention (audit B-12) ───────────────────────────────────────────────
+// Sessions were deleted only when an expired one happened to be read, and
+// email_tokens, pending_payments, search_queries and error_logs had no
+// retention at all — so on a 500MB tier the junk tables were the ones growing
+// fastest. This runs once a day from runDailyJobs.
+//
+// Windows are set by what the data is actually for, not by a uniform number:
+// a session past its expiry is dead weight the same day, while error logs are
+// the only forensic trail there is and are worth three months.
+//
+// pending_payments is deliberately NOT swept aggressively here. The abandoned-
+// reservation job already releases held loyalty at 24h after checking Paystack;
+// this only removes rows so old that no recovery is plausible, and it leaves
+// anything still carrying a reservation alone so the money path stays the one
+// place that decides.
+const RETENTION = {
+  sessions: { days: 0 },        // expired is expired
+  emailTokens: { days: 0 },
+  pendingPayments: { days: 30 },
+  searchQueries: { days: 90 },
+  errorLogs: { days: 90 },
+};
+
+const retention = {
+  async sweep() {
+    const ago = (d) => new Date(Date.now() - d * 86400000).toISOString();
+    const now = new Date().toISOString();
+    const out = {};
+    const run = async (name, fn) => {
+      try { out[name] = await fn(); }
+      catch (e) { out[name] = 'failed: ' + e.message; console.warn('retention sweep (' + name + ') failed:', e.message); }
+    };
+
+    await run('sessions', async () => {
+      const { data } = await sb.from('sessions').delete().lt('expires_at', now).select('token');
+      return (data || []).length;
+    });
+    await run('emailTokens', async () => {
+      const { data } = await sb.from('email_tokens').delete().lt('expires_at', now).select('token');
+      return (data || []).length;
+    });
+    await run('pendingPayments', async () => {
+      // Only rows with nothing reserved against them — anything still holding
+      // a customer's loyalty is the money path's to release, not ours.
+      const { data: old } = await sb.from('pending_payments').select('reference, draft')
+        .lt('created_at', ago(RETENTION.pendingPayments.days)).limit(500);
+      const safe = (old || []).filter((r) => !(r.draft && r.draft._reserved)).map((r) => r.reference);
+      if (!safe.length) return 0;
+      await sb.from('pending_payments').delete().in('reference', safe);
+      return safe.length;
+    });
+    await run('searchQueries', async () => {
+      const { data } = await sb.from('search_queries').delete()
+        .lt('created_at', ago(RETENTION.searchQueries.days)).select('id');
+      return (data || []).length;
+    });
+    await run('errorLogs', async () => {
+      const { data } = await sb.from('error_logs').delete()
+        .lt('created_at', ago(RETENTION.errorLogs.days)).select('id');
+      return (data || []).length;
+    });
+
+    const summary = Object.entries(out).map(([k, v]) => k + '=' + v).join(' ');
+    console.log('retention sweep: ' + summary);
+    return out;
+  },
+};
+
 // ── Monthly referral leaderboard (+ auto-award last month's winner) ───────
 const leaderboard = {
   async topReferrers(limit = 10) {
@@ -1750,7 +1818,7 @@ module.exports = {
   pushSubs, searchLog, recurring, appConfig, carts,
   rowOut, rowsOut,
   hashPassword, verifyPassword, burnPasswordTiming, validatePasswordStrength,
-  rateCheck, rateClear,
+  rateCheck, rateClear, retention,
   businessDate, businessHour, businessDatePlus, BUSINESS_TZ,
   makeEmailToken, consumeEmailToken,
   createRider, attachOrderLocation,

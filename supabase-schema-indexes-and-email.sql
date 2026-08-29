@@ -64,3 +64,18 @@ create unique index if not exists riders_email_lower_uniq on riders (lower(email
 -- No mixed-case addresses left (both should return 0):
 --   select count(*) from users  where email <> lower(trim(email));
 --   select count(*) from riders where email <> lower(trim(email));
+
+
+-- ══ DOWN ══
+-- Drops the indexes this migration added. Order queries get slow again.
+--
+-- NOTE: the two `update ... set email = lower(trim(email))` statements are NOT
+-- reversed and cannot be — the original casing was overwritten in place and was
+-- never recorded anywhere. That is deliberate: mixed-case duplicates were the
+-- bug. Nothing depends on the old casing (every lookup lowercases first).
+drop index if exists orders_created_at_idx;
+drop index if exists orders_user_created_idx;
+drop index if exists orders_rider_status_idx;
+drop index if exists issue_reports_created_at_idx;
+drop index if exists users_email_lower_uniq;
+drop index if exists riders_email_lower_uniq;

@@ -70,3 +70,9 @@ alter table recurring_orders add  constraint recurring_next_run_sane
 --   select conname from pg_constraint
 --    where conrelid = 'recurring_orders'::regclass
 --      and conname in ('recurring_cadence_sane', 'recurring_next_run_sane');
+
+
+-- ══ DOWN ══
+drop index if exists reviews_one_per_order;
+alter table recurring_orders drop constraint if exists recurring_cadence_sane;
+alter table recurring_orders drop constraint if exists recurring_next_run_sane;

@@ -1933,6 +1933,11 @@ async function runDailyJobs() {
       await db.sb.from('users').update({ birthday_notified_year: year }).eq('id', u.id);
     }
     await runRecurringOrders();
+    // Prune the tables nothing else ever deletes from (audit B-12). Last,
+    // and in its own catch, so a sweep failure cannot cost anyone their
+    // recurring order or their birthday push.
+    try { await db.retention.sweep(); }
+    catch (e) { console.warn('retention sweep failed:', e.message); }
   } catch (e) { console.warn('runDailyJobs failed:', e.message); }
   finally { _dailyJobRunning = false; }
 }
