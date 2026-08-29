@@ -18,7 +18,20 @@ let Sentry = null;
 if (process.env.SENTRY_DSN) {
   try {
     Sentry = require('@sentry/node');
-    Sentry.init({ dsn: process.env.SENTRY_DSN, environment: process.env.NODE_ENV || 'production', tracesSampleRate: 0 });
+    Sentry.init({
+      dsn: process.env.SENTRY_DSN,
+      environment: process.env.NODE_ENV || 'production',
+      tracesSampleRate: 0,
+      // Sentry attaches the request URL itself, so scrubbing our own `extra`
+      // is not enough — strip query strings on the way out too (audit E-08).
+      beforeSend(event) {
+        try {
+          if (event.request && event.request.url) event.request.url = String(event.request.url).split('?')[0];
+          if (event.request && event.request.query_string) delete event.request.query_string;
+        } catch (_) {}
+        return event;
+      },
+    });
     console.log('🛡  Sentry error monitoring enabled');
   } catch (e) { console.warn('Sentry init skipped:', e.message); Sentry = null; }
 }
@@ -83,9 +96,19 @@ async function sendEmail({ to, subject, html, text }) {
     const r = await withTimeout(
       client.emails.send({ from: RESEND_FROM_EMAIL, to, subject, html, text }),
       15000, 'email send');
+    recordMailResult(true);
     return { ok: true, id: r.data && r.data.id };
   } catch (e) {
-    console.warn('email send failed:', e.message);
+    // Every caller used to ignore this. Resend being down, over quota (the
+    // free tier is 100/day) or rejecting an address all looked identical to
+    // the user — and password reset is the only recovery path for an account
+    // without Google sign-in (audit E-09).
+    recordMailResult(false);
+    console.error('EMAIL SEND FAILED to ' + String(to).replace(/(.).*(@.*)/, '$1***$2') + ':', e.message);
+    if (mailDegraded()) {
+      alertAdmins('mail-down', 'Email sending is failing',
+        'Password resets and confirmations are not going out. Check Resend (quota is 100/day on the free tier).');
+    }
     return { error: e.message };
   }
 }
@@ -725,6 +748,38 @@ async function switchOn(key) {
 // So the incidents most worth diagnosing were the ones least likely to be captured
 // (E-04) — and raw Postgres text went to the browser, naming columns and
 // constraints (E-07). This does both jobs in one call.
+// ── Scrubbing credentials out of logs (audit E-08) ──────────────────────
+// The global handler recorded req.originalUrl, query string included, into
+// error_logs AND Sentry. Guest order tracking authenticates with ?t=<token>,
+// so any 500 on that route wrote a live credential into a table the admin
+// panel renders and into a third-party service. Same for the email
+// verification and password-reset links, which carry ?token=.
+// Every parameter this app has ever used to carry a credential. `reset` and
+// `verify` are the email-link tokens, `t`/`track`/`trackToken` the guest
+// tracking pair, `reference` the Paystack ref. Redacting a harmless one costs
+// nothing; missing one writes a live credential into a table the admin panel
+// renders and into a third-party service.
+const SENSITIVE_PARAMS = new Set([
+  't', 'track', 'trackToken', 'token', 'reset', 'verify',
+  'reference', 'ref', 'code', 'key', 'secret', 'password', 'pw', 'auth',
+]);
+function scrubUrl(url) {
+  const raw = String(url || '');
+  const qi = raw.indexOf('?');
+  if (qi === -1) return raw;
+  const path = raw.slice(0, qi);
+  try {
+    const params = new URLSearchParams(raw.slice(qi + 1));
+    const kept = [];
+    for (const [k, v] of params) {
+      kept.push(k + '=' + (SENSITIVE_PARAMS.has(k) ? '[redacted]' : v));
+    }
+    return kept.length ? path + '?' + kept.join('&') : path;
+  } catch (_) {
+    return path + '?[unparseable]';   // never fall back to the raw string
+  }
+}
+
 function fail(res, e, req, where) {
   if (e && e.status) {
     return res.status(e.status).json({ error: e.message, ...(e.unavailable ? { unavailable: e.unavailable } : {}) });
@@ -1333,6 +1388,39 @@ app.delete('/api/admin/payments/orphans/:reference', requireAdmin, async (req, r
 // as they would if the customer checked out by hand). Runs once/day from
 // runDailyJobs (see below) — there's no real cron on this host.
 function serverOrderCode(id) { return 'SDG-' + String(id).replace(/\D/g, '').padStart(5, '0'); }
+// ── Stuck-order watchdog (audit C-08) ───────────────────────────────────
+// Assignment ran only as a side effect of a rider going online or polling,
+// and returns immediately before noon. An order placed at 09:00 on a day when
+// no rider signs in stayed queued forever: nothing alerted on age, nothing
+// escalated, and the customer's tracking page showed the initial state
+// indefinitely. This runs assignment from the daily job instead, then alerts
+// on whatever is still sitting there.
+const ORDER_SLA_HOURS = Number(process.env.ORDER_SLA_HOURS || 4);
+async function checkStuckOrders() {
+  // Try to place them first — an order that can be assigned should be, not
+  // reported.
+  try { await db.orders.assignQueuedForToday(); }
+  catch (e) { console.warn('watchdog: assignQueuedForToday failed:', e.message); }
+
+  const cutoff = new Date(Date.now() - ORDER_SLA_HOURS * 3600 * 1000).toISOString();
+  const { data, error } = await db.sb.from('orders')
+    .select('id, created_at, status')
+    .in('status', ['queued', 'assigned'])
+    .lt('created_at', cutoff)
+    .order('created_at')
+    .limit(50);
+  if (error) throw error;
+  const stuck = data || [];
+  if (!stuck.length) return { stuck: 0 };
+
+  const oldestHours = Math.round((Date.now() - new Date(stuck[0].created_at).getTime()) / 36e5);
+  await alertAdmins('orders-stuck',
+    '⚠️ ' + stuck.length + ' order(s) not moving',
+    stuck.length + ' order(s) past ' + ORDER_SLA_HOURS + 'h. Oldest: #' + stuck[0].id + ', ' + oldestHours + 'h old. Assign a rider.',
+    '/?admin=1');
+  return { stuck: stuck.length, oldestId: stuck[0].id, oldestHours };
+}
+
 async function runRecurringOrders() {
   const today = db.businessDate();
   let due = [];
@@ -1563,6 +1651,10 @@ app.post('/api/paystack/verify', async (req, res) => {
         + ' but order ' + result.id + ' totals GHS ' + Number(result.total || 0).toFixed(2);
       console.error(msg);
       await db.errorLog.record({ message: msg, path: '/api/paystack/verify', method: 'POST', status: 500 });
+      // Money actually changed hands for a different amount than the order
+      // says. Never let this sit only in a log (audit G-08).
+      alertAdmins('payment-mismatch', '⚠️ Payment amount mismatch',
+        'A charge does not match its order total. Check Admin → Errors now.', '/?admin=1');
       if (Sentry) { try { Sentry.captureException(new Error(msg)); } catch (_) {} }
       notifyAdmins({ title: '⚠️ Payment mismatch', body: msg.slice(0, 120), url: '/admin', tag: 'admin-mismatch-' + reference }).catch(() => {});
     }
@@ -1617,6 +1709,10 @@ app.post('/api/paystack/webhook', async (req, res) => {
       message: 'paystack webhook failed (Paystack will retry): ' + e.message,
       stack: e.stack || '', path: '/api/paystack/webhook', method: 'POST', status: 500,
     });
+    // Paystack retries, so one of these is not an emergency — a run of them
+    // means paid orders are not landing (audit G-08).
+    alertAdmins('webhook-error', '⚠️ Paystack webhook failing',
+      'Payments may not be turning into orders. Check Admin → Reconcile and Errors.', '/?admin=1');
     if (Sentry) { try { Sentry.captureException(e); } catch (_) {} }
     res.sendStatus(500);
   }
@@ -1761,16 +1857,24 @@ app.post('/api/auth/resend-verification', requireAuth, customerOnly, async (req,
 });
 
 // ── Password reset ───────────────────────────────────────────────────────
+// Every exit from forgot-password returns THIS, byte for byte. mailDegraded
+// is a property of the mail system, identical for an address that exists and
+// one that does not — the moment one branch returns something another does
+// not, the route is an account-enumeration oracle again (audit A-11, E-09).
+function forgotPasswordBody() {
+  return mailDegraded() ? { ok: true, mailDegraded: true } : { ok: true };
+}
+
 app.post('/api/auth/forgot-password', async (req, res) => {
   const { email } = req.body || {};
   if (!email) return res.status(400).json({ error: 'Email required' });
   // Rate-limit per email
   const rl = db.rateCheck(`reset:${String(email).toLowerCase()}`, { windowMs: 60 * 60 * 1000, max: 5, blockMs: 60 * 60 * 1000 });
-  if (!rl.allowed) return res.json({ ok: true }); // Silent rate-limit (don't leak)
+  if (!rl.allowed) return res.json(forgotPasswordBody()); // Silent rate-limit (don't leak)
   try {
     const u = await db.users.findByEmail(email);
     // Respond OK even when the email doesn't exist (don't leak which addresses are registered)
-    if (!u) return res.json({ ok: true });
+    if (!u) return res.json(forgotPasswordBody());
     const token = await db.makeEmailToken(u.id, 'reset');
     const link = `${req.protocol}://${req.get('host')}/?reset=${token}`;
     const emailResult = await sendEmail({
@@ -1784,12 +1888,23 @@ app.post('/api/auth/forgot-password', async (req, res) => {
       text: `Reset your SDGMart password: ${link}`,
     });
     if (emailResult.skipped) console.log(`🔑 (no email config) reset for ${u.email}: ${link}`);
+    if (emailResult.error) {
+      try {
+        await db.errorLog.record({
+          message: 'password reset email FAILED (user cannot recover their account): ' + emailResult.error,
+          path: '/api/auth/forgot-password', method: 'POST', status: 502, userId: u.id,
+        });
+      } catch (_) {}
+    }
     // Returning the link when RESEND_API_KEY is unset made forgot-password an
     // unauthenticated password-reset oracle for any address, including admin.
     if (emailResult.skipped && process.env.NODE_ENV !== 'production') console.log('[dev] password reset link:', link);
     // Identical to the not-found and rate-limited branches above: three
     // distinguishable responses were themselves an account-enumeration oracle.
-    res.json({ ok: true });
+    // mailDegraded() is deliberately a property of the mail system, not of
+    // this address — it reads the same for an address that does not exist, so
+    // it tells an honest story without reopening A-11.
+    res.json(forgotPasswordBody());
   } catch (e) { fail(res, e, req, '/api/auth/forgot-password'); }
 });
 
@@ -1917,6 +2032,46 @@ async function notifyAdmins(payload) {
   } catch (e) { console.warn('notifyAdmins failed:', e.message); }
 }
 
+// ── Operational alerting (audit G-08, E-09, C-08) ───────────────────────
+// notifyAdmins fired on a new order, an order issue, feedback and a product
+// request — every routine success, and nothing at all on failure. These are
+// the failures that cost money or silently strand a customer.
+//
+// Deduplicated: an outage produces the same alert continuously, and a phone
+// buzzing every thirty seconds gets muted, which is worse than no alert.
+const ALERT_COOLDOWN_MS = 30 * 60 * 1000;
+const _alertSentAt = new Map();
+async function alertAdmins(key, title, body, url) {
+  const now = Date.now();
+  if (now - (_alertSentAt.get(key) || 0) < ALERT_COOLDOWN_MS) return false;
+  _alertSentAt.set(key, now);
+  console.error('ADMIN ALERT [' + key + '] ' + title + ' — ' + body);
+  try {
+    await db.errorLog.record({
+      message: 'ALERT ' + key + ': ' + title + ' — ' + body,
+      path: 'alert', method: 'ALERT', status: 500,
+    });
+  } catch (_) {}
+  try { await notifyAdmins({ title, body, url: url || '/?admin=1' }); } catch (_) {}
+  return true;
+}
+
+// Whether transactional email is currently working. Tracked globally, never
+// per address: the point of E-09 is to tell people the mail system is down
+// without telling an attacker which addresses exist (A-11).
+const _mail = { consecutiveFailures: 0, lastFailureAt: 0 };
+const MAIL_DEGRADED_AFTER = 2;
+const MAIL_DEGRADED_WINDOW_MS = 15 * 60 * 1000;
+function recordMailResult(ok) {
+  if (ok) { _mail.consecutiveFailures = 0; return; }
+  _mail.consecutiveFailures += 1;
+  _mail.lastFailureAt = Date.now();
+}
+function mailDegraded() {
+  return _mail.consecutiveFailures >= MAIL_DEGRADED_AFTER
+    && Date.now() - _mail.lastFailureAt < MAIL_DEGRADED_WINDOW_MS;
+}
+
 // Lightweight daily job runner. There is no cron on this host, so it runs
 // opportunistically on /healthz pings (UptimeRobot hits it every 5 min) and is
 // guarded by an app_config date-marker so the work happens at most once a day.
@@ -1965,6 +2120,9 @@ async function runDailyJobs() {
       await db.sb.from('users').update({ birthday_notified_year: year }).eq('id', u.id);
     }
     await runRecurringOrders();
+    // Assignment used to happen only when a rider polled (audit C-08).
+    try { const r = await checkStuckOrders(); if (r.stuck) console.warn('watchdog: ' + r.stuck + ' order(s) past SLA'); }
+    catch (e) { console.warn('stuck-order watchdog failed:', e.message); }
     // Was fired from the public GET /api/leaderboard on every request, to do
     // work that matters once a month (audit D-09). It is idempotent via an
     // app_config marker, so running it here changes nothing but the cost.
@@ -2690,11 +2848,12 @@ app.get('*', (req, res, next) => {
 // returns a clean 500. Optionally forwards to Sentry if SENTRY_DSN is set.
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err && err.stack ? err.stack : err);
-  if (Sentry) { try { Sentry.captureException(err, { extra: { path: req.originalUrl, method: req.method, userId: req.user ? req.user.id : null } }); } catch (_) {} }
+  const safePath = scrubUrl(req.originalUrl);
+  if (Sentry) { try { Sentry.captureException(err, { extra: { path: safePath, method: req.method, userId: req.user ? req.user.id : null } }); } catch (_) {} }
   db.errorLog.record({
     message: err && err.message ? err.message : String(err),
     stack: err && err.stack ? err.stack : '',
-    path: req.originalUrl, method: req.method, status: 500,
+    path: safePath, method: req.method, status: 500,
     userId: req.user ? req.user.id : null,
   });
   if (!res.headersSent) res.status(500).json({ error: 'Something went wrong on our end.' });
