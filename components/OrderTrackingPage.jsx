@@ -91,7 +91,11 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage, setCart }) => {
   // Poll every 8 seconds
   React.useEffect(() => {
     poll();
-    const t = setInterval(poll, 8000);
+    // 8s meant ~37 database round-trips per minute per watching customer, and a
+    // delivery window has many watching at once. Status changes are minutes
+    // apart, so 25s loses nothing perceptible (D-03). The server also caches
+    // each order's tracking response for a few seconds.
+    const t = setInterval(poll, 25000);
     return () => clearInterval(t);
   }, [poll]);
 

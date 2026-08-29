@@ -102,6 +102,7 @@ const App = () => {
     return () => clearTimeout(t);
   }, [cart, currentUser]);
   const [cartOpen, setCartOpen] = React.useState(false);
+  const [, setStaffReady] = React.useState(0);   // re-render once /app.staff.js lands
   const [searchQuery, setSearchQuery] = React.useState('');
 
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
@@ -311,6 +312,27 @@ const App = () => {
   }
 
   // ── Admin: skip header, show admin page only ─────────────────────────────
+  // AdminPage and RiderPage are no longer in the customer bundle, so fetch the
+  // staff bundle the first time a staff account signs in.
+  if (currentUser.role === 'admin' || currentUser.role === 'rider') {
+    const ready = currentUser.role === 'admin' ? window.AdminPage : window.RiderPage;
+    if (!ready) {
+      if (!window.__staffLoading) {
+        window.__staffLoading = true;
+        const sc = document.createElement('script');
+        sc.src = '/app.staff.js';
+        sc.onload = () => { window.__staffLoading = false; setStaffReady(n => n + 1); };
+        sc.onerror = () => { window.__staffLoading = false; setStaffReady(n => n + 1); };
+        document.head.appendChild(sc);
+      }
+      return (
+        <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--cream)', fontFamily: 'var(--f-ui, sans-serif)', fontSize: 14, color: 'var(--warm-gray, #666)' }}>
+          Loading your dashboard…
+        </div>
+      );
+    }
+  }
+
   if (currentUser.role === 'admin') {
     return (
       <div style={{ minHeight: '100vh', background: 'var(--cream)' }}>

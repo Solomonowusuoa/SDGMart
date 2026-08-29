@@ -298,6 +298,10 @@ ensureIcons();
 // and transform JSX → JS once (minified) on the server. The browser then runs
 // a single fast bundle instead of compiling 22 files on every visit.
 // In dev we rebuild on each request; in production we build once and cache.
+// Every customer downloaded the full admin console — 130 KB of source they can
+// never open, 38% of the bundle — plus the rider PWA and a design-prototyping
+// panel left over from the refresh (G-07). Those now live in a second bundle
+// fetched only when an admin or rider actually signs in (D-05).
 const BUNDLE_FILES = [
   'hooks.js',
   'components/receipt.js',
@@ -308,37 +312,46 @@ const BUNDLE_FILES = [
   'components/CartDrawer.jsx',
   'components/CheckoutPage.jsx',
   'components/SquadPage.jsx',
-  'components/AdminPage.jsx',
   'components/LoginPage.jsx',
   'components/MapPicker.jsx',
-  'components/RiderPage.jsx',
   'components/MyOrdersPage.jsx',
   'components/AccountPage.jsx',
   'components/ReviewPromptModal.jsx',
   'components/FeedbackBox.jsx',
   'components/RequestProductButton.jsx',
   'components/OrderTrackingPage.jsx',
+  // tweaks-panel.jsx stays in the customer bundle: App.jsx calls useTweaks() for
+  // the active theme and renders <TweaksPanel>, so it is NOT dead code. My
+  // earlier reading (audit G-07) was wrong. Its unvalidated postMessage listener
+  // is still worth removing, but that is a surgical change to the file, not a
+  // matter of dropping it from the build.
   'tweaks-panel.jsx',
   'App.jsx',
+];
+
+// Staff-only. Loaded on demand by App.jsx; never sent to a shopper.
+const STAFF_BUNDLE_FILES = [
+  'components/AdminPage.jsx',
+  'components/RiderPage.jsx',
 ];
 let _esbuild = null;
 let _bundleCache = null;
 let _bundleBuiltAt = 0;   // newest source mtime captured when we last built
 
 // Newest modification time across all bundle source files. Cheap (~20 stats).
-function newestSourceMtime() {
+function newestSourceMtime(files = BUNDLE_FILES) {
   let newest = 0;
-  for (const rel of BUNDLE_FILES) {
+  for (const rel of files) {
     try { const m = fs.statSync(path.join(__dirname, rel)).mtimeMs; if (m > newest) newest = m; }
     catch (_) {}
   }
   return newest;
 }
 
-function buildAppBundle() {
+function buildAppBundle(files = BUNDLE_FILES) {
   if (!_esbuild) _esbuild = require('esbuild');
   // Concatenate sources with a banner per file (helps stack traces).
-  const parts = BUNDLE_FILES.map(rel => {
+  const parts = files.map(rel => {
     const full = path.join(__dirname, rel);
     const src = fs.readFileSync(full, 'utf8');
     return `\n/* ==== ${rel} ==== */\n${src}\n`;
@@ -357,6 +370,24 @@ function buildAppBundle() {
   });
   return result.code;
 }
+
+let _staffCache = null;
+let _staffBuiltAt = 0;
+app.get('/app.staff.js', (req, res) => {
+  try {
+    const newest = newestSourceMtime(STAFF_BUNDLE_FILES);
+    if (!_staffCache || newest > _staffBuiltAt) {
+      _staffCache = buildAppBundle(STAFF_BUNDLE_FILES);
+      _staffBuiltAt = newest;
+    }
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.send(_staffCache);
+  } catch (e) {
+    console.error('staff bundle build failed:', e.message);
+    res.status(500).type('application/javascript').send('console.error("SDGMart staff bundle error");');
+  }
+});
 
 app.get('/app.bundle.js', (req, res) => {
   try {
@@ -389,10 +420,14 @@ catch (e) { console.warn('⚠️  initial bundle build failed (will retry on fir
 let _orderCountsCache = { counts: null, at: 0 };
 async function getOrderItemCounts() {
   if (_orderCountsCache.counts && Date.now() - _orderCountsCache.at < 5 * 60 * 1000) return _orderCountsCache.counts;
-  const ordersList = await db.orders.list();
+  // Was db.orders.list(): every column of every order ever placed, loaded into
+  // memory to count line items — on a path every anonymous page view triggers.
+  // Now one column over a bounded recent window, which is also a better answer:
+  // "popular right now" should not be dominated by last year's baskets.
+  const itemArrays = await db.orders.recentItemsForCounts({ days: 90, limit: 5000 });
   const counts = {};
-  ordersList.forEach(o => {
-    let items = o.items;
+  itemArrays.forEach(raw => {
+    let items = raw;
     if (typeof items === 'string') { try { items = JSON.parse(items); } catch (_) { items = []; } }
     (items || []).forEach(i => { counts[i.id] = (counts[i.id] || 0) + (i.qty || 1); });
   });
@@ -950,6 +985,17 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
 
     // Two retries of the same attempt raced each other. The unique index did its
     // job — return the order the winner created rather than surfacing an error.
+    // The unique index on paystack_ref (added by supabase-schema-constraints.sql)
+    // now settles the verify-vs-webhook race in the database: whichever arrives
+    // second gets a duplicate-key error, and the order the winner created is the
+    // right answer to return (A-09).
+    if (extra.paystackRef && e && /duplicate key|23505/i.test(e.message || '')) {
+      const won = await db.orders.findByPaystackRef(extra.paystackRef);
+      if (won) return { ok: true, id: won.id, total: won.total, duplicate: true,
+        subtotal: won.subtotal, delivery: won.deliveryFee, discount: won.discount, loyaltyUsed: won.loyaltyUsed,
+        deliveryDate: won.deliveryDate, deliverySlot: won.deliverySlot, priority: won.priority,
+        loyaltyPending: 0, squadGoalHit: false, trackToken: orderTrackToken(won.id) };
+    }
     if (idemKey && e && /duplicate key|23505/i.test(e.message || '')) {
       const won = await db.orders.findByClientRequestId(idemKey);
       if (won) return { ok: true, id: won.id, total: won.total, duplicate: true,
@@ -1055,6 +1101,26 @@ app.get('/api/admin/revenue', requireAdmin, async (req, res) => {
     });
   } catch (e) { fail(res, e, req); }
 });
+
+// Tracking is polled every few seconds per watching customer, and each response
+// costs several sequential queries. A short server-side cache collapses a
+// delivery window's worth of watchers onto one set of reads, without making the
+// page feel stale — status changes are minutes apart, not seconds (D-03).
+const _trackCache = new Map();
+const TRACK_CACHE_MS = 5000;
+async function getTrackingCached(orderId) {
+  const key = String(orderId);
+  const hit = _trackCache.get(key);
+  if (hit && Date.now() - hit.at < TRACK_CACHE_MS) return hit.value;
+  const value = await db.orders.getWithTracking(orderId);
+  _trackCache.set(key, { value, at: Date.now() });
+  // Bound the map so a long day of tracking cannot grow it without limit.
+  if (_trackCache.size > 500) {
+    const cutoff = Date.now() - TRACK_CACHE_MS;
+    for (const [k, v] of _trackCache) if (v.at < cutoff) _trackCache.delete(k);
+  }
+  return value;
+}
 
 // ── Payment reconciliation ───────────────────────────────────────────────
 // Answers "did Paystack take money we never turned into an order?" — the
@@ -1644,6 +1710,36 @@ app.get('/api/squads/:userId', requireAuth, customerOnly, async (req, res) => {
 });
 
 // ── Persistent cart (signed-in; a customer's cart follows them across devices) ──
+// ── Data-subject requests (audit H-01) ───────────────────────────────────
+// The privacy notice promises both of these; neither existed.
+app.get('/api/me/export', requireAuth, async (req, res) => {
+  try {
+    const data = await db.dataRequests.exportForUser(req.user.id);
+    if (!data) return res.status(404).json({ error: 'Account not found' });
+    res.setHeader('Content-Disposition', 'attachment; filename="sdgmart-my-data.json"');
+    res.json(data);
+  } catch (e) { fail(res, e, req, '/api/me/export'); }
+});
+
+// Erasure is irreversible, so it requires the account password — or, for a
+// Google-only account with no password set, an explicit typed confirmation.
+app.post('/api/me/delete-account', requireAuth, async (req, res) => {
+  const { password, confirm } = req.body || {};
+  try {
+    const hasPassword = !!req.user.passwordHash;
+    if (hasPassword) {
+      if (!password || !db.verifyPassword(password, req.user.passwordHash)) {
+        return res.status(401).json({ error: 'Password is incorrect' });
+      }
+    } else if (String(confirm || '').trim().toUpperCase() !== 'DELETE') {
+      return res.status(400).json({ error: 'Type DELETE to confirm' });
+    }
+    await db.dataRequests.eraseUser(req.user.id);
+    console.warn('account erased on request: user ' + req.user.id);
+    res.json({ ok: true });
+  } catch (e) { fail(res, e, req, '/api/me/delete-account'); }
+});
+
 app.get('/api/me/cart', requireAuth, async (req, res) => {
   try { res.json({ items: await db.carts.get(req.user.id) }); }
   catch (e) { fail(res, e, req); }
@@ -1690,12 +1786,17 @@ async function notifyAdmins(payload) {
 // guarded by an app_config date-marker so the work happens at most once a day.
 let _dailyJobRunning = false;
 async function runDailyJobs() {
+  // Set synchronously, BEFORE any await. The old order set this flag after the
+  // config read, so two concurrent /healthz hits both got past it.
   if (_dailyJobRunning) return;
+  _dailyJobRunning = true;
   const today = new Date().toISOString().slice(0, 10);
   try {
-    if ((await db.appConfig.get('daily_job_last_run')) === today) return;
-    _dailyJobRunning = true;
-    await db.appConfig.set('daily_job_last_run', today);
+    // Claim the day in the database, not in memory. The in-process flag only
+    // guards one process; this is what actually decides the winner when
+    // UptimeRobot and a real visitor arrive together, or when there is ever
+    // more than one instance. Exactly one caller gets true (A-08).
+    if (!(await db.appConfig.claim('daily_job_last_run', today))) { _dailyJobRunning = false; return; }
     // Release loyalty held by checkouts nobody came back to. releaseStale-
     // Reservations covers the customer who returns; this covers the one who
     // never does, so their credit is not locked up indefinitely.
@@ -1851,7 +1952,7 @@ app.get('/api/orders/:id/tracking', async (req, res) => {
   try {
     const tokenOk = req.query.t && String(req.query.t) === orderTrackToken(req.params.id);
     if (!tokenOk && !req.user) return res.status(401).json({ error: 'Sign in required' });
-    const t = await db.orders.getWithTracking(req.params.id);
+    const t = await getTrackingCached(req.params.id);
     if (!t) return res.status(404).json({ error: 'Order not found' });
     // Guest links stop working 7 days after delivery, so an old shared link
     // can't expose the customer's name/address forever. Signed-in owners are

@@ -234,14 +234,22 @@ const users = {
       squadCode = crypto.randomBytes(4).toString('hex').toUpperCase();
       ownsSquad = true;
     }
-    const myRefCode = crypto.randomBytes(3).toString('hex').toUpperCase();
+    // 6 bytes, not 3: 281 trillion codes instead of 16.7 million. Retried below
+    // on the unique violation, so even a collision no longer breaks signup.
+    const myRefCode = crypto.randomBytes(6).toString('hex').toUpperCase();
     const insert = {
       name, email: String(email).toLowerCase().trim(), phone, password_hash: passwordHash, role,
       ref_code: myRefCode, squad_code: squadCode, owns_squad: ownsSquad,
       // Record who referred them — credited only AFTER their first purchase.
       referred_by: referrer ? referrer.id : null,
     };
-    const { data, error } = await sb.from('users').insert(insert).select().single();
+    let { data, error } = await sb.from('users').insert(insert).select().single();
+    // A ref_code collision must not cost someone their signup. Retry with a
+    // fresh code; anything else (a duplicate email, say) is a real error.
+    for (let attempt = 0; attempt < 3 && error && /ref_code/i.test(error.message || ''); attempt++) {
+      insert.ref_code = crypto.randomBytes(6).toString('hex').toUpperCase();
+      ({ data, error } = await sb.from('users').insert(insert).select().single());
+    }
     if (error) throw error;
     return rowOut(data);
   },
@@ -622,6 +630,22 @@ const orders = {
   // after a dropped response return the original instead of duplicating it.
   // One day's orders, for the revenue / cash-reconciliation view. Ghana is
   // UTC+0 with no daylight saving, so a UTC day boundary is the local day.
+  // Just the item arrays, from a bounded recent window — for the bestseller
+  // scan. orders.list() pulled EVERY column of EVERY order ever placed
+  // (addresses, phone numbers, the lot) into Node memory to count line items,
+  // on a path anonymous visitors trigger. That is the out-of-memory risk in a
+  // 512 MB instance; this reads one column over 90 days instead (D-02).
+  async recentItemsForCounts({ days = 90, limit = 5000 } = {}) {
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    const { data, error } = await sb.from('orders')
+      .select('items')
+      .gte('created_at', since)
+      .neq('status', 'cancelled')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    return (data || []).map((r) => r.items);
+  },
   async forDay(dateStr) {
     const start = dateStr + 'T00:00:00.000Z';
     const end = new Date(new Date(start).getTime() + 86400000).toISOString();
@@ -669,6 +693,22 @@ const orders = {
     // them on orders that never arrived. Assignment is the admin's operation
     // (orders.assignToRider), so this path must never write rider_id.
     if (riderId != null && String(before.riderId || '') !== String(riderId)) return null;
+    // Legal transitions only. A repeat call (a rider tapping twice on a flaky
+    // connection is the normal case, not an attack) now changes nothing rather
+    // than re-stamping delivered_at — which silently extended the guest
+    // tracking window — and re-sending the customer's "Delivered" push.
+    const LEGAL = {
+      queued: ['assigned', 'in_transit', 'delivered', 'cancelled'],
+      assigned: ['in_transit', 'delivered', 'queued', 'cancelled'],
+      in_transit: ['delivered', 'assigned', 'cancelled'],
+      delivered: [],      // terminal
+      cancelled: [],      // terminal
+    };
+    const allowed = LEGAL[before.status] || [];
+    if (before.status === status || !allowed.includes(status)) {
+      console.warn('rejected order ' + id + ' transition ' + before.status + ' -> ' + status);
+      return { ...before, unchanged: true };
+    }
     const o = await orders.update(id, { status });
     if (status === 'delivered' && before && before.status !== 'delivered' && before.userId) {
       // Accrual lives here, not at checkout — see createOrderFromBody. Best
@@ -723,17 +763,24 @@ const orders = {
     // Position in this rider's route (1 = next, 2 = after that, etc.)
     let queuePosition = null;
     if (o.riderId && o.status === 'assigned') {
-      const route = await orders.forRider(o.riderId);
-      const idx = route.findIndex((x) => String(x.id) === String(orderId));
-      queuePosition = idx >= 0 ? idx + 1 : null;
+      // Count only what is ahead of this order, in the database, instead of
+      // pulling the rider's whole route back and re-sorting it in JavaScript
+      // just to read off an index (D-03).
+      const { count } = await sb.from('orders')
+        .select('id', { count: 'exact', head: true })
+        .eq('rider_id', o.riderId).in('status', ['assigned', 'in_transit'])
+        .lt('created_at', o.createdAt);
+      queuePosition = (count || 0) + 1;
     }
     return { order: o, rider, queuePosition };
   },
-  async assignToNearestOnlineRider(orderId) {
-    const o = await orders.get(orderId);
+  // `order` and `onlineRiders` may be passed in by a caller that already has
+  // them, which is what turns assignQueuedForToday from 3 round-trips per order
+  // into one (D-04).
+  async assignToNearestOnlineRider(orderId, order = null, onlineRiders = null) {
+    const o = order || await orders.get(orderId);
     if (!o || !o.location) return null;
-    const all = await riders.list();
-    const online = all.filter((r) => r.online && r.lat != null);
+    const online = onlineRiders || (await riders.list()).filter((r) => r.online && r.lat != null);
     if (!online.length) return null;
     online.sort((a, b) => _distKm(o.location, a) - _distKm(o.location, b));
     await orders.update(orderId, { riderId: online[0].id, status: 'assigned' });
@@ -751,9 +798,13 @@ const orders = {
       if (!!b.priority - !!a.priority !== 0) return !!b.priority - !!a.priority;
       return new Date(a.createdAt) - new Date(b.createdAt);
     });
+    // Fetch the rider list ONCE for the whole sweep, and pass each order through
+    // rather than making the callee read it back.
+    const online = (await riders.list()).filter((r) => r.online && r.lat != null);
+    if (!online.length) return [];
     const assigned = [];
     for (const o of eligible) {
-      const r = await orders.assignToNearestOnlineRider(o.id);
+      const r = await orders.assignToNearestOnlineRider(o.id, o, online);
       if (r) assigned.push({ orderId: o.id, riderId: r.id });
     }
     return assigned;
@@ -897,6 +948,20 @@ const appConfig = {
     const { error } = await sb.from('app_config').upsert({ key, value, updated_at: new Date().toISOString() });
     if (error) throw error;
   },
+  // Claim a once-per-period marker. Returns true for exactly ONE caller, even
+  // when several arrive at the same moment: the update only matches rows whose
+  // value differs, so the database decides the winner rather than a read
+  // followed by a write. This is what stops two concurrent /healthz hits both
+  // running the recurring-order job and placing every due order twice (A-08).
+  async claim(key, value) {
+    // Ensure the row exists without disturbing an existing value.
+    await sb.from('app_config').upsert({ key, value: '__unclaimed__' }, { onConflict: 'key', ignoreDuplicates: true });
+    const { data, error } = await sb.from('app_config')
+      .update({ value, updated_at: new Date().toISOString() })
+      .eq('key', key).neq('value', value).select('key');
+    if (error) throw error;
+    return !!(data && data.length);
+  },
 };
 
 // ── VAPID keys (env > app_config) ─────────────────────────────────────────
@@ -982,10 +1047,22 @@ const addresses = {
     }
     if (match) {
       await sb.from('addresses').update({ is_last_used: true }).eq('id', match.id);
-    } else {
-      await sb.from('addresses').insert({
-        user_id: userId, label: 'Recent', neighborhood, location, is_last_used: true,
-      });
+      return;
+    }
+    // Previously this INSERTED a new "Recent" address for every delivery pin
+    // more than ~50m from a saved one — silently accumulating a dated map of
+    // everywhere a customer has had groceries delivered, which they never asked
+    // to save and the privacy notice describes as an address they *choose*
+    // (H-02). Nothing is created automatically now. The customer saves an
+    // address deliberately, from the Account page or at checkout.
+    //
+    // A small bound is still kept on any legacy "Recent" rows so existing
+    // accounts stop carrying an unbounded history.
+    const { data: recents } = await sb.from('addresses').select('id, created_at')
+      .eq('user_id', userId).eq('label', 'Recent').order('created_at', { ascending: false });
+    if (recents && recents.length > 3) {
+      const stale = recents.slice(3).map((r) => r.id);
+      await sb.from('addresses').delete().in('id', stale);
     }
   },
 };
@@ -1420,6 +1497,69 @@ async function reverseOrderRewards(o) {
   if (Object.keys(patch).length) await sb.from('users').update(patch).eq('id', userId);
 }
 
+// ── Data-subject requests (audit H-01) ───────────────────────────────────
+// The privacy notice promises "You can ask us to delete your account and
+// associated personal data at any time" and names Ghana's Act 843. No deletion
+// path existed, and a plain user delete would not have honoured the promise:
+// orders keep DENORMALISED copies of the customer's name, phone and address,
+// with user_id set to null on delete — so the person's details would have
+// remained in the orders table indefinitely.
+//
+// Orders themselves are kept: they are accounting records, and a rider's
+// completed deliveries must still reconcile. What is removed is the ability to
+// identify a person from them.
+const dataRequests = {
+  async exportForUser(userId) {
+    const [user, addresses, orders_, reviews_, recurring_, referralsOut] = await Promise.all([
+      users.get(userId),
+      sb.from('addresses').select('*').eq('user_id', userId).then((r) => r.data || []),
+      sb.from('orders').select('*').eq('user_id', userId).then((r) => r.data || []),
+      sb.from('reviews').select('*').eq('user_id', userId).then((r) => r.data || []),
+      sb.from('recurring_orders').select('*').eq('user_id', userId).then((r) => r.data || []),
+      sb.from('referrals').select('*').eq('referrer_id', userId).then((r) => r.data || []),
+    ]);
+    if (!user) return null;
+    const { passwordHash, ...safeUser } = user;   // never export the hash
+    return {
+      exportedAt: new Date().toISOString(),
+      account: safeUser,
+      addresses, orders: orders_, reviews: reviews_,
+      recurringOrders: recurring_, referralsMade: referralsOut,
+    };
+  },
+
+  async eraseUser(userId) {
+    const tombstone = '[deleted]';
+    // 1. Scrub the personal details denormalised onto past orders. This is the
+    //    part a plain DELETE would have missed entirely.
+    await sb.from('orders').update({
+      customer_name: tombstone, customer_phone: null,
+      recipient_name: null, recipient_phone: null,
+      address: tombstone, momo_number: null, location: null,
+    }).eq('user_id', userId);
+
+    // 2. Anything else carrying contact details independently of the account.
+    await sb.from('product_requests').update({
+      name: tombstone, whatsapp_number: null, call_number: null,
+    }).eq('user_id', userId);
+
+    // 3. Detach from the referral graph so no one else's row points at them.
+    await sb.from('users').update({ referred_by: null }).eq('referred_by', userId);
+    await sb.from('referrals').delete().or('referrer_id.eq.' + userId + ',referee_id.eq.' + userId);
+
+    // 4. Session and cart state.
+    try { await sessions.destroyAllForUser(userId); } catch (_) {}
+    try { await sb.from('carts').delete().eq('user_id', userId); } catch (_) {}
+
+    // 5. The account itself. addresses, reviews, recurring_orders and
+    //    push_subscriptions are ON DELETE CASCADE and go with it; orders keep
+    //    ON DELETE SET NULL, which is why step 1 had to run first.
+    const { error } = await sb.from('users').delete().eq('id', userId);
+    if (error) throw error;
+    return { ok: true };
+  },
+};
+
 // ── Persistent cart (signed-in users; syncs across devices) ──────────────
 const carts = {
   async get(userId) {
@@ -1439,7 +1579,7 @@ module.exports = {
   sb,
   users, squads, sessions, riders, orders, products,
   addresses, reviews, issueReports, promotions, productRequests, stats,
-  metrics, leaderboard, referrals, errorLog, pendingPayments, checkSchema,
+  metrics, leaderboard, referrals, errorLog, pendingPayments, checkSchema, dataRequests,
   pushSubs, searchLog, recurring, appConfig, carts,
   rowOut, rowsOut,
   hashPassword, verifyPassword, validatePasswordStrength,
