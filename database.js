@@ -544,6 +544,19 @@ const orders = {
   },
   // Has this exact checkout attempt already produced an order? Lets a retry
   // after a dropped response return the original instead of duplicating it.
+  // One day's orders, for the revenue / cash-reconciliation view. Ghana is
+  // UTC+0 with no daylight saving, so a UTC day boundary is the local day.
+  async forDay(dateStr) {
+    const start = dateStr + 'T00:00:00.000Z';
+    const end = new Date(new Date(start).getTime() + 86400000).toISOString();
+    const { data, error } = await sb.from('orders')
+      .select('id,total,paid,payment_method,status,rider_id,created_at,delivered_at,customer_name')
+      .gte('created_at', start).lt('created_at', end)
+      .neq('status', 'cancelled')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return rowsOut(data);
+  },
   async findByClientRequestId(key) {
     if (!key || !(await ordersSupportIdempotency())) return null;
     const { data } = await sb.from('orders').select('*').eq('client_request_id', key).maybeSingle();

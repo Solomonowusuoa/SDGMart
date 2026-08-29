@@ -846,6 +846,62 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
   };
 }
 
+// ── Daily revenue + rider cash reconciliation ────────────────────────────
+// Splits a day's takings by how the money arrives, and — because cash is
+// collected by hand — breaks the cash side down per rider. "Collected" counts
+// only delivered orders, so the figure is what each rider should actually have
+// handed in; anything still out is listed separately rather than being counted
+// as revenue you hold.
+app.get('/api/admin/revenue', requireAdmin, async (req, res) => {
+  try {
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || ''))
+      ? req.query.date : new Date().toISOString().slice(0, 10);
+    const [dayOrders, riders] = await Promise.all([db.orders.forDay(date), db.riders.list()]);
+    const riderName = new Map(riders.map((r) => [String(r.id), r.name]));
+
+    const online = { count: 0, total: 0, orders: [] };
+    const collected = { count: 0, total: 0 };
+    const outstanding = { count: 0, total: 0 };
+    const byRider = new Map();
+    const bucket = (key, name) => {
+      if (!byRider.has(key)) byRider.set(key, { riderId: key === 'unassigned' ? null : Number(key), name, collected: 0, collectedCount: 0, outstanding: 0, outstandingCount: 0 });
+      return byRider.get(key);
+    };
+
+    for (const o of dayOrders) {
+      const amount = Number(o.total || 0);
+      if (o.paid) {
+        online.count++; online.total += amount;
+        online.orders.push({ id: o.id, total: amount, method: o.paymentMethod || 'paystack', customer: o.customerName || '' });
+        continue;
+      }
+      const key = o.riderId != null ? String(o.riderId) : 'unassigned';
+      const b = bucket(key, o.riderId != null ? (riderName.get(key) || 'Rider #' + o.riderId) : 'Not yet assigned');
+      if (o.status === 'delivered') {
+        collected.count++; collected.total += amount;
+        b.collected += amount; b.collectedCount++;
+      } else {
+        outstanding.count++; outstanding.total += amount;
+        b.outstanding += amount; b.outstandingCount++;
+      }
+    }
+    const round = (n) => +Number(n).toFixed(2);
+    res.json({
+      date,
+      online: { count: online.count, total: round(online.total), orders: online.orders.slice(0, 100) },
+      cash: {
+        collected: { count: collected.count, total: round(collected.total) },
+        outstanding: { count: outstanding.count, total: round(outstanding.total) },
+        byRider: [...byRider.values()]
+          .map((b) => ({ ...b, collected: round(b.collected), outstanding: round(b.outstanding) }))
+          .sort((a, b) => b.collected - a.collected),
+      },
+      totalTakings: round(online.total + collected.total),
+      orderCount: dayOrders.length,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Payment reconciliation ───────────────────────────────────────────────
 // Answers "did Paystack take money we never turned into an order?" — the
 // recovery path for a webhook or verify that failed. Each orphan is checked

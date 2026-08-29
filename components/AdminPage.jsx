@@ -363,7 +363,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   const setEditField = (k, v) => setEditDraft(d => ({ ...d, [k]: v }));
 
   const tabs = [
-    ['overview','📊 Overview'],['dashboard','📈 Dashboard'],['orders','📦 Orders'],['inventory','🏪 Inventory'],
+    ['overview','📊 Overview'],['dashboard','📈 Dashboard'],['revenue','💰 Revenue'],['orders','📦 Orders'],['inventory','🏪 Inventory'],
     ['expiry','⏰ Expiry'],['reconcile','💳 Reconcile'],['routes','🗺 Routes'],['riders','🛵 Riders'],
     ['promotions','⚡ Promotions'],['requests','🛒 Requests'],['issues','🚨 Issues'],
     ['analytics','🔎 Analytics'],['retention','🔁 Retention'],['leaderboard','🏆 Leaderboard'],['comms','📣 Comms'],
@@ -410,6 +410,22 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
     apiFetch('/api/admin/errors').then(r => r.ok ? r.json() : []).then(setErrorLogs).catch(() => {});
   }, []);
   React.useEffect(() => { if (adminTab === 'errors') loadErrors(); }, [adminTab, loadErrors]);
+
+  // ── Daily revenue / rider cash-up ────────────────────────────────────────
+  const [revDate, setRevDate] = React.useState(() => new Date().toISOString().slice(0, 10));
+  const [dayRev, setDayRev] = React.useState(null);
+  const [revLoading, setRevLoading] = React.useState(false);
+  const [revError, setRevError] = React.useState('');
+  const loadRevenue = React.useCallback(async (d) => {
+    setRevLoading(true); setRevError('');
+    try {
+      const r = await apiFetch('/api/admin/revenue?date=' + encodeURIComponent(d));
+      if (!r.ok) throw new Error('Could not load revenue');
+      setDayRev(await r.json());
+    } catch (e) { setRevError(e.message || 'Could not load revenue'); setDayRev(null); }
+    finally { setRevLoading(false); }
+  }, [apiFetch]);
+  React.useEffect(() => { if (adminTab === 'revenue') loadRevenue(revDate); }, [adminTab, revDate, loadRevenue]);
 
   // ── Payment reconciliation ───────────────────────────────────────────────
   const [orphans, setOrphans] = React.useState([]);
@@ -1041,6 +1057,97 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                 );
               })}
             </div>
+          </div>
+        )}
+
+        {/* REVENUE — a day's takings, split by how the money arrives */}
+        {adminTab === 'revenue' && (
+          <div>
+            <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Revenue &amp; rider cash-up</h2>
+            <p style={{ fontSize: 13, color: 'var(--warm-gray)', maxWidth: 660, lineHeight: 1.6, marginBottom: 18 }}>
+              Orders placed on the chosen day, excluding cancelled ones. <strong>Collected</strong> counts
+              only delivered cash orders — that is what each rider should have handed in. Anything not yet
+              delivered is listed as still out, not as money you hold.
+            </p>
+
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 18 }}>
+              <input type="date" value={revDate} onChange={(e) => setRevDate(e.target.value)}
+                style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid var(--cream-dark)', fontSize: 13 }} />
+              <button onClick={() => setRevDate(new Date().toISOString().slice(0, 10))}
+                style={{ background: 'var(--cream-dark)', borderRadius: 8, padding: '9px 14px', fontSize: 13, fontWeight: 600 }}>Today</button>
+              <button onClick={() => setRevDate(new Date(Date.now() - 86400000).toISOString().slice(0, 10))}
+                style={{ background: 'var(--cream-dark)', borderRadius: 8, padding: '9px 14px', fontSize: 13, fontWeight: 600 }}>Yesterday</button>
+              <button onClick={() => loadRevenue(revDate)} disabled={revLoading}
+                style={{ background: 'var(--sage-dark)', color: '#fff', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 600, opacity: revLoading ? .6 : 1 }}>
+                {revLoading ? 'Loading…' : 'Refresh'}
+              </button>
+            </div>
+
+            {revError && <div style={{ background: '#FDECEA', color: '#8A1C13', padding: '12px 14px', borderRadius: 8, fontSize: 13, marginBottom: 14 }}>{revError}</div>}
+
+            {dayRev && (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, 1fr)', gap: 12, marginBottom: 22 }}>
+                  {[
+                    ['Total takings', dayRev.totalTakings, 'Online + cash collected', 'var(--sage-dark)'],
+                    ['Mobile money / card', dayRev.online.total, dayRev.online.count + ' paid online', '#1B6349'],
+                    ['Cash collected', dayRev.cash.collected.total, dayRev.cash.collected.count + ' delivered', '#8A3D10'],
+                    ['Cash still out', dayRev.cash.outstanding.total, dayRev.cash.outstanding.count + ' not yet delivered', 'var(--warm-gray)'],
+                  ].map(([label, value, sub, colour]) => (
+                    <div key={label} style={{ background: 'var(--white)', borderRadius: 12, padding: '16px 18px', boxShadow: 'var(--shadow)' }}>
+                      <div style={{ fontSize: 11.5, color: 'var(--warm-gray)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em' }}>{label}</div>
+                      <div style={{ fontFamily: 'var(--font-head)', fontSize: 26, fontWeight: 700, color: colour, marginTop: 6 }}>
+                        GHS {Number(value || 0).toFixed(2)}
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 3 }}>{sub}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ background: 'var(--white)', borderRadius: 12, padding: '20px 22px', boxShadow: 'var(--shadow)', maxWidth: 760 }}>
+                  <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Cash on delivery — by rider</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--warm-gray)', marginBottom: 14 }}>
+                    What each rider should hand in for {dayRev.date}.
+                  </div>
+                  {!dayRev.cash.byRider.length && (
+                    <div style={{ fontSize: 13, color: 'var(--warm-gray)', padding: '16px 0' }}>No cash orders on this day.</div>
+                  )}
+                  {dayRev.cash.byRider.map((b) => (
+                    <div key={String(b.riderId)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14, padding: '12px 0', borderTop: '1px solid var(--cream-dark)', flexWrap: 'wrap' }}>
+                      <div style={{ flex: 1, minWidth: 140 }}>
+                        <div style={{ fontWeight: 600, fontSize: 14 }}>{b.name}</div>
+                        <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 2 }}>
+                          {b.collectedCount} delivered{b.outstandingCount ? ' + ' + b.outstandingCount + ' still out' : ''}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontFamily: 'var(--font-head)', fontSize: 19, fontWeight: 700 }}>GHS {Number(b.collected).toFixed(2)}</div>
+                        {!!b.outstanding && <div style={{ fontSize: 12, color: 'var(--warm-gray)' }}>+ GHS {Number(b.outstanding).toFixed(2)} still out</div>}
+                      </div>
+                    </div>
+                  ))}
+                  {!!dayRev.cash.byRider.length && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 14, marginTop: 4, borderTop: '2px solid var(--sage-dark)', fontWeight: 700, fontSize: 15 }}>
+                      <span>Total to hand in</span>
+                      <span>GHS {Number(dayRev.cash.collected.total).toFixed(2)}</span>
+                    </div>
+                  )}
+                </div>
+
+                {!!dayRev.online.count && (
+                  <div style={{ background: 'var(--white)', borderRadius: 12, padding: '20px 22px', boxShadow: 'var(--shadow)', maxWidth: 760, marginTop: 20 }}>
+                    <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Paid online — already in your Paystack balance</div>
+                    <div style={{ fontSize: 12.5, color: 'var(--warm-gray)', marginBottom: 12 }}>No cash to collect for these.</div>
+                    {dayRev.online.orders.map((o) => (
+                      <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '9px 0', borderTop: '1px solid var(--cream-dark)', fontSize: 13.5 }}>
+                        <span>{window.orderCode(o.id)} — {o.customer || 'Customer'} <span style={{ color: 'var(--warm-gray)', fontSize: 12 }}>({o.method})</span></span>
+                        <span style={{ fontWeight: 600 }}>GHS {Number(o.total).toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
 
