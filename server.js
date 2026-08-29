@@ -586,6 +586,58 @@ function fail(res, e, req, where) {
   return res.status(500).json({ error: 'Something went wrong on our end. Please try again.' });
 }
 
+// The checkout form validates carefully; the server accepted almost anything
+// (F-04). A direct POST could create an order with no name, no phone and no
+// address — undeliverable, and impossible to follow up because there is no
+// contact detail on it. This mirrors CheckoutPage's validate1 so the rule lives
+// where it cannot be bypassed, and caps every free-text field so one request
+// cannot push megabytes into unbounded text columns (B-09).
+const NEIGHBOURHOODS = ['Tamale Central', 'Kalpohin', 'Lamashegu', 'Sagnarigu', 'Nyohini',
+  'Choggu', 'Vittin', 'Tishigu', 'Gumbihini', 'Jisonayili'];
+const PHONE_RE = /^\+?[\d\s-]{9,20}$/;
+const cap = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
+
+function validateDelivery(body, extra = {}) {
+  const familyMode = !!body.familyMode;
+  const out = {
+    customer: cap(body.customer, 80),
+    phone: cap(body.phone, 20),
+    address: cap(body.address, 300),
+    neighborhood: cap(body.neighborhood, 60),
+    recipientName: cap(body.recipientName, 80),
+    recipientPhone: cap(body.recipientPhone, 20),
+    recipientAddress: cap(body.recipientAddress, 300),
+    giftMessage: cap(body.giftMessage, 300),
+    momoNumber: cap(body.momoNumber, 20),
+  };
+  const bad = [];
+  if (!out.customer) bad.push('a name');
+  if (!out.phone || !PHONE_RE.test(out.phone)) bad.push('a valid phone number');
+  if (!out.neighborhood) bad.push('a neighbourhood');
+
+  // Either a typed landmark or a map pin — the same rule the form applies,
+  // because Tamale addressing is informal and the pin often carries it.
+  const loc = body.location;
+  const hasPin = !!(loc && typeof loc.lat === 'number' && typeof loc.lng === 'number'
+    && Math.abs(loc.lat) <= 90 && Math.abs(loc.lng) <= 180);
+  if (!out.address && !hasPin) bad.push('a landmark or a map pin');
+
+  if (familyMode) {
+    if (!out.recipientName) bad.push("the recipient's name");
+    if (!out.recipientPhone || !PHONE_RE.test(out.recipientPhone)) bad.push("a valid recipient phone number");
+  }
+  if (bad.length) {
+    throw new HttpError(400, 'Your order is missing ' + bad.join(', ') + '.', { missing: bad });
+  }
+
+  // A delivery slot must be one the shop actually offers, and a neighbourhood
+  // outside the known list is allowed (customers do type their own area) but is
+  // flagged so a typo does not quietly fragment the admin route grouping.
+  out.unknownNeighborhood = !NEIGHBOURHOODS.some((n) => n.toLowerCase() === out.neighborhood.toLowerCase());
+  out.hasPin = hasPin;
+  return out;
+}
+
 class HttpError extends Error {
   constructor(status, message, extra) { super(message); this.status = status; Object.assign(this, extra || {}); }
 }
@@ -810,6 +862,17 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
     }
   }
 
+  // Validate and cap the delivery details before anything is consumed or
+  // written. A locked (already-paid) order skips this: it was validated at init,
+  // and rejecting it now would take the money without creating the order.
+  let clean = null;
+  if (!locked) {
+    clean = validateDelivery(body, extra);
+    if (clean.unknownNeighborhood) {
+      console.warn('order uses an unlisted neighbourhood: ' + JSON.stringify(clean.neighborhood));
+    }
+  }
+
   // ── Step 1: CONSUME what this order spends, BEFORE the order row exists ──
   // Supabase's REST client has no multi-statement transaction, so the sequence
   // is ordered to fail safe instead. Consumption runs first because it is fully
@@ -862,13 +925,16 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
     created = await db.orders.create({
       userId,
       clientRequestId: idemKey,
-      customerName: customer || '', customerPhone: phone || '',
-      recipientName: recipientName || '', recipientPhone: recipientPhone || '',
-      address: address || recipientAddress || '', neighborhood: neighborhood || '',
+      customerName: clean ? clean.customer : (customer || ''),
+      customerPhone: clean ? clean.phone : (phone || ''),
+      recipientName: clean ? clean.recipientName : (recipientName || ''),
+      recipientPhone: clean ? clean.recipientPhone : (recipientPhone || ''),
+      address: clean ? (clean.address || clean.recipientAddress) : (address || recipientAddress || ''),
+      neighborhood: clean ? clean.neighborhood : (neighborhood || ''),
       items: itemsList, subtotal: pricing.subtotal, deliveryFee: pricing.delivery,
       discount: pricing.discount, loyaltyUsed: pricing.loyaltyUsed, total: pricing.total,
       paymentMethod: payMethod || (extra.paid ? 'paystack' : 'cash'),
-      momoNumber: momoNumber || '',
+      momoNumber: clean ? clean.momoNumber : (momoNumber || ''),
       paid: !!extra.paid, paystackRef: extra.paystackRef || null,
       status: 'queued', location: loc, deliveryDate: deliveryDateStr, deliverySlot, priority,
     });
@@ -1203,6 +1269,10 @@ app.post('/api/paystack/init', async (req, res) => {
   // Give this customer back anything they reserved on a checkout they walked
   // away from, before pricing the new one.
   await releaseStaleReservations(req.user ? req.user.id : null);
+  // Validate before charging: taking money for an order that cannot be created
+  // is the worst possible ordering of these two steps.
+  try { validateDelivery(draft); }
+  catch (e) { if (e && e.status) return res.status(e.status).json({ error: e.message, missing: e.missing || [] }); throw e; }
   let pricing;
   try { pricing = await computeOrderPricing(req.user, draft); }
   catch (e) { if (e && e.status) return res.status(e.status).json({ error: e.message, unavailable: e.unavailable || [] }); throw e; }

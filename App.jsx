@@ -292,6 +292,7 @@ const App = () => {
   if (!currentUser) {
     return (
       <>
+        <OfflineBanner />
         <LoginPage
           onAuth={(user) => { setCurrentUser(user); setAuthChecked(true); }}
           onGuest={() => { setCurrentUser({ role: 'guest', name: 'Guest' }); setAuthChecked(true); }}
@@ -305,6 +306,7 @@ const App = () => {
   if (currentUser.role === 'admin') {
     return (
       <div style={{ minHeight: '100vh', background: 'var(--cream)' }}>
+        <OfflineBanner />
         <AdminPage setPage={navigateTo} onLogout={logout} currentUser={currentUser} setCurrentUser={setCurrentUser} />
         <WhatsAppFloat />
       <IOSInstallHint />
@@ -314,12 +316,13 @@ const App = () => {
 
   // ── Rider: dedicated rider PWA (no shopping UI) ───────────────────────────
   if (currentUser.role === 'rider') {
-    return <RiderPage currentUser={currentUser} onLogout={logout} />;
+    return (<><OfflineBanner /><RiderPage currentUser={currentUser} onLogout={logout} /></>);
   }
 
   // ── Normal shopping app ──────────────────────────────────────────────────
   return (
     <div style={{ minHeight: '100vh', background: 'var(--cream)' }}>
+      <OfflineBanner />
       <Header
         cart={cart}
         page={page}
@@ -449,6 +452,19 @@ const App = () => {
 };
 
 // Error boundary — a render error in any screen no longer blanks the whole app.
+// Connectivity notice. Rendered by every branch of App: a rider marking an
+// order delivered on patchy signal needs this more than a shopper does.
+function OfflineBanner() {
+  const online = useOnline();
+  if (online) return null;
+  return (
+    <div role="status" aria-live="polite"
+      style={{ position: 'sticky', top: 0, zIndex: 999, background: '#8A3D10', color: '#fff', padding: '9px 16px', fontSize: 13.5, fontWeight: 600, textAlign: 'center', lineHeight: 1.4 }}>
+      You are offline. Anything shown may be out of date, and changes cannot be saved until you reconnect.
+    </div>
+  );
+}
+
 class AppErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { error: null }; }
   static getDerivedStateFromError(error) { return { error }; }

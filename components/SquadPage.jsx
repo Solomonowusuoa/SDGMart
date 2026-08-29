@@ -3,13 +3,22 @@ const SquadPage = ({ setPage, currentUser }) => {
   const isMobile = useMobile();
   const [squad, setSquad] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
+  const [loadErr, setLoadErr] = React.useState('');
+  const [reloadKey, setReloadKey] = React.useState(0);
   const [copied, setCopied] = React.useState(false);
   const isGuest = !currentUser || currentUser.role === 'guest' || !currentUser.id;
 
   React.useEffect(() => {
     if (isGuest) { setLoading(false); return; }
-    apiFetch(`/api/squads/${currentUser.id}`).then(r => r.ok ? r.json() : null).then(setSquad).catch(() => {}).finally(() => setLoading(false));
-  }, [currentUser]);
+    setLoading(true);
+    // A swallowed failure here rendered as "you have no squad", which is a
+    // confident false statement rather than an error the customer can act on.
+    apiFetch(`/api/squads/${currentUser.id}`)
+      .then(r => { if (!r.ok) throw new Error('load failed'); return r.json(); })
+      .then((d) => { setSquad(d); setLoadErr(''); })
+      .catch(() => setLoadErr('We could not load your squad just now.'))
+      .finally(() => setLoading(false));
+  }, [currentUser, reloadKey]);   // reloadKey lets Try again re-run the fetch
 
   const wrap = { maxWidth: 820, fontFamily: 'var(--f-ui)', color: 'var(--ink)', background: 'var(--panel)', minHeight: '60vh' };
   const label = { fontFamily: 'var(--f-label)', fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', cursor: 'pointer' };
@@ -29,7 +38,19 @@ const SquadPage = ({ setPage, currentUser }) => {
     );
   }
   if (loading) return <div style={{ textAlign: 'center', padding: '80px 0', color: 'var(--rd-muted)', fontFamily: 'var(--f-ui)' }}>Loading your squad…</div>;
-  if (!squad) return <div style={{ textAlign: 'center', padding: '80px 0', color: 'var(--rd-muted)', fontFamily: 'var(--f-ui)' }}>Could not load squad data.</div>;
+  if (loadErr) return (
+    <div style={{ textAlign: 'center', padding: '80px 24px', fontFamily: 'var(--f-ui)' }}>
+      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>{loadErr}</div>
+      <div style={{ fontSize: 13.5, color: 'var(--rd-muted)', marginBottom: 16 }}>
+        This is a connection problem, not an empty squad — your progress is safe.
+      </div>
+      <button onClick={() => { setLoadErr(''); setReloadKey(k => k + 1); }}
+        style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '11px 22px', fontFamily: 'var(--f-ui)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+        Try again
+      </button>
+    </div>
+  );
+  if (!squad) return <div style={{ textAlign: 'center', padding: '80px 0', color: 'var(--rd-muted)', fontFamily: 'var(--f-ui)' }}>You are not in a squad yet.</div>;
 
   const GOAL = squad.goal || 500;
   const referralLink = `${window.location.origin}/?ref=${squad.referralCode}`;

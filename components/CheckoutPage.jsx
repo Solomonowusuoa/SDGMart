@@ -395,6 +395,12 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // order is placed when it does not exist.
   const placeOrder = async () => {
     if (paying) return;               // double-tap guard: one order per intent
+    // Fail fast rather than sending into a void: without this the request goes
+    // out, fails, and the customer waits through the whole timeout first.
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      setSubmitError('network');
+      return;
+    }
     setSubmitError(null);
     setPaying(true);
     const snap = takeSnapshot();
@@ -435,6 +441,10 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
 
   // Pay online (card / mobile money) via Paystack, then create the order.
   const payWithPaystack = async () => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      setSubmitError('network');
+      return;
+    }
     const snap = takeSnapshot();
     const draft = buildDraft(snap);
     setPaying(true);
