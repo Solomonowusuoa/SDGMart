@@ -390,6 +390,12 @@ const squads = {
           value: true }));
     return r.ok && r.value === true;
   },
+  async releaseBirthdayGift(userId, year) {
+    const r = await casUser(userId, (u) => (Number(u.birthdayGiftClaimedYear || 0) === Number(year)
+      ? { patch: { birthday_gift_claimed_year: null }, expect: { birthday_gift_claimed_year: year }, value: true }
+      : null));
+    return r.ok;
+  },
   async releaseFirstOrder(userId) {
     const r = await casUser(userId, (u) => (u.firstOrderDone
       ? { patch: { first_order_done: false }, expect: { first_order_done: true }, value: true }
@@ -1118,6 +1124,16 @@ const pendingPayments = {
   // still have no order against their reference. A draft is only deleted after
   // its order is successfully created, so anything left here is either an
   // abandoned checkout (harmless) or a payment we took and failed to fulfil.
+  // This customer's own abandoned checkouts. Used to hand their reserved
+  // loyalty back the moment they start a new one, rather than making them wait
+  // for a sweep.
+  async listStaleForUser(userId, olderThanMinutes = 30) {
+    if (!userId) return [];
+    const cutoff = new Date(Date.now() - olderThanMinutes * 60000).toISOString();
+    const { data } = await sb.from('pending_payments').select('*')
+      .eq('user_id', userId).lt('created_at', cutoff).limit(10);
+    return (data || []).map((r) => ({ reference: r.reference, userId: r.user_id, draft: r.draft, createdAt: r.created_at }));
+  },
   async listOrphans({ olderThanMinutes = 15, limit = 50 } = {}) {
     const cutoff = new Date(Date.now() - olderThanMinutes * 60000).toISOString();
     const { data, error } = await sb.from('pending_payments').select('*')

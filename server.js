@@ -549,6 +549,68 @@ async function computeOrderPricing(reqUser, body) {
 // Shared order-creation logic. Used by Cash-on-Delivery (/api/orders) and the
 // Paystack verify/webhook paths. `reqUser` may be null (guest). `extra` carries
 // payment status (paid, paystackRef).
+// ── Checkout reservations (Paystack) ─────────────────────────────────────
+// Online payment prices the order at `init` but only creates it at `verify`,
+// minutes later, after the customer approves on their phone. Recomputing the
+// price at `verify` meant the stored total could drift from the amount actually
+// charged (audit C-07), and taking the loyalty at `verify` meant a second
+// checkout could spend the same credit in between.
+//
+// So: take the value at `init`, when the price is locked, and carry both the
+// resolved pricing and a ledger of what was taken on the pending_payments draft.
+// `verify` then just creates the order from that — no second pricing pass, no
+// second consumption. If the customer never pays, releaseReservation() hands it
+// all back.
+async function reserveForCheckout(reqUser, pricing, giftClaimYear) {
+  const userId = reqUser ? reqUser.id : null;
+  const ledger = { userId, loyalty: 0, discount: false, firstOrder: false, giftYear: null };
+  if (!userId) return ledger;
+  if (pricing.discountApplied && await db.squads.consumeDiscount(userId)) ledger.discount = true;
+  if (pricing.loyaltyUsed) {
+    const used = await db.squads.consumeLoyalty(userId, pricing.loyaltyUsed);
+    ledger.loyalty = used;
+    if (used < pricing.loyaltyUsed) {
+      // Nothing is charged yet, so the honest move is to bill what they will
+      // actually receive rather than absorbing the difference later.
+      pricing.total = +(Number(pricing.total) + (pricing.loyaltyUsed - used)).toFixed(2);
+      pricing.loyaltyUsed = used;
+    }
+  }
+  if (!reqUser.firstOrderDone && pricing.firstOrderFree && await db.squads.claimFirstOrder(userId)) ledger.firstOrder = true;
+  if (giftClaimYear != null && await db.squads.claimBirthdayGift(userId, giftClaimYear)) ledger.giftYear = giftClaimYear;
+  return ledger;
+}
+
+async function releaseReservation(ledger) {
+  if (!ledger || !ledger.userId) return;
+  const { userId } = ledger;
+  try { if (ledger.loyalty > 0) await db.squads.addLoyalty(userId, ledger.loyalty); }
+  catch (e) { console.error('RESERVATION RELEASE FAILED (loyalty) for user ' + userId + ':', e.message); }
+  try { if (ledger.discount) await db.squads.restoreDiscount(userId); } catch (_) {}
+  try { if (ledger.firstOrder) await db.squads.releaseFirstOrder(userId); } catch (_) {}
+  try { if (ledger.giftYear != null) await db.squads.releaseBirthdayGift(userId, ledger.giftYear); } catch (_) {}
+}
+
+// Hand back anything this customer reserved on a checkout they walked away
+// from, so their credit is spendable again the moment they come back. Only
+// releases when Paystack confirms the payment did NOT succeed — otherwise the
+// webhook or the Reconcile screen may still turn it into an order.
+async function releaseStaleReservations(userId) {
+  if (!userId) return;
+  let stale = [];
+  try { stale = await db.pendingPayments.listStaleForUser(userId, 30); } catch (_) { return; }
+  for (const row of stale) {
+    try {
+      if (PAYSTACK_SECRET_KEY) {
+        const ver = await paystackApi('/transaction/verify/' + encodeURIComponent(row.reference));
+        if (ver && ver.status && ver.data && ver.data.status === 'success') continue; // paid — leave it
+      }
+      await releaseReservation((row.draft && row.draft._reserved) || null);
+      await db.pendingPayments.delete(row.reference);
+    } catch (e) { console.warn('stale reservation release failed for ' + row.reference + ':', e.message); }
+  }
+}
+
 async function createOrderFromBody(reqUser, body, extra = {}) {
   // Duplicate-order protection: the client sends one key per checkout attempt
   // and reuses it when retrying. If that attempt already produced an order —
@@ -594,14 +656,18 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
 
   // Authoritative pricing — recomputed on the server from DB prices + promos +
   // the signed-in user's discount/loyalty. Client prices/subtotal/total ignored.
-  const pricing = await computeOrderPricing(reqUser, body);
+  // A Paystack order carries the pricing that was locked at `init` and already
+  // paid for. Recomputing it here is what let the stored total drift away from
+  // the amount charged (C-07), so the locked copy wins whenever it is present.
+  const locked = extra.locked || null;
+  const pricing = locked ? locked.pricing : await computeOrderPricing(reqUser, body);
   const itemsList = [...pricing.items];
 
   // Birthday free gift — server-validated, appended at price 0. The claim is
   // recorded only AFTER a successful create (below), so a failed create can't
   // burn the once-a-year gift.
   let giftClaimYear = null;
-  if (reqUser && body.birthdayGift) {
+  if (reqUser && body.birthdayGift && !locked) {
     const { cfg, eligible, year } = await birthdayGiftStatus(reqUser);
     const gid = parseInt(body.birthdayGift, 10);
     if (eligible && (cfg.productIds || []).map(Number).includes(gid)) {
@@ -618,7 +684,7 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
   // failure at the consume step left the customer with the discount applied to
   // a real order AND their balance intact.
   const compensate = [];
-  if (userId) {
+  if (userId && !locked) {
     if (pricing.discountApplied) {
       const took = await db.squads.consumeDiscount(userId);
       if (took) compensate.push(() => db.squads.restoreDiscount(userId));
@@ -676,6 +742,10 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
     for (const undo of compensate.reverse()) {
       try { await undo(); } catch (u) { console.error('COMPENSATION FAILED after order insert error:', u.message); }
     }
+    // A locked (already-paid) order must NOT release its reservation here: the
+    // customer's money has been taken, so the value stays spent and the webhook
+    // or the Reconcile screen retries creating the order.
+
     // Two retries of the same attempt raced each other. The unique index did its
     // job — return the order the winner created rather than surfacing an error.
     if (idemKey && e && /duplicate key|23505/i.test(e.message || '')) {
@@ -769,7 +839,9 @@ app.post('/api/admin/payments/orphans/:reference/recover', requireAdmin, async (
       return res.status(400).json({ error: 'Paystack does not report this payment as successful — not recovering' });
     }
     const reqUser = pending.userId ? await db.users.get(pending.userId) : null;
-    const result = await createOrderFromBody(reqUser, pending.draft, { paid: true, paystackRef: reference });
+    const result = await createOrderFromBody(reqUser, pending.draft, {
+      paid: true, paystackRef: reference, locked: pending.draft._locked || null,
+    });
     await db.pendingPayments.delete(reference);
     res.json({ ok: true, id: result.id, total: result.total });
   } catch (e) {
@@ -789,6 +861,8 @@ app.delete('/api/admin/payments/orphans/:reference', requireAdmin, async (req, r
         return res.status(409).json({ error: 'This payment succeeded — recover it into an order instead of dismissing it.' });
       }
     }
+    const row = await db.pendingPayments.get(reference);
+    if (row && row.draft && row.draft._reserved) await releaseReservation(row.draft._reserved);
     await db.pendingPayments.delete(reference);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -917,7 +991,20 @@ app.post('/api/paystack/init', async (req, res) => {
   const { email, draft } = req.body || {};
   if (!draft || !Array.isArray(draft.items) || !draft.items.length) return res.status(400).json({ error: 'Empty order' });
   // Amount is computed server-side from the cart — never trust the client amount.
+  // Give this customer back anything they reserved on a checkout they walked
+  // away from, before pricing the new one.
+  await releaseStaleReservations(req.user ? req.user.id : null);
   const pricing = await computeOrderPricing(req.user, draft);
+  // Resolve the birthday gift here too, so the locked item list is complete.
+  let giftYear = null;
+  if (req.user && draft.birthdayGift) {
+    const { cfg, eligible, year } = await birthdayGiftStatus(req.user);
+    const gid = parseInt(draft.birthdayGift, 10);
+    if (eligible && (cfg.productIds || []).map(Number).includes(gid)) {
+      const gp = await db.products.get(gid);
+      if (gp) { pricing.items.push({ id: gp.id, name: gp.name, category: gp.category, unit: gp.unit, qty: 1, price: 0, birthdayGift: true }); giftYear = year; }
+    }
+  }
   const ghs = pricing.total;
   if (!(ghs > 0)) return res.status(400).json({ error: 'Invalid amount' });
   const customerEmail = (email && /\S+@\S+\.\S+/.test(email)) ? email
@@ -927,7 +1014,7 @@ app.post('/api/paystack/init', async (req, res) => {
   try {
     const init = await paystackApi('/transaction/initialize', 'POST', {
       email: customerEmail,
-      amount: Math.round(ghs * 100), // pesewas
+      amount: Math.round(pricing.total * 100), // pesewas — the reserved-adjusted total
       currency: 'GHS',
       reference,
       channels: ['mobile_money', 'card'],
@@ -940,7 +1027,22 @@ app.post('/api/paystack/init', async (req, res) => {
       },
     });
     if (!init || !init.status || !init.data) return res.status(502).json({ error: (init && init.message) || 'Could not start payment' });
-    await db.pendingPayments.create(reference, req.user ? req.user.id : null, draft, ghs);
+    // Take the value NOW, while the price is locked and before the customer is
+    // charged, so a second checkout cannot spend the same credit. Released by
+    // releaseStaleReservations() / the verify failure path if they never pay.
+    let reserved;
+    try {
+      reserved = await reserveForCheckout(req.user, pricing, giftYear);
+    } catch (e) {
+      return res.status(409).json({ error: e.message || 'Could not hold your credit — please try again' });
+    }
+    const lockedDraft = { ...draft, _reserved: reserved, _locked: { pricing, giftYear } };
+    try {
+      await db.pendingPayments.create(reference, req.user ? req.user.id : null, lockedDraft, pricing.total);
+    } catch (e) {
+      await releaseReservation(reserved);   // nothing is charged yet — give it straight back
+      throw e;
+    }
     res.json({ reference, accessCode: init.data.access_code, publicKey: PAYSTACK_PUBLIC_KEY });
   } catch (e) { console.error('paystack init failed:', e.message); res.status(500).json({ error: 'Payment init failed' }); }
 });
@@ -956,13 +1058,35 @@ app.post('/api/paystack/verify', async (req, res) => {
 
     const ver = await paystackApi('/transaction/verify/' + encodeURIComponent(reference));
     if (!ver || !ver.status || !ver.data || ver.data.status !== 'success') {
+      // Not paid: hand back the loyalty and perks reserved at init straight
+      // away, rather than leaving the customer's credit locked up.
+      const failed = await db.pendingPayments.get(reference);
+      if (failed && failed.draft && failed.draft._reserved) {
+        await releaseReservation(failed.draft._reserved);
+        await db.pendingPayments.delete(reference);
+      }
       return res.status(400).json({ error: 'Payment was not completed' });
     }
     const pending = await db.pendingPayments.get(reference);
     const draft = (pending && pending.draft) || req.body.draft;
     if (!draft) return res.status(400).json({ error: 'Order details not found' });
     const reqUser = pending && pending.userId ? await db.users.get(pending.userId) : req.user;
-    const result = await createOrderFromBody(reqUser, draft, { paid: true, paystackRef: reference });
+    // Use the price locked at init — never recompute against a catalogue that
+    // may have changed while the customer was approving on their phone (C-07).
+    const result = await createOrderFromBody(reqUser, draft, {
+      paid: true, paystackRef: reference, locked: draft._locked || null,
+    });
+    // The charge and the stored order must agree. If they ever diverge, say so
+    // loudly rather than letting it settle quietly into the books.
+    const charged = ver.data.amount != null ? ver.data.amount / 100 : null;
+    if (charged != null && Math.abs(charged - Number(result.total || 0)) > 0.005) {
+      const msg = 'PAYMENT MISMATCH — ref ' + reference + ' charged GHS ' + charged.toFixed(2)
+        + ' but order ' + result.id + ' totals GHS ' + Number(result.total || 0).toFixed(2);
+      console.error(msg);
+      await db.errorLog.record({ message: msg, path: '/api/paystack/verify', method: 'POST', status: 500 });
+      if (Sentry) { try { Sentry.captureException(new Error(msg)); } catch (_) {} }
+      notifyAdmins({ title: '⚠️ Payment mismatch', body: msg.slice(0, 120), url: '/admin', tag: 'admin-mismatch-' + reference }).catch(() => {});
+    }
     await db.pendingPayments.delete(reference);
     res.json(result);
   } catch (e) { console.error('paystack verify failed:', e.message); res.status(500).json({ error: e.message }); }
@@ -984,7 +1108,9 @@ app.post('/api/paystack/webhook', async (req, res) => {
         const pending = await db.pendingPayments.get(ref);
         if (pending && pending.draft) {
           const reqUser = pending.userId ? await db.users.get(pending.userId) : null;
-          await createOrderFromBody(reqUser, pending.draft, { paid: true, paystackRef: ref });
+          await createOrderFromBody(reqUser, pending.draft, {
+            paid: true, paystackRef: ref, locked: pending.draft._locked || null,
+          });
           await db.pendingPayments.delete(ref);
         } else {
           // Paid, but the draft is gone and no order exists — a retry can never
@@ -1280,6 +1406,21 @@ async function runDailyJobs() {
     if ((await db.appConfig.get('daily_job_last_run')) === today) return;
     _dailyJobRunning = true;
     await db.appConfig.set('daily_job_last_run', today);
+    // Release loyalty held by checkouts nobody came back to. releaseStale-
+    // Reservations covers the customer who returns; this covers the one who
+    // never does, so their credit is not locked up indefinitely.
+    try {
+      const abandoned = await db.pendingPayments.listOrphans({ olderThanMinutes: 24 * 60, limit: 50 });
+      for (const row of abandoned) {
+        if (!row.draft || !row.draft._reserved) continue;
+        if (PAYSTACK_SECRET_KEY) {
+          const ver = await paystackApi('/transaction/verify/' + encodeURIComponent(row.reference));
+          if (ver && ver.status && ver.data && ver.data.status === 'success') continue; // paid — leave for recovery
+        }
+        await releaseReservation(row.draft._reserved);
+        await db.pendingPayments.delete(row.reference);
+      }
+    } catch (e) { console.warn('abandoned-reservation sweep failed:', e.message); }
     const now = new Date();
     const m = now.getMonth() + 1, d = now.getDate(), year = now.getFullYear();
     const isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;

@@ -3,7 +3,7 @@
 //   updates during development are picked up on reload.
 // - Listens for `push` events and shows native OS notifications.
 // - On notification click, focuses an existing tab or opens the target URL.
-const CACHE_NAME = 'sdgmart-v83-atomic-balances-idempotent-orders';
+const CACHE_NAME = 'sdgmart-v84-checkout-reservations';
 const STATIC_ASSETS = [
   '/SDGMart.html',
   '/manifest.json',
