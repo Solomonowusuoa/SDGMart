@@ -429,9 +429,15 @@ const orders = {
     // INTO 'delivered', never on a repeat call (riders on flaky connections tap
     // twice), and never on delivered -> delivered.
     const before = await orders.get(id);
-    const patch = { status };
-    if (riderId != null) patch.rider_id = riderId;
-    const o = await orders.update(id, patch);
+    if (!before) return null;
+    // A rider may only move an order that is ALREADY assigned to them. Without
+    // this, any rider could walk sequential order ids, mark every live order
+    // delivered, and take assignment of each one on the way — sending false
+    // "Delivered" pushes and, now that rewards accrue on delivery, granting
+    // them on orders that never arrived. Assignment is the admin's operation
+    // (orders.assignToRider), so this path must never write rider_id.
+    if (riderId != null && String(before.riderId || '') !== String(riderId)) return null;
+    const o = await orders.update(id, { status });
     if (status === 'delivered' && before && before.status !== 'delivered' && before.userId) {
       // Accrual lives here, not at checkout — see createOrderFromBody. Best
       // effort: a failure must not block the rider marking the order delivered.
