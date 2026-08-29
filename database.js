@@ -18,8 +18,18 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
   console.error('    Put them in .env locally and in Render → Environment in production.');
   process.exit(1);
 }
+// Every Supabase call gets a deadline. Node fetch has no default timeout, so a
+// Supabase instance that stops responding rather than refusing — the usual shape
+// of a degraded service — would leave requests hanging forever. On a single
+// process those pile up until nothing is served at all: a slow dependency
+// becomes a full outage. 10s is far above normal (single-digit ms) and far
+// below a customer giving up.
+const SUPABASE_TIMEOUT_MS = Number(process.env.SUPABASE_TIMEOUT_MS || 10000);
 const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
+  global: {
+    fetch: (url, opts = {}) => fetch(url, { ...opts, signal: AbortSignal.timeout(SUPABASE_TIMEOUT_MS) }),
+  },
 });
 
 // ── Admin bootstrap ──────────────────────────────────────────────────────

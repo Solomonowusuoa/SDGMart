@@ -31,13 +31,28 @@ if (process.env.SENTRY_DSN) {
 // ── Paystack (online card + mobile money) ────────────────────────────────
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || '';
 const PAYSTACK_PUBLIC_KEY = process.env.PAYSTACK_PUBLIC_KEY || '';
+// Node's fetch has no default timeout. A Paystack instance that stops responding
+// rather than refusing would hang the request forever, and on a single process
+// those accumulate until nothing is served — a slow dependency becoming a full
+// outage. 15s is generous for their API and far short of a customer giving up.
+const PAYSTACK_TIMEOUT_MS = Number(process.env.PAYSTACK_TIMEOUT_MS || 15000);
 async function paystackApi(path, method = 'GET', body) {
-  const r = await fetch('https://api.paystack.co' + path, {
-    method,
-    headers: { Authorization: 'Bearer ' + PAYSTACK_SECRET_KEY, 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  return r.json();
+  try {
+    const r = await fetch('https://api.paystack.co' + path, {
+      method,
+      headers: { Authorization: 'Bearer ' + PAYSTACK_SECRET_KEY, 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(PAYSTACK_TIMEOUT_MS),
+    });
+    return r.json();
+  } catch (e) {
+    // Surface as a clear failure rather than an undefined that every caller
+    // then has to guess about.
+    const timedOut = e && (e.name === 'TimeoutError' || e.name === 'AbortError');
+    throw new Error(timedOut
+      ? 'Payment provider did not respond in time'
+      : 'Could not reach the payment provider: ' + (e && e.message ? e.message : 'unknown error'));
+  }
 }
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
@@ -52,11 +67,22 @@ function getResend() {
     return _resend;
   } catch (_) { return null; }
 }
+// Bound any promise so a hung dependency cannot hold a request open forever.
+function withTimeout(promise, ms, label) {
+  let t;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => { t = setTimeout(() => reject(new Error(label + ' timed out after ' + ms + 'ms')), ms); }),
+  ]).finally(() => clearTimeout(t));
+}
+
 async function sendEmail({ to, subject, html, text }) {
   const client = getResend();
   if (!client) return { skipped: true, reason: 'RESEND_API_KEY not set' };
   try {
-    const r = await client.emails.send({ from: RESEND_FROM_EMAIL, to, subject, html, text });
+    const r = await withTimeout(
+      client.emails.send({ from: RESEND_FROM_EMAIL, to, subject, html, text }),
+      15000, 'email send');
     return { ok: true, id: r.data && r.data.id };
   } catch (e) {
     console.warn('email send failed:', e.message);
@@ -433,7 +459,7 @@ if (typeof window !== 'undefined') {
 // ── Products API ─────────────────────────────────────────────────────────
 app.get('/api/products', async (req, res) => {
   try { res.json((await db.products.list()).map(p => ({ ...p, bestseller: !!p.bestseller, img: p.img || null }))); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 app.get('/api/products/top', async (req, res) => {
@@ -449,7 +475,7 @@ app.get('/api/products/top', async (req, res) => {
       realTop.push(...remaining.slice(0, limit - realTop.length));
     }
     res.json(realTop);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 app.get('/api/products/:id', async (req, res) => {
@@ -457,7 +483,7 @@ app.get('/api/products/:id', async (req, res) => {
     const p = await db.products.get(req.params.id);
     if (!p) return res.status(404).json({ error: 'Not found' });
     res.json({ ...p, bestseller: !!p.bestseller });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 app.post('/api/products', requireAdmin, async (req, res) => {
@@ -480,19 +506,19 @@ app.put('/api/products/:id', requireAdmin, async (req, res) => {
 
 app.delete('/api/products/:id', requireAdmin, async (req, res) => {
   try { await db.products.delete(req.params.id); invalidateCatalog(); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 // Admin: low-stock products (uses per-product threshold, default 5)
 app.get('/api/admin/inventory/low', requireAdmin, async (req, res) => {
   try { res.json(await db.products.lowStock()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 // ── Orders API ───────────────────────────────────────────────────────────
 app.get('/api/orders', requireAdmin, async (req, res) => {
   try { res.json(await db.orders.list({ limit: Math.min(2000, parseInt(req.query.limit, 10) || 500) })); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 // Birthday gift eligibility — valid in the user's birth MONTH, once per year,
@@ -520,6 +546,12 @@ const FIRST_ORDER_FREE_MIN = 50; // first-order free delivery only when the orde
 // exists so one request cannot be turned into an unbounded amount of work.
 const MAX_ORDER_LINES = 100;
 
+// Last successfully loaded promotions, so a momentary Supabase failure cannot
+// quietly turn a sale off for everyone. Beyond this age we would rather refuse
+// to price than guess.
+let _promoCache = { map: null, at: 0 };
+const PROMO_STALE_MS = 10 * 60 * 1000;
+
 // Lets pricing reject a basket with a real status code instead of a 500.
 // ── Kill switches ────────────────────────────────────────────────────────
 // Admin-flippable stops for the paths that can lose money. Without these the
@@ -532,6 +564,28 @@ async function switchOn(key) {
   } catch (_) { return true; }   // never let a config read block trading
 }
 
+// Every route used to end in `catch (e) { res.status(500).json({ error: e.message }) }`:
+// the error was never recorded anywhere searchable, and because the handler dealt
+// with it itself it never reached the global middleware that would have logged it.
+// So the incidents most worth diagnosing were the ones least likely to be captured
+// (E-04) — and raw Postgres text went to the browser, naming columns and
+// constraints (E-07). This does both jobs in one call.
+function fail(res, e, req, where) {
+  if (e && e.status) {
+    return res.status(e.status).json({ error: e.message, ...(e.unavailable ? { unavailable: e.unavailable } : {}) });
+  }
+  const path = where || (req && req.path) || 'unknown';
+  console.error('[' + path + ']', e && e.message ? e.message : e);
+  db.errorLog.record({
+    message: path + ': ' + (e && e.message ? e.message : String(e)),
+    stack: (e && e.stack) || '', path,
+    method: (req && req.method) || null, status: 500,
+    userId: req && req.user ? req.user.id : null,
+  }).catch(() => {});
+  if (Sentry) { try { Sentry.captureException(e); } catch (_) {} }
+  return res.status(500).json({ error: 'Something went wrong on our end. Please try again.' });
+}
+
 class HttpError extends Error {
   constructor(status, message, extra) { super(message); this.status = status; Object.assign(this, extra || {}); }
 }
@@ -540,13 +594,28 @@ async function computeOrderPricing(reqUser, body) {
   const clientItems = Array.isArray(body.items) ? body.items : [];
   let deductStock = false;
   try { deductStock = !!(await db.appConfig.get('deduct_stock')); } catch (_) {}
+  // A swallowed failure here silently priced every basket at FULL price with no
+  // error, no log and no alert — and it would bite hardest during a flash sale,
+  // when a promo push has just gone out and load is at its peak. Now: serve the
+  // last known good set on a blip, and refuse to price at all if we have never
+  // loaded one, because overcharging is worse than asking the customer to retry.
   let promoMap = {};
   try {
     const promos = await db.promotions.listActive();
     (promos || []).forEach(p => (p.productIds || []).forEach(id => {
       if (!promoMap[id] || p.discountPercent > promoMap[id]) promoMap[id] = p.discountPercent;
     }));
-  } catch (_) {}
+    _promoCache = { map: promoMap, at: Date.now() };
+  } catch (e) {
+    console.error('promotions lookup failed:', e.message);
+    db.errorLog.record({ message: 'promotions lookup failed during pricing: ' + e.message, path: '/pricing', status: 500 }).catch(() => {});
+    if (_promoCache.map && Date.now() - _promoCache.at < PROMO_STALE_MS) {
+      promoMap = _promoCache.map;
+      console.warn('pricing with promotions cached ' + Math.round((Date.now() - _promoCache.at) / 1000) + 's ago');
+    } else {
+      throw new HttpError(503, 'We could not confirm current prices just now. Please try again in a moment.');
+    }
+  }
   // Collapse duplicate ids into one line before clamping (C-04). The 99 cap was
   // per LINE, so 200 lines of the same product meant 19,800 units — and each
   // line cost its own sequential products.get, letting one 3 MB request tie the
@@ -912,7 +981,7 @@ app.get('/api/admin/revenue', requireAdmin, async (req, res) => {
       totalTakings: round(online.total + collected.total),
       orderCount: dayOrders.length,
     });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Payment reconciliation ───────────────────────────────────────────────
@@ -950,7 +1019,7 @@ app.get('/api/admin/payments/orphans', requireAdmin, async (req, res) => {
       });
     }
     res.json(out);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // Turn a stranded draft into a real order — but ONLY after Paystack confirms
@@ -974,7 +1043,11 @@ app.post('/api/admin/payments/orphans/:reference/recover', requireAdmin, async (
     await db.pendingPayments.delete(reference);
     res.json({ ok: true, id: result.id, total: result.total });
   } catch (e) {
+    // Admin-only diagnostic: the detail is what makes a stuck payment fixable,
+    // so it is kept here rather than genericised — but it is now recorded too.
     console.error('orphan recovery failed for ' + reference + ':', e.message);
+    db.errorLog.record({ message: 'orphan recovery failed for ' + reference + ': ' + e.message, stack: e.stack || '', path: '/api/admin/payments/orphans/recover', method: 'POST', status: 500, userId: req.user ? req.user.id : null }).catch(() => {});
+    if (Sentry) { try { Sentry.captureException(e); } catch (_) {} }
     res.status(500).json({ error: e.message });
   }
 });
@@ -994,7 +1067,7 @@ app.delete('/api/admin/payments/orphans/:reference', requireAdmin, async (req, r
     if (row && row.draft && row.draft._reserved) await releaseReservation(row.draft._reserved);
     await db.pendingPayments.delete(reference);
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Recurring orders (auto-reorder) ──────────────────────────────────────
@@ -1094,7 +1167,7 @@ app.post('/api/orders', async (req, res) => {
 
 app.put('/api/orders/:id', requireAdmin, async (req, res) => {
   try { await db.orders.update(req.params.id, req.body || {}); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 app.get('/api/orders/:id', requireAdmin, async (req, res) => {
@@ -1102,13 +1175,13 @@ app.get('/api/orders/:id', requireAdmin, async (req, res) => {
     const o = await db.orders.get(req.params.id);
     if (!o) return res.status(404).json({ error: 'Not found' });
     res.json(o);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // Admin: delete an order
 app.delete('/api/orders/:id', requireAdmin, async (req, res) => {
   try { await db.sb.from('orders').delete().eq('id', req.params.id); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 // ── Paystack: online payment (card + mobile money) ───────────────────────
@@ -1227,7 +1300,7 @@ app.post('/api/paystack/verify', async (req, res) => {
     }
     await db.pendingPayments.delete(reference);
     res.json(result);
-  } catch (e) { console.error('paystack verify failed:', e.message); res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req, '/api/paystack/verify'); }
 });
 
 // 3) Webhook safety net — if the customer paid but never hit verify (closed
@@ -1296,7 +1369,7 @@ app.post('/api/admin/orders/:id/assign', requireAdmin, async (req, res) => {
       });
     }
     res.json(o);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Auth: signup / login / logout / me ───────────────────────────────────
@@ -1327,10 +1400,7 @@ app.post('/api/auth/signup', async (req, res) => {
     u.emailVerified = true;
     const token = await db.sessions.create(u.id);
     res.status(201).json({ user: publicUser(u), token, message: 'Account created — welcome to SDGMart!' });
-  } catch (e) {
-    console.error('signup failed:', e);
-    res.status(500).json({ error: e.message || 'Signup failed' });
-  }
+  } catch (e) { fail(res, e, req, '/api/auth/signup'); }
 });
 
 const LOGIN_LIMIT = { windowMs: 5 * 60 * 1000, max: 5, blockMs: 15 * 60 * 1000 };
@@ -1357,7 +1427,7 @@ app.post('/api/auth/login', async (req, res) => {
     db.rateClear(key);
     const token = await db.sessions.create(u.id, userType);
     res.json({ user: publicUser(u), token });
-  } catch (e) { console.error('login failed:', e); res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req, '/api/auth/login'); }
 });
 
 app.post('/api/auth/logout', async (req, res) => {
@@ -1442,7 +1512,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     // Identical to the not-found and rate-limited branches above: three
     // distinguishable responses were themselves an account-enumeration oracle.
     res.json({ ok: true });
-  } catch (e) { console.error('forgot-password failed:', e); res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req, '/api/auth/forgot-password'); }
 });
 
 app.post('/api/auth/reset-password', async (req, res) => {
@@ -1456,7 +1526,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
     await db.users.changePassword(result.userId, newPassword);
     await db.sessions.destroyAllForUser(result.userId);
     res.json({ ok: true });
-  } catch (e) { console.error('reset-password failed:', e); res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req, '/api/auth/reset-password'); }
 });
 
 // customerOnly (not just requireAuth): riders have their own id space, so a
@@ -1473,7 +1543,7 @@ app.post('/api/auth/change-password', requireAuth, customerOnly, async (req, res
     await db.sessions.destroyAllForUser(req.user.id);
     const token = await db.sessions.create(req.user.id);
     res.json({ ok: true, token });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 app.get('/api/users/:id', requireAuth, async (req, res) => {
@@ -1482,7 +1552,7 @@ app.get('/api/users/:id', requireAuth, async (req, res) => {
     const u = await db.users.get(req.params.id);
     if (!u) return res.status(404).json({ error: 'Not found' });
     res.json(publicUser(u));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 app.get('/api/squads/:userId', requireAuth, async (req, res) => {
@@ -1494,20 +1564,20 @@ app.get('/api/squads/:userId', requireAuth, async (req, res) => {
       id: m.id, name: m.name, totalSpent: m.totalSpent || 0, discountPending: !!m.discountPending, isYou: m.id === u.id,
     }));
     res.json({ me: publicUser(u), referralCode: u.refCode, squadCode: u.squadCode, members, goal: 500 });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Persistent cart (signed-in; a customer's cart follows them across devices) ──
 app.get('/api/me/cart', requireAuth, async (req, res) => {
   try { res.json({ items: await db.carts.get(req.user.id) }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.put('/api/me/cart', requireAuth, async (req, res) => {
   try {
     const items = Array.isArray(req.body && req.body.items) ? req.body.items.slice(0, 100) : [];
     await db.carts.save(req.user.id, items);
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Web Push ─────────────────────────────────────────────────────────────
@@ -1521,7 +1591,7 @@ async function pushToUser(userId, payload) {
     const subs = await db.pushSubs.forUser(userId);
     await Promise.all(subs.map(async (sub) => {
       try {
-        await webpush.sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, JSON.stringify(payload));
+        await withTimeout(webpush.sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, JSON.stringify(payload)), 10000, 'push send');
       } catch (e) {
         if (e.statusCode === 404 || e.statusCode === 410) await db.pushSubs.remove(sub.endpoint);
         else console.warn('push send failed:', e.statusCode, e.body);
@@ -1594,7 +1664,7 @@ app.post('/api/push/subscribe', requireAuth, async (req, res) => {
   const sub = req.body && req.body.subscription;
   if (!sub || !sub.endpoint || !sub.keys) return res.status(400).json({ error: 'Invalid subscription' });
   try { await db.pushSubs.add(req.user.id, sub); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.post('/api/push/unsubscribe', async (req, res) => {
   const endpoint = req.body && req.body.endpoint;
@@ -1605,7 +1675,7 @@ app.post('/api/push/unsubscribe', async (req, res) => {
 // ── Riders ───────────────────────────────────────────────────────────────
 app.get('/api/admin/riders', requireAdmin, async (req, res) => {
   try { res.json(await db.riders.list()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.post('/api/admin/riders', requireAdmin, async (req, res) => {
   const { name, email, phone, password } = req.body || {};
@@ -1620,7 +1690,7 @@ app.post('/api/rider/location', riderOnly, async (req, res) => {
   const { lat, lng } = req.body || {};
   if (typeof lat !== 'number' || typeof lng !== 'number') return res.status(400).json({ error: 'lat/lng required' });
   try { await db.riders.setLocation(req.user.id, lat, lng); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 app.post('/api/rider/online', riderOnly, async (req, res) => {
@@ -1638,12 +1708,12 @@ app.post('/api/rider/online', riderOnly, async (req, res) => {
       }
     }
     res.json({ ok: true, online: !!online });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 app.get('/api/rider/orders', riderOnly, async (req, res) => {
   try { await db.orders.assignQueuedForToday(); res.json(await db.orders.forRider(req.user.id)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 app.post('/api/rider/orders/:id/status', riderOnly, async (req, res) => {
@@ -1662,7 +1732,7 @@ app.post('/api/rider/orders/:id/status', riderOnly, async (req, res) => {
       }
     }
     res.json(o);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // Customer: list my own orders
@@ -1675,7 +1745,7 @@ app.get('/api/me/orders', requireAuth, async (req, res) => {
     // Mode recipient the link without an account).
     const out = db.rowsOut(data).map(o => ({ ...o, trackToken: orderTrackToken(o.id) }));
     res.json(out);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // Signed per-order track token so GUESTS can follow their order after closing
@@ -1712,7 +1782,7 @@ app.get('/api/orders/:id/tracking', async (req, res) => {
       if (!isOwner && !isRider && req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
     }
     res.json(t);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Search analytics ─────────────────────────────────────────────────────
@@ -1723,17 +1793,17 @@ app.post('/api/search/log', async (req, res) => {
 });
 app.get('/api/admin/search/top', requireAdmin, async (req, res) => {
   try { res.json(await db.searchLog.topQueries({ days: parseInt(req.query.days) || 30, limit: parseInt(req.query.limit) || 20 })); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.get('/api/admin/search/unmatched', requireAdmin, async (req, res) => {
   try { res.json(await db.searchLog.unmatchedQueries({ days: parseInt(req.query.days) || 30, limit: parseInt(req.query.limit) || 20 })); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 // ── Saved addresses ──────────────────────────────────────────────────────
 app.get('/api/me/addresses', requireAuth, async (req, res) => {
   try { res.json(await db.addresses.list(req.user.id)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.post('/api/me/addresses', requireAuth, async (req, res) => {
   try { res.json(await db.addresses.create(req.user.id, req.body || {})); }
@@ -1745,7 +1815,7 @@ app.put('/api/me/addresses/:id', requireAuth, async (req, res) => {
 });
 app.delete('/api/me/addresses/:id', requireAuth, async (req, res) => {
   try { await db.addresses.delete(req.user.id, req.params.id); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 // Update profile (name + phone; birthday is captured ONCE then locked)
@@ -1765,24 +1835,24 @@ app.put('/api/me/profile', requireAuth, async (req, res) => {
     const { data, error } = await db.sb.from('users').update(patch).eq('id', req.user.id).select().single();
     if (error) throw error;
     res.json(db.rowOut(data));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Reviews ──────────────────────────────────────────────────────────────
 app.get('/api/products/:id/reviews', async (req, res) => {
   try { res.json(await db.reviews.forProduct(req.params.id)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.get('/api/products/reviews/summary', async (req, res) => {
   // ?ids=1,2,3
   try {
     const ids = String(req.query.ids || '').split(',').map(s => parseInt(s)).filter(Boolean);
     res.json(await db.reviews.summaryForProducts(ids));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 app.get('/api/me/pending-reviews', requireAuth, async (req, res) => {
   try { res.json(await db.reviews.pendingForUser(req.user.id)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.post('/api/me/reviews', requireAuth, async (req, res) => {
   const { productId, orderId, rating, message } = req.body || {};
@@ -1810,7 +1880,7 @@ app.post('/api/me/orders/:id/report-issue', requireAuth, async (req, res) => {
     const rep = await db.issueReports.create({ orderId: o.id, userId: req.user.id, issueType, description });
     notifyAdmins({ title: '⚠️ Order issue reported', body: 'Order #' + o.id + ': ' + String(description).slice(0, 80), url: '/admin', tag: 'admin-issue-' + o.id }).catch(() => {});
     res.json(rep);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 // General feedback / complaints (no order attached) — appear in Admin → Issues.
 // Requires supabase-schema-feedback.sql (issue_reports.order_id made nullable).
@@ -1830,11 +1900,11 @@ app.post('/api/feedback', requireAuth, async (req, res) => {
 });
 app.get('/api/admin/issue-reports', requireAdmin, async (req, res) => {
   try { res.json(await db.issueReports.listAll()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.put('/api/admin/issue-reports/:id/resolve', requireAdmin, async (req, res) => {
   try { await db.issueReports.resolve(req.params.id, (req.body && req.body.note) || ''); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 // ── Cancel order (customer, within 15 min of placement) ──────────────────
@@ -1846,6 +1916,24 @@ app.post('/api/me/orders/:id/cancel', requireAuth, async (req, res) => {
 
 // ── Health check (for UptimeRobot / load balancers) ──────────────────────
 // Lightweight: no DB hit, returns instantly so pings are cheap.
+// Liveness (/healthz) says the process is up. Readiness says the app can
+// actually serve — which is a different question, because every route depends on
+// Supabase. /healthz deliberately does no DB work: it is pinged every five
+// minutes and drives the daily job, so it must stay cheap. Point an uptime
+// monitor at BOTH: /healthz catches the process dying, /readyz catches the
+// database going away, which is the more likely outage and the one the old
+// setup could not see at all.
+app.get('/readyz', async (req, res) => {
+  const started = Date.now();
+  try {
+    await db.appConfig.get('daily_job_last_run');   // trivial, indexed, always present
+    res.json({ ok: true, db: 'up', ms: Date.now() - started });
+  } catch (e) {
+    console.error('readiness check failed:', e.message);
+    res.status(503).json({ ok: false, db: 'down', ms: Date.now() - started });
+  }
+});
+
 app.get('/healthz', (req, res) => { runDailyJobs(); res.json({ ok: true, ts: Date.now() }); });
 
 // ── Admin: operational metrics dashboard ─────────────────────────────────
@@ -1853,13 +1941,13 @@ app.get('/api/admin/metrics', requireAdmin, async (req, res) => {
   try {
     const days = Math.max(7, Math.min(90, parseInt(req.query.days) || 30));
     res.json(await db.metrics.overview({ days }));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Referral leaderboard ─────────────────────────────────────────────────
 app.get('/api/admin/leaderboard', requireAdmin, async (req, res) => {
   try { res.json(await db.leaderboard.topReferrers(parseInt(req.query.limit) || 10)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 // Public version (first names only) for the squad page gamification
 app.get('/api/leaderboard', async (req, res) => {
@@ -1871,7 +1959,7 @@ app.get('/api/leaderboard', async (req, res) => {
       name: (u.name || 'A friend').split(' ')[0],
       referralCount: u.referralCount,
     })));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Retention (admin) — returning vs new customers per month + lapsed list ──
@@ -1929,7 +2017,7 @@ app.get('/api/admin/retention', requireAdmin, async (req, res) => {
       }).sort((a, z) => z.daysSince - a.daysSince);
     }
     res.json({ months, lapsedAfterDays: LAPSED_AFTER_DAYS, lapsed });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 // Win-back push to selected lapsed customers (only lands for users with a
 // push subscription; pushToUser silently skips the rest).
@@ -1958,11 +2046,11 @@ app.post('/api/client-error', async (req, res) => {
 // ── Admin: error logs ────────────────────────────────────────────────────
 app.get('/api/admin/errors', requireAdmin, async (req, res) => {
   try { res.json(await db.errorLog.list(parseInt(req.query.limit) || 100)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.delete('/api/admin/errors', requireAdmin, async (req, res) => {
   try { await db.errorLog.clear(); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 // ── Live counter ─────────────────────────────────────────────────────────
@@ -1972,17 +2060,17 @@ app.get('/api/stats/delivered-count', async (req, res) => {
     // Show whichever is larger so the ticker shows from the very first order placed,
     // while still preferring the (more impressive) delivered count once it climbs.
     res.json({ count: Math.max(c.delivered, c.total), delivered: c.delivered, total: c.total });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Promotions ───────────────────────────────────────────────────────────
 app.get('/api/promotions/active', async (req, res) => {
   try { res.json(await db.promotions.listActive()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.get('/api/admin/promotions', requireAdmin, async (req, res) => {
   try { res.json(await db.promotions.listAll()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.post('/api/admin/promotions', requireAdmin, async (req, res) => {
   try { res.json(await db.promotions.create(req.body || {})); }
@@ -1990,7 +2078,7 @@ app.post('/api/admin/promotions', requireAdmin, async (req, res) => {
 });
 app.delete('/api/admin/promotions/:id', requireAdmin, async (req, res) => {
   try { await db.promotions.delete(req.params.id); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 // Publish + broadcast push notification to all subscribers
 app.post('/api/admin/promotions/:id/publish', requireAdmin, async (req, res) => {
@@ -2003,11 +2091,11 @@ app.post('/api/admin/promotions/:id/publish', requireAdmin, async (req, res) => 
         const { data: subs } = await db.sb.from('push_subscriptions').select('user_id, endpoint, keys');
         await Promise.all((subs || []).map(async s => {
           try {
-            await webpush.sendNotification({ endpoint: s.endpoint, keys: s.keys }, JSON.stringify({
+            await withTimeout(webpush.sendNotification({ endpoint: s.endpoint, keys: s.keys }, JSON.stringify({
               title: `⚡ ${promo.title}`,
               body: promo.description || `Up to ${promo.discountPercent}% off — limited time`,
               url: '/', tag: `promo-${promo.id}`,
-            }));
+            })), 10000, 'promo push');
           } catch (e) {
             if (e.statusCode === 404 || e.statusCode === 410) await db.pushSubs.remove(s.endpoint);
           }
@@ -2016,7 +2104,7 @@ app.post('/api/admin/promotions/:id/publish', requireAdmin, async (req, res) => 
       })().catch(e => console.warn('promo broadcast failed:', e.message));
     }
     res.json(promo);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Product requests ─────────────────────────────────────────────────────
@@ -2031,18 +2119,18 @@ app.post('/api/product-requests', async (req, res) => {
     });
     notifyAdmins({ title: '🔍 Product request', body: (name || 'Someone') + ' wants: ' + String(productName).slice(0, 70), url: '/admin', tag: 'admin-request' }).catch(() => {});
     res.json({ ok: true, id: r.id });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 app.get('/api/admin/product-requests', requireAdmin, async (req, res) => {
   try { res.json(await db.productRequests.listAll({ status: req.query.status || null })); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.put('/api/admin/product-requests/:id', requireAdmin, async (req, res) => {
   try {
     const patch = req.body || {};
     if (patch.status === 'contacted') patch.contactedAt = new Date().toISOString();
     res.json(await db.productRequests.update(req.params.id, patch));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Admin: upload product photo ──────────────────────────────────────────
@@ -2057,7 +2145,7 @@ app.post('/api/admin/upload-image', requireAdmin, async (req, res) => {
     if (buf.length > 1.5 * 1024 * 1024) return res.status(413).json({ error: 'image too large (max ~1.5MB)' });
     const url = await db.uploadProductPhoto(buf, mime);
     res.json({ url });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Admin: surprise extra on an order ────────────────────────────────────
@@ -2066,7 +2154,7 @@ app.post('/api/admin/orders/:id/surprise', requireAdmin, async (req, res) => {
   try {
     await db.sb.from('orders').update({ surprise_extra: String(note || '').slice(0, 200) }).eq('id', req.params.id);
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Delivery time slots (admin-configured, read by checkout) ─────────────
@@ -2074,7 +2162,7 @@ app.get('/api/delivery/slots', async (req, res) => {
   try {
     const slots = (await db.appConfig.get('delivery_slots')) || ['12:00-14:00', '14:00-16:00', '16:00-18:00'];
     res.json({ slots, maxDaysAhead: 7 });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── MoMo merchant numbers (admin-configured, read by checkout) ───────────
@@ -2083,7 +2171,7 @@ app.get('/api/momo/numbers', async (req, res) => {
   try {
     const cfg = (await db.appConfig.get('momo_numbers')) || {};
     res.json(cfg);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 app.post('/api/admin/momo/numbers', requireAdmin, async (req, res) => {
   const { mtn, telecel, at, name } = req.body || {};
@@ -2094,7 +2182,7 @@ app.post('/api/admin/momo/numbers', requireAdmin, async (req, res) => {
       mtn: clean(mtn), telecel: clean(telecel), at: clean(at), name: clean(name),
     });
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Store settings (admin-toggleable site behaviour) ─────────────────────
@@ -2109,7 +2197,7 @@ app.get('/api/admin/settings', requireAdmin, async (req, res) => {
       onlinePaymentEnabled: await switchOn('online_payment_enabled'),
       loyaltyRedemptionEnabled: await switchOn('loyalty_redemption_enabled'),
     });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 app.post('/api/admin/settings', requireAdmin, async (req, res) => {
   const { showFreshness, storeName, deliverySlots, deductStock,
@@ -2136,13 +2224,13 @@ app.post('/api/admin/settings', requireAdmin, async (req, res) => {
     }
     invalidateCatalog(); // show_freshness is baked into /data/products.js
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Birthday gifts (admin config + customer eligibility) ─────────────────
 app.get('/api/admin/birthday-gifts', requireAdmin, async (req, res) => {
   try { res.json((await db.appConfig.get('birthday_gifts')) || { enabled: false, productIds: [] }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.post('/api/admin/birthday-gifts', requireAdmin, async (req, res) => {
   const { enabled, productIds } = req.body || {};
@@ -2150,7 +2238,7 @@ app.post('/api/admin/birthday-gifts', requireAdmin, async (req, res) => {
     const ids = Array.isArray(productIds) ? productIds.map(n => parseInt(n, 10)).filter(Boolean).slice(0, 50) : [];
     await db.appConfig.set('birthday_gifts', { enabled: !!enabled, productIds: ids });
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 app.get('/api/birthday/gifts', requireAuth, async (req, res) => {
   try {
@@ -2162,27 +2250,27 @@ app.get('/api/birthday/gifts', requireAuth, async (req, res) => {
       if (p && (p.stock == null || p.stock > 0)) products.push(p);
     }
     res.json({ eligible: products.length > 0, products });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Recurring orders ─────────────────────────────────────────────────────
 app.get('/api/me/recurring', requireAuth, async (req, res) => {
   try { res.json(await db.recurring.listForUser(req.user.id)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.post('/api/me/recurring', requireAuth, async (req, res) => {
   const { items, cadenceDays, nextRunAt, deliveryInfo } = req.body || {};
   if (!Array.isArray(items) || !items.length || !cadenceDays || !nextRunAt) return res.status(400).json({ error: 'items, cadenceDays, nextRunAt required' });
   try { res.json(await db.recurring.create({ userId: req.user.id, items, cadenceDays: parseInt(cadenceDays), nextRunAt, deliveryInfo })); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.put('/api/me/recurring/:id', requireAuth, async (req, res) => {
   try { res.json(await db.recurring.setActive(req.params.id, req.user.id, !!req.body.active)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 app.delete('/api/me/recurring/:id', requireAuth, async (req, res) => {
   try { await db.recurring.delete(req.params.id, req.user.id); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, e, req); }
 });
 
 // Service worker must never be cached long — browsers poll it to discover new
