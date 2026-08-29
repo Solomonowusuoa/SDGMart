@@ -550,6 +550,22 @@ async function computeOrderPricing(reqUser, body) {
 // Paystack verify/webhook paths. `reqUser` may be null (guest). `extra` carries
 // payment status (paid, paystackRef).
 async function createOrderFromBody(reqUser, body, extra = {}) {
+  // Duplicate-order protection: the client sends one key per checkout attempt
+  // and reuses it when retrying. If that attempt already produced an order —
+  // because the response was lost rather than the request failing — return the
+  // original instead of creating a second one.
+  const idemKey = String(body.clientRequestId || '').slice(0, 64) || null;
+  if (idemKey) {
+    const prior = await db.orders.findByClientRequestId(idemKey);
+    if (prior) {
+      return {
+        ok: true, id: prior.id, total: prior.total, duplicate: true,
+        deliveryDate: prior.deliveryDate, deliverySlot: prior.deliverySlot,
+        priority: prior.priority, loyaltyEarned: 0, squadGoalHit: false,
+        trackToken: orderTrackToken(prior.id),
+      };
+    }
+  }
   const {
     customer, phone, neighborhood, address,
     recipientName, recipientPhone, recipientAddress, payMethod, momoNumber, location,
@@ -594,47 +610,95 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
     }
   }
 
-  const created = await db.orders.create({
-    userId,
-    customerName: customer || '', customerPhone: phone || '',
-    recipientName: recipientName || '', recipientPhone: recipientPhone || '',
-    address: address || recipientAddress || '', neighborhood: neighborhood || '',
-    items: itemsList, subtotal: pricing.subtotal, deliveryFee: pricing.delivery,
-    discount: pricing.discount, loyaltyUsed: pricing.loyaltyUsed, total: pricing.total,
-    paymentMethod: payMethod || (extra.paid ? 'paystack' : 'cash'),
-    momoNumber: momoNumber || '',
-    paid: !!extra.paid, paystackRef: extra.paystackRef || null,
-    status: 'queued', location: loc, deliveryDate: deliveryDateStr, deliverySlot, priority,
-  });
-
-  // Record the birthday-gift claim now that the order exists.
-  if (giftClaimYear != null) {
-    try { await db.sb.from('users').update({ birthday_gift_claimed_year: giftClaimYear }).eq('id', reqUser.id); } catch (_) {}
-  }
-  // Optional stock depletion — OFF by default (admin toggle 'deduct_stock').
-  try { if (await db.appConfig.get('deduct_stock')) await db.products.decrementStock(itemsList); } catch (_) {}
-
-  // ── Rewards: CONSUMPTION happens now, ACCRUAL happens on delivery ────────
-  // Value the customer SPENDS (loyalty, squad discount, the first-order perk) is
-  // taken here, because they are getting the benefit on this order right now —
-  // and it is given back by reverseOrderRewards() if the order is cancelled.
-  //
-  // Value the customer EARNS (spend tiers, squad progress, referral credit) is
-  // granted in db.orders.setStatus() when the order reaches 'delivered'. Doing
-  // it here let anyone mint loyalty for free: place a large cash order, collect
-  // the credit, cancel inside the 15-minute window, repeat. You cannot earn from
-  // an order that never arrives.
+  // ── Step 1: CONSUME what this order spends, BEFORE the order row exists ──
+  // Supabase's REST client has no multi-statement transaction, so the sequence
+  // is ordered to fail safe instead. Consumption runs first because it is fully
+  // reversible: if anything below throws, `compensate` hands it all back and no
+  // order was created. The previous order (create first, consume after) meant a
+  // failure at the consume step left the customer with the discount applied to
+  // a real order AND their balance intact.
+  const compensate = [];
   if (userId) {
-    if (pricing.discountApplied) await db.squads.consumeDiscount(userId);
-    if (pricing.loyaltyUsed) await db.squads.consumeLoyalty(userId, pricing.loyaltyUsed);
-    // The first-order-free-delivery perk persists until it is actually used:
-    // small (< GHS 50) first orders don't consume it.
-    if (!reqUser.firstOrderDone && pricing.firstOrderFree) {
-      await db.sb.from('users').update({ first_order_done: true }).eq('id', userId);
+    if (pricing.discountApplied) {
+      const took = await db.squads.consumeDiscount(userId);
+      if (took) compensate.push(() => db.squads.restoreDiscount(userId));
     }
-    if (loc) await db.addresses.markLastUsed(userId, loc, neighborhood);
+    if (pricing.loyaltyUsed) {
+      // Throws (rather than silently under-charging) if the row is too contended.
+      const used = await db.squads.consumeLoyalty(userId, pricing.loyaltyUsed);
+      if (used > 0) compensate.push(() => db.squads.addLoyalty(userId, used));
+      if (used < pricing.loyaltyUsed) {
+        // Someone else spent the credit first. For an UNPAID (cash) order, bill
+        // only the credit actually applied. For a Paystack order the money is
+        // already collected at the quoted amount, so raising the total would
+        // make a paid customer look like they owe the difference — record what
+        // was really consumed and absorb the rest.
+        if (!extra.paid) pricing.total = +(Number(pricing.total) + (pricing.loyaltyUsed - used)).toFixed(2);
+        else console.warn('loyalty short by GHS ' + (pricing.loyaltyUsed - used).toFixed(2) + ' on PAID order for user ' + userId + ' — absorbed');
+        pricing.loyaltyUsed = used;
+      }
+    }
+    // The first-order-free-delivery perk: exactly one order can claim it.
+    if (!reqUser.firstOrderDone && pricing.firstOrderFree) {
+      const won = await db.squads.claimFirstOrder(userId);
+      if (won) compensate.push(() => db.squads.releaseFirstOrder(userId));
+      // If another concurrent order claimed it first we still honour the price
+      // the customer was quoted — charging more than they agreed at checkout
+      // would be worse than occasionally absorbing one delivery fee.
+      else console.warn('first-order perk already claimed by a concurrent order for user ' + userId);
+    }
+    if (giftClaimYear != null) {
+      const claimed = await db.squads.claimBirthdayGift(userId, giftClaimYear);
+      if (!claimed) {
+        // Gift already taken this year — drop it rather than give a second one.
+        for (let i = itemsList.length - 1; i >= 0; i--) if (itemsList[i].birthdayGift) itemsList.splice(i, 1);
+      }
+    }
   }
-  db.stats.invalidateDelivered();
+
+  // ── Step 2: create the order. On failure, undo step 1 completely. ────────
+  let created;
+  try {
+    created = await db.orders.create({
+      userId,
+      clientRequestId: idemKey,
+      customerName: customer || '', customerPhone: phone || '',
+      recipientName: recipientName || '', recipientPhone: recipientPhone || '',
+      address: address || recipientAddress || '', neighborhood: neighborhood || '',
+      items: itemsList, subtotal: pricing.subtotal, deliveryFee: pricing.delivery,
+      discount: pricing.discount, loyaltyUsed: pricing.loyaltyUsed, total: pricing.total,
+      paymentMethod: payMethod || (extra.paid ? 'paystack' : 'cash'),
+      momoNumber: momoNumber || '',
+      paid: !!extra.paid, paystackRef: extra.paystackRef || null,
+      status: 'queued', location: loc, deliveryDate: deliveryDateStr, deliverySlot, priority,
+    });
+  } catch (e) {
+    for (const undo of compensate.reverse()) {
+      try { await undo(); } catch (u) { console.error('COMPENSATION FAILED after order insert error:', u.message); }
+    }
+    // Two retries of the same attempt raced each other. The unique index did its
+    // job — return the order the winner created rather than surfacing an error.
+    if (idemKey && e && /duplicate key|23505/i.test(e.message || '')) {
+      const won = await db.orders.findByClientRequestId(idemKey);
+      if (won) return { ok: true, id: won.id, total: won.total, duplicate: true,
+        deliveryDate: won.deliveryDate, deliverySlot: won.deliverySlot, priority: won.priority,
+        loyaltyEarned: 0, squadGoalHit: false, trackToken: orderTrackToken(won.id) };
+    }
+    throw e;
+  }
+
+  // ── Step 3: everything after the commit is BEST EFFORT ───────────────────
+  // The order exists and the customer is owed it. None of the bookkeeping below
+  // may turn that into a 500, because the client would report failure for a real
+  // order and the customer's retry would create a duplicate.
+  try {
+    if (await db.appConfig.get('deduct_stock')) await db.products.decrementStock(itemsList);
+  } catch (e) { console.warn('stock decrement failed for order ' + created.id + ':', e.message); }
+  if (userId && loc) {
+    try { await db.addresses.markLastUsed(userId, loc, neighborhood); }
+    catch (e) { console.warn('markLastUsed failed for order ' + created.id + ':', e.message); }
+  }
+  try { db.stats.invalidateDelivered(); } catch (_) {}
   // Ping admins so a new order is never missed.
   notifyAdmins({
     title: '🛒 New order #' + created.id,

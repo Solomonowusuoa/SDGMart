@@ -112,6 +112,12 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // Online payment (Paystack) availability + in-flight state
   const [paystackEnabled, setPaystackEnabled] = React.useState(false);
   const [paying, setPaying] = React.useState(false);
+  // Duplicate-order protection (server pairs this with orders.client_request_id).
+  // Deliberately stable across retries of the same attempt, so tapping again
+  // after a dropped connection returns the original order rather than a second
+  // one. Regenerated only once an order actually succeeds.
+  const newRequestId = () => 'cr_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+  const requestIdRef = React.useRef(newRequestId());
   // null | 'network' | 'server' — drives the retry panel above the buttons.
   const [submitError, setSubmitError] = React.useState(null);
 
@@ -308,6 +314,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // The order payload sent to the server (same shape for COD + Paystack).
   const buildDraft = (snap) => ({
     id: orderId,
+    clientRequestId: requestIdRef.current,
     customer: snap.familyMode ? snap.form.recipientName : snap.form.name,
     phone: snap.familyMode ? snap.form.recipientPhone : snap.form.phone,
     neighborhood: snap.neighborhood,
@@ -370,6 +377,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     }
     setOrderPlaced(true);
     setCart([]);
+    requestIdRef.current = newRequestId();   // next checkout is a new attempt
     // Switch the URL to /order-confirmed + fire the Analytics conversion view,
     // then the GA4 purchase event (value + items) on the confirmation page.
     try { if (onOrderPlaced) onOrderPlaced(); } catch (_) {}

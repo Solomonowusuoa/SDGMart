@@ -225,6 +225,35 @@ const users = {
 };
 
 // ── Squads ───────────────────────────────────────────────────────────────
+// ── Atomic balance updates (compare-and-swap) ────────────────────────────
+// PostgREST cannot express `set x = x - $1`, and a plain read-modify-write
+// loses money under concurrency: ten simultaneous checkouts all read the same
+// loyalty balance, all pass the affordability check, and all get the discount —
+// GHS 50 of credit paying out GHS 500. Here the write is made CONDITIONAL on
+// the value the decision was based on (`expect`), so only one racer can win;
+// the losers re-read and decide again. Needs no schema change.
+//
+// decide(user) returns null to decline, or { patch, expect, value }.
+const CAS_ATTEMPTS = 5;
+const money = (n) => Number(n || 0).toFixed(2);
+async function casUser(userId, decide) {
+  for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
+    const u = await users.get(userId);
+    if (!u) return { ok: false, reason: 'no-user' };
+    const step = decide(u);
+    if (!step) return { ok: false, reason: 'declined' };
+    let q = sb.from('users').update(step.patch).eq('id', userId);
+    for (const [col, expected] of Object.entries(step.expect || {})) {
+      q = expected === null ? q.is(col, null) : q.eq(col, expected);
+    }
+    const { data, error } = await q.select('id');
+    if (error) throw error;
+    if (data && data.length) return { ok: true, value: step.value };
+    // Lost the race — another request changed the row first. Re-read and retry.
+  }
+  return { ok: false, reason: 'contention' };
+}
+
 const squads = {
   async members(squadCode) {
     if (!squadCode) return [];
@@ -239,12 +268,23 @@ const squads = {
     const u = await users.get(userId);
     if (!u) return null;
     // Loyalty: every GHS 1000 of TOTAL spend across all time gives GHS 50
-    const newTotal = Number(u.totalSpent || 0) + Number(spendAmount || 0);
-    const prevTiers = Math.floor(Number(u.totalSpent || 0) / 1000);
-    const newTiers = Math.floor(newTotal / 1000);
-    const loyaltyEarned = (newTiers - prevTiers) * 50;
-    const newLoyalty = Number(u.loyaltyBalance || 0) + loyaltyEarned;
-    await sb.from('users').update({ total_spent: newTotal, loyalty_balance: newLoyalty }).eq('id', userId);
+    // Conditional write: two deliveries settling at once must not both read the
+    // same total_spent and both award a tier. casUser re-reads and retries.
+    const spend = Number(spendAmount || 0);
+    const applied = await casUser(userId, (cur) => {
+      const prev = Number(cur.totalSpent || 0);
+      const total = prev + spend;
+      const earned = (Math.floor(total / 1000) - Math.floor(prev / 1000)) * 50;
+      return {
+        patch: { total_spent: money(total), loyalty_balance: money(Number(cur.loyaltyBalance || 0) + earned) },
+        expect: { total_spent: money(prev), loyalty_balance: money(cur.loyaltyBalance) },
+        value: { newTotal: total, loyaltyEarned: earned, newLoyalty: Number(cur.loyaltyBalance || 0) + earned },
+      };
+    });
+    if (!applied.ok) { console.warn('recordSpend could not settle for user ' + userId + ' (' + applied.reason + ')'); return null; }
+    const newTotal = applied.value.newTotal;
+    const loyaltyEarned = applied.value.loyaltyEarned;
+    const newLoyalty = applied.value.newLoyalty;
 
     // ── Squad goal logic ─────────────────────────────────────────────────
     // When every squad member's totalSpent has hit GHS 500 (the target),
@@ -267,13 +307,17 @@ const squads = {
           const effectiveTotal = String(m.id) === String(userId) ? newTotal : Number(m.totalSpent || 0);
           const rollover = Math.max(0, effectiveTotal - 500);
           if (String(m.id) === String(userId)) myRollover = rollover;
-          const newBal = Number(m.loyaltyBalance || 0) + 25
-            + (String(m.id) === String(userId) ? loyaltyEarned : 0);
-          await sb.from('users').update({
-            total_spent: rollover,
-            loyalty_balance: newBal,
-            discount_pending: false, // clear any legacy flag
-          }).eq('id', m.id);
+          // Conditional per member: the squad bonus must not double-pay if two
+          // members' deliveries land at the same moment.
+          await casUser(m.id, (cur) => ({
+            patch: {
+              total_spent: money(rollover),
+              loyalty_balance: money(Number(cur.loyaltyBalance || 0) + 25),
+              discount_pending: false, // clear any legacy flag
+            },
+            expect: { loyalty_balance: money(cur.loyaltyBalance) },
+            value: true,
+          }));
         }
         // Return the awarding user's fresh balance so the UI updates right away
         return { totalSpent: myRollover, loyaltyEarned: loyaltyEarned + 25, loyaltyBalance: Number(u.loyaltyBalance || 0) + loyaltyEarned + 25, squadGoalHit: true };
@@ -281,17 +325,76 @@ const squads = {
     }
     return { totalSpent: newTotal, loyaltyEarned, loyaltyBalance: newLoyalty, squadGoalHit: false };
   },
+  // Claim the one-off squad discount. Succeeds for exactly one caller.
   async consumeDiscount(userId) {
-    await sb.from('users').update({ discount_pending: false }).eq('id', userId);
-    return true;
+    const r = await casUser(userId, (u) => (u.discountPending
+      ? { patch: { discount_pending: false }, expect: { discount_pending: true }, value: true }
+      : null));
+    return r.ok && r.value === true;
   },
-  // Subtract loyalty credit when used
+  // Spend loyalty credit. Returns the amount actually taken, and THROWS rather
+  // than silently under-charging if the row is too contended to settle.
   async consumeLoyalty(userId, amount) {
-    const u = await users.get(userId);
-    if (!u) return 0;
-    const used = Math.min(Number(u.loyaltyBalance || 0), Number(amount || 0));
-    await sb.from('users').update({ loyalty_balance: Number(u.loyaltyBalance) - used }).eq('id', userId);
-    return used;
+    const want = Number(amount || 0);
+    if (!(want > 0)) return 0;
+    const r = await casUser(userId, (u) => {
+      const bal = Number(u.loyaltyBalance || 0);
+      const used = Math.min(bal, want);
+      if (!(used > 0)) return null;
+      return {
+        patch: { loyalty_balance: money(bal - used) },
+        expect: { loyalty_balance: money(bal) },
+        value: used,
+      };
+    });
+    if (r.ok) return r.value;
+    if (r.reason === 'declined') return 0;          // no balance left
+    throw new Error('Could not apply your loyalty credit just now — please try again');
+  },
+  // Give loyalty back (cancellation, or compensating a failed order).
+  async addLoyalty(userId, amount) {
+    const add = Number(amount || 0);
+    if (!(add > 0)) return 0;
+    const r = await casUser(userId, (u) => {
+      const bal = Number(u.loyaltyBalance || 0);
+      return {
+        patch: { loyalty_balance: money(bal + add) },
+        expect: { loyalty_balance: money(bal) },
+        value: add,
+      };
+    });
+    if (!r.ok) throw new Error('Could not restore loyalty credit for user ' + userId);
+    return r.value;
+  },
+  // Hand the squad discount back after a failed or cancelled order.
+  async restoreDiscount(userId) {
+    const r = await casUser(userId, (u) => (u.discountPending
+      ? null
+      : { patch: { discount_pending: true }, expect: { discount_pending: false }, value: true }));
+    return r.ok;
+  },
+  // Claim the first-order-free-delivery perk. Exactly one order can win it, so
+  // parallel first orders can no longer each qualify (audit A-18).
+  async claimFirstOrder(userId) {
+    const r = await casUser(userId, (u) => (u.firstOrderDone
+      ? null
+      : { patch: { first_order_done: true }, expect: { first_order_done: false }, value: true }));
+    return r.ok && r.value === true;
+  },
+  // Claim this year's birthday gift. Exactly one order per calendar year wins.
+  async claimBirthdayGift(userId, year) {
+    const r = await casUser(userId, (u) => (Number(u.birthdayGiftClaimedYear || 0) === Number(year)
+      ? null
+      : { patch: { birthday_gift_claimed_year: year },
+          expect: { birthday_gift_claimed_year: u.birthdayGiftClaimedYear == null ? null : u.birthdayGiftClaimedYear },
+          value: true }));
+    return r.ok && r.value === true;
+  },
+  async releaseFirstOrder(userId) {
+    const r = await casUser(userId, (u) => (u.firstOrderDone
+      ? { patch: { first_order_done: false }, expect: { first_order_done: true }, value: true }
+      : null));
+    return r.ok;
   },
 };
 
@@ -395,6 +498,23 @@ const _distKm = (a, b) => {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
 };
 
+// Does orders.client_request_id exist yet? Probed once, loudly, instead of
+// assuming — shipping code that writes a column before its migration has run is
+// exactly what silently broke every order insert for a day (HANDOFF §10).
+let _idempotencySupported = null;
+async function ordersSupportIdempotency() {
+  if (_idempotencySupported !== null) return _idempotencySupported;
+  try {
+    const { error } = await sb.from('orders').select('client_request_id').limit(1);
+    _idempotencySupported = !error;
+  } catch (_) { _idempotencySupported = false; }
+  if (!_idempotencySupported) {
+    console.warn('⚠️  orders.client_request_id is missing — run supabase-schema-order-idempotency.sql.');
+    console.warn('   Duplicate-order protection is DISABLED until then; everything else works normally.');
+  }
+  return _idempotencySupported;
+}
+
 const orders = {
   async list({ status = null, limit = null } = {}) {
     let q = sb.from('orders').select('*').order('created_at', { ascending: false });
@@ -409,13 +529,23 @@ const orders = {
     if (error) throw error;
     return rowOut(data);
   },
+  // Has this exact checkout attempt already produced an order? Lets a retry
+  // after a dropped response return the original instead of duplicating it.
+  async findByClientRequestId(key) {
+    if (!key || !(await ordersSupportIdempotency())) return null;
+    const { data } = await sb.from('orders').select('*').eq('client_request_id', key).maybeSingle();
+    return data ? rowOut(data) : null;
+  },
   async findByPaystackRef(ref) {
     if (!ref) return null;
     const { data } = await sb.from('orders').select('*').eq('paystack_ref', ref).maybeSingle();
     return rowOut(data);
   },
   async create(payload) {
-    const { data, error } = await sb.from('orders').insert(rowIn(payload)).select().single();
+    const row = rowIn(payload);
+    if (row.client_request_id && !(await ordersSupportIdempotency())) delete row.client_request_id;
+    else if (!row.client_request_id) delete row.client_request_id;
+    const { data, error } = await sb.from('orders').insert(row).select().single();
     if (error) throw error;
     return rowOut(data);
   },
@@ -1016,12 +1146,22 @@ const referrals = {
       const referrer = await users.get(referrerId);
       if (!referrer) return;
       const month = new Date().toISOString().slice(0, 7); // YYYY-MM
+      // Claim the referee's credit FIRST, conditionally. Only one caller can
+      // flip referral_credited false -> true, so concurrent deliveries cannot
+      // pay the referrer twice (audit A-18).
+      const claimed = await casUser(refereeUser.id, (cur) => (cur.referralCredited
+        ? null
+        : { patch: { referral_credited: true }, expect: { referral_credited: false }, value: true }));
+      if (!claimed.ok) return;
       await sb.from('referrals').insert({ referrer_id: referrerId, referee_id: refereeUser.id, month });
-      await sb.from('users').update({
-        loyalty_balance: Number(referrer.loyaltyBalance || 0) + 5,
-        referral_count: Number(referrer.referralCount || 0) + 1,
-      }).eq('id', referrerId);
-      await sb.from('users').update({ referral_credited: true }).eq('id', refereeUser.id);
+      await casUser(referrerId, (cur) => ({
+        patch: {
+          loyalty_balance: money(Number(cur.loyaltyBalance || 0) + 5),
+          referral_count: Number(cur.referralCount || 0) + 1,
+        },
+        expect: { loyalty_balance: money(cur.loyaltyBalance) },
+        value: true,
+      }));
     } catch (e) { console.warn('referral credit failed (run schema-referrals.sql?):', e.message); }
   },
 };
@@ -1060,7 +1200,7 @@ const leaderboard = {
       const winnerId = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
       const winner = await users.get(winnerId);
       if (winner) {
-        await sb.from('users').update({ loyalty_balance: Number(winner.loyaltyBalance || 0) + 15 }).eq('id', winnerId);
+        await squads.addLoyalty(winnerId, 15);
       }
       await appConfig.set('leaderboard_awarded_month', lastMonth);
       return { winnerId, month: lastMonth };
