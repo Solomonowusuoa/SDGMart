@@ -118,6 +118,9 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // one. Regenerated only once an order actually succeeds.
   const newRequestId = () => 'cr_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
   const requestIdRef = React.useRef(newRequestId());
+  // Credit this order will earn once delivered. 0 for most baskets — the tier
+  // only crosses every GHS 1,000 — so the line is shown only when non-zero.
+  const [loyaltyPending, setLoyaltyPending] = React.useState(0);
   // null | 'network' | 'server' — drives the retry panel above the buttons.
   const [submitError, setSubmitError] = React.useState(null);
 
@@ -341,7 +344,8 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // After an order is created (paid or COD): set up recurring, refresh the
   // user, show the success screen, clear the cart. `serverId` is the real DB
   // order id used for the display code + tracking.
-  const finishOrder = async (snap, serverId, trackToken) => {
+  const finishOrder = async (snap, serverId, trackToken, pendingCredit) => {
+    setLoyaltyPending(Number(pendingCredit || 0));
     const code = serverId != null ? window.orderCode(serverId) : orderId;
     if (serverId != null) { setPlacedOrderId(serverId); setOrderId(code); }
     if (trackToken) setPlacedTrackToken(trackToken);
@@ -408,7 +412,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
         throw err;
       }
       if (!d || d.id == null) throw new Error('server');
-      await finishOrder(snap, d.id, d.trackToken || null);
+      await finishOrder(snap, d.id, d.trackToken || null, d.loyaltyPending);
       // paying stays true — the success screen replaces this view.
     } catch (e) {
       // Cart is deliberately left intact so retrying is a single tap.
@@ -449,7 +453,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
             const vr = await apiFetch('/api/paystack/verify', { method: 'POST', body: JSON.stringify({ reference: initData.reference, draft }) });
             const vd = await vr.json();
             if (!vr.ok) { alert(vd.error || 'We could not confirm your payment. If you were charged, contact us on WhatsApp.'); setPaying(false); return; }
-            await finishOrder(snap, vd && vd.id != null ? vd.id : null, (vd && vd.trackToken) || null);
+            await finishOrder(snap, vd && vd.id != null ? vd.id : null, (vd && vd.trackToken) || null, vd && vd.loyaltyPending);
           } catch (_) { alert('Payment confirmed but the order could not be saved — please contact us on WhatsApp.'); }
           finally { setPaying(false); }
         },
@@ -518,6 +522,17 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
             </div>
           );
         })()}
+
+        {loyaltyPending > 0 && (
+          <div style={{ marginTop: 18, display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', border: '1px solid var(--rule-2)', borderLeft: '2px solid var(--accent)', background: 'var(--surface-warm)', padding: '13px 16px', textAlign: 'left' }}>
+            <span style={{ fontFamily: 'var(--f-display)', fontSize: 20, fontWeight: 700, letterSpacing: '-.02em' }}>
+              GHS {Number(loyaltyPending).toFixed(2)}
+            </span>
+            <span style={{ fontSize: 13.5, color: 'var(--rd-body)', lineHeight: 1.5 }}>
+              in credit lands in your account once this order is delivered.
+            </span>
+          </div>
+        )}
 
         <div style={{ marginTop: 16 }}>
           {window.NotifyOptIn && <window.NotifyOptIn label="Get notified the moment your rider sets off" />}

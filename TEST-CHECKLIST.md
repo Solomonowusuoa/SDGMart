@@ -71,6 +71,13 @@ Spend GHS 20 credit on an order → cancel within 15 minutes.
 - ☐ Mark it delivered in Admin → Orders → loyalty is credited now
 - ☐ Place another and cancel it → no credit earned *(this was the free-money loop)*
 
+### ☐ Success screen states the pending credit
+- ☐ Signed-in order that crosses a GHS 1,000 lifetime-spend boundary → success screen shows
+  *“GHS 50.00 in credit lands in your account once this order is delivered”*
+- ☐ Ordinary basket that crosses no boundary → **no line at all** (not “GHS 0”)
+- ☐ Guest checkout → no line
+- ☐ The amount shown matches what actually lands after the order is marked delivered
+
 ### ☐ Paystack reserves credit up front (C-07)
 Needs test Paystack keys in the staging `.env`.
 - ☐ Start a payment with credit applied → balance drops **before** the popup

@@ -688,7 +688,7 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
       return {
         ok: true, id: prior.id, total: prior.total, duplicate: true,
         deliveryDate: prior.deliveryDate, deliverySlot: prior.deliverySlot,
-        priority: prior.priority, loyaltyEarned: 0, squadGoalHit: false,
+        priority: prior.priority, loyaltyPending: 0, squadGoalHit: false,
         trackToken: orderTrackToken(prior.id),
       };
     }
@@ -817,7 +817,7 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
       const won = await db.orders.findByClientRequestId(idemKey);
       if (won) return { ok: true, id: won.id, total: won.total, duplicate: true,
         deliveryDate: won.deliveryDate, deliverySlot: won.deliverySlot, priority: won.priority,
-        loyaltyEarned: 0, squadGoalHit: false, trackToken: orderTrackToken(won.id) };
+        loyaltyPending: 0, squadGoalHit: false, trackToken: orderTrackToken(won.id) };
     }
     throw e;
   }
@@ -843,8 +843,16 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
   return {
     ok: true, id: created.id, total: pricing.total,
     deliveryDate: deliveryDateStr, deliverySlot, priority,
-    // Earned on delivery now, not at checkout — see the rewards note above.
-    loyaltyEarned: 0,
+    // Earned on DELIVERY now, not at checkout — see the rewards note above.
+    // Projected so the success screen can say what is coming. Only the tier
+    // credit is promised: the squad bonus also depends on other members and
+    // could change before this order arrives, so it stays a surprise.
+    loyaltyPending: (() => {
+      if (!reqUser) return 0;
+      const prev = Number(reqUser.totalSpent || 0);
+      const after = prev + Number(pricing.subtotal || 0);
+      return (Math.floor(after / 1000) - Math.floor(prev / 1000)) * 50;
+    })(),
     squadGoalHit: false,
     // Lets guests track this order later (stored client-side; see orderTrackToken)
     trackToken: orderTrackToken(created.id),
