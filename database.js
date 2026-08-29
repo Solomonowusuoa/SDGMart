@@ -80,8 +80,16 @@ async function checkSchema() {
 }
 
 // ── Admin bootstrap ──────────────────────────────────────────────────────
+// Audit A-16: the bootstrap password used to be a constant in this file and
+// was printed to the Render log on every boot, so any restore, fresh project
+// or DR rebuild stood up a live admin account whose password sat in the
+// repository. It now comes from the environment; when that is unset a random
+// one is generated and shown exactly once, as the account is created.
 const ADMIN_EMAIL = 'solomonowusuoa@gmail.com';
-const ADMIN_DEFAULT_PW = 'sdgadmin2026';
+const ADMIN_BOOTSTRAP_PW = process.env.ADMIN_BOOTSTRAP_PASSWORD || null;
+// Kept only so an admin still sitting on the old repo default is detected and
+// forced to change it. Never used to create an account.
+const LEGACY_ADMIN_PW = 'sdgadmin2026';
 
 // ── Password rules ───────────────────────────────────────────────────────
 function validatePasswordStrength(password, { isAdminChange = false } = {}) {
@@ -89,23 +97,42 @@ function validatePasswordStrength(password, { isAdminChange = false } = {}) {
   if (pw.length < 8) return 'Password must be at least 8 characters.';
   if (!/[A-Za-z]/.test(pw)) return 'Password must contain a letter.';
   if (!/\d/.test(pw)) return 'Password must contain a number.';
-  if (isAdminChange && pw === ADMIN_DEFAULT_PW) return 'Pick a password different from the default.';
+  if (isAdminChange && (pw === LEGACY_ADMIN_PW || (ADMIN_BOOTSTRAP_PW && pw === ADMIN_BOOTSTRAP_PW))) return 'Pick a password different from the default.';
   return null;
 }
 
-// ── Password hashing (scrypt — same as before) ───────────────────────────
-function hashPassword(plain) {
+// ── Password hashing (scrypt on the threadpool — audit A-14) ─────────────
+// scryptSync blocks Node's single event loop for the whole derivation, so a
+// stream of signups or logins stalled every other request, checkout included.
+// The callback form hands the work to libuv's threadpool instead.
+const SCRYPT_KEYLEN = 64;
+function scryptAsync(plain, salt) {
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(plain, salt, SCRYPT_KEYLEN, (err, dk) => (err ? reject(err) : resolve(dk)));
+  });
+}
+async function hashPassword(plain) {
   const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(plain, salt, 64).toString('hex');
+  const hash = (await scryptAsync(plain, salt)).toString('hex');
   return `${salt}:${hash}`;
 }
-function verifyPassword(plain, stored) {
+async function verifyPassword(plain, stored) {
   if (!stored || typeof stored !== 'string' || !stored.includes(':')) return false;
   const [salt, hash] = stored.split(':');
   try {
-    const test = crypto.scryptSync(plain, salt, 64).toString('hex');
-    return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(test, 'hex'));
+    const expected = Buffer.from(hash, 'hex');
+    const test = await scryptAsync(plain, salt);
+    if (expected.length !== test.length) return false;
+    return crypto.timingSafeEqual(expected, test);
   } catch (_) { return false; }
+}
+// Unknown-email logins used to return before any derivation ran, so the
+// response time alone said whether an address was registered — the timing
+// half of the enumeration channel A-11 closed. Burning one derivation
+// against a fixed hash makes both paths cost the same.
+const DUMMY_PASSWORD_HASH = '0'.repeat(32) + ':' + '0'.repeat(SCRYPT_KEYLEN * 2);
+async function burnPasswordTiming(plain) {
+  try { await verifyPassword(String(plain || ''), DUMMY_PASSWORD_HASH); } catch (_) {}
 }
 
 // ── camelCase ↔ snake_case helpers ───────────────────────────────────────
@@ -126,9 +153,25 @@ function rowIn(obj) {
 function rowsOut(rows) { return Array.isArray(rows) ? rows.map(rowOut) : rows; }
 
 // ── In-memory rate limiter (transient, intentionally not persisted) ──────
+// Single-process only: buckets clear on every deploy and a second instance
+// would keep its own. Acceptable while Render runs one dyno — see D-11.
 const rateBuckets = new Map();
+const RATE_SWEEP_MS = 5 * 60 * 1000;
+const RATE_IDLE_MS = 60 * 60 * 1000;
+let rateSweptAt = 0;
+// Keys embed caller-supplied values (emails, IPs), so without a sweep the Map
+// is an unbounded leak an attacker can grow at will (audit A-13).
+function rateSweep(now) {
+  if (now - rateSweptAt < RATE_SWEEP_MS) return;
+  rateSweptAt = now;
+  for (const [k, v] of rateBuckets) {
+    const idle = !v.hits.length || now - v.hits[v.hits.length - 1] > RATE_IDLE_MS;
+    if (v.blockedUntil < now && idle) rateBuckets.delete(k);
+  }
+}
 function rateCheck(key, { windowMs = 5 * 60 * 1000, max = 5, blockMs = 15 * 60 * 1000 } = {}) {
   const now = Date.now();
+  rateSweep(now);
   let b = rateBuckets.get(key);
   if (!b) { b = { hits: [], blockedUntil: 0 }; rateBuckets.set(key, b); }
   if (b.blockedUntil > now) return { allowed: false, retryAfterMs: b.blockedUntil - now };
@@ -216,7 +259,7 @@ const users = {
     return rowOut(data);
   },
   async create({ name, email, phone, password, refCode, role = 'customer' }) {
-    const passwordHash = password ? hashPassword(password) : null;
+    const passwordHash = password ? await hashPassword(password) : null;
     // Look up the referrer (if any) — inherit their squadCode AND credit them
     let squadCode = null;
     let ownsSquad = false;
@@ -255,12 +298,13 @@ const users = {
   },
   async verifyCredentials(email, password) {
     const u = await users.findByEmail(email);
-    if (!u || !u.passwordHash) return null;
-    if (!verifyPassword(password, u.passwordHash)) return null;
+    // Spend the same scrypt time whether or not the address exists (A-14).
+    if (!u || !u.passwordHash) { await burnPasswordTiming(password); return null; }
+    if (!(await verifyPassword(password, u.passwordHash))) return null;
     return u;
   },
   async changePassword(id, newPassword) {
-    const passwordHash = hashPassword(newPassword);
+    const passwordHash = await hashPassword(newPassword);
     const { data, error } = await sb.from('users').update({ password_hash: passwordHash, must_change_password: false }).eq('id', id).select().single();
     if (error) throw error;
     return rowOut(data);
@@ -572,14 +616,14 @@ const riders = {
   async verifyCredentials(email, password) {
     const r = await riders.findByEmail(email);
     if (!r) return null;
-    if (!verifyPassword(password, r.passwordHash)) return null;
+    if (!(await verifyPassword(password, r.passwordHash))) return null;
     return r;
   },
 };
 
 async function createRider({ name, email, phone, password }) {
   const { data, error } = await sb.from('riders').insert({
-    name, email: String(email).toLowerCase().trim(), phone, password_hash: hashPassword(password),
+    name, email: String(email).toLowerCase().trim(), phone, password_hash: await hashPassword(password),
   }).select().single();
   if (error) throw error;
   return rowOut(data);
@@ -985,14 +1029,22 @@ async function getVapidKeys() {
 async function bootstrap() {
   let admin = await users.findByEmail(ADMIN_EMAIL);
   if (!admin) {
+    const pw = ADMIN_BOOTSTRAP_PW || crypto.randomBytes(12).toString('base64url');
     admin = await users.create({
       name: 'SDGMart Admin', email: ADMIN_EMAIL, phone: null,
-      password: ADMIN_DEFAULT_PW, refCode: null, role: 'admin',
+      password: pw, refCode: null, role: 'admin',
     });
     await sb.from('users').update({ email_verified: true, must_change_password: true }).eq('id', admin.id);
-    console.log('🛠  Created admin account ' + ADMIN_EMAIL + ' (default pw: ' + ADMIN_DEFAULT_PW + ' — change immediately)');
-  } else if (admin.passwordHash && verifyPassword(ADMIN_DEFAULT_PW, admin.passwordHash) && !admin.mustChangePassword) {
+    console.log('🛠  Created admin account ' + ADMIN_EMAIL);
+    if (ADMIN_BOOTSTRAP_PW) {
+      console.log('    Password taken from ADMIN_BOOTSTRAP_PASSWORD. It must be changed at first sign-in.');
+    } else {
+      console.log('    One-time password (shown here only, never logged again): ' + pw);
+      console.log('    Sign in with it and change it immediately — admin routes stay locked until you do.');
+    }
+  } else if (admin.passwordHash && !admin.mustChangePassword && await verifyPassword(LEGACY_ADMIN_PW, admin.passwordHash)) {
     await sb.from('users').update({ must_change_password: true }).eq('id', admin.id);
+    console.warn('⚠️  Admin is still on the old repo default password — admin routes are locked until it is changed.');
   }
 }
 
@@ -1436,12 +1488,32 @@ async function ensurePhotoBucket() {
     await sb.storage.createBucket('product-photos', { public: true });
   } catch (_) {}
 }
-async function uploadProductPhoto(buffer, mimeType = 'image/jpeg') {
+// Audit A-19: the MIME used to come straight from the client's data URL and
+// set both the stored contentType and the file extension, so
+// `data:text/html;base64,...` was stored as .html and served as HTML from a
+// public bucket. The declared type is now ignored entirely — the format is
+// read from the bytes, and anything that is not a real JPEG/PNG/WebP is
+// rejected before it reaches storage.
+const IMAGE_SIGNATURES = [
+  { mime: 'image/jpeg', ext: 'jpg',  match: (b) => b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  { mime: 'image/png',  ext: 'png',  match: (b) => b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
+  { mime: 'image/webp', ext: 'webp', match: (b) => b.length > 12 && b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP' },
+];
+function sniffImageType(buffer) {
+  if (!Buffer.isBuffer(buffer)) return null;
+  for (const sig of IMAGE_SIGNATURES) {
+    try { if (sig.match(buffer)) return sig; } catch (_) {}
+  }
+  return null;
+}
+
+async function uploadProductPhoto(buffer) {
+  const sig = sniffImageType(buffer);
+  if (!sig) throw new Error('Only JPEG, PNG and WebP images can be uploaded.');
   await ensurePhotoBucket();
-  const ext = (mimeType.split('/')[1] || 'jpg').replace('+xml', '');
-  const path = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
+  const path = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${sig.ext}`;
   const { error } = await sb.storage.from('product-photos').upload(path, buffer, {
-    contentType: mimeType, cacheControl: '31536000',
+    contentType: sig.mime, cacheControl: '31536000',
   });
   if (error) throw error;
   const { data } = sb.storage.from('product-photos').getPublicUrl(path);
@@ -1582,11 +1654,11 @@ module.exports = {
   metrics, leaderboard, referrals, errorLog, pendingPayments, checkSchema, dataRequests,
   pushSubs, searchLog, recurring, appConfig, carts,
   rowOut, rowsOut,
-  hashPassword, verifyPassword, validatePasswordStrength,
+  hashPassword, verifyPassword, burnPasswordTiming, validatePasswordStrength,
   rateCheck, rateClear,
   makeEmailToken, consumeEmailToken,
   createRider, attachOrderLocation,
-  uploadProductPhoto, cancelOrder,
+  uploadProductPhoto, sniffImageType, cancelOrder,
   getVapidKeys, bootstrap,
-  ADMIN_EMAIL, ADMIN_DEFAULT_PW,
+  ADMIN_EMAIL,
 };

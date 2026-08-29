@@ -134,6 +134,44 @@ const ALLOWED_ORIGINS = ['https://sdg-mart.com', 'https://www.sdg-mart.com', 'ht
 app.use(cors({
   origin(origin, cb) { cb(null, !origin || ALLOWED_ORIGINS.includes(origin)); },
 }));
+
+// ── Security headers (audit A-17) ────────────────────────────────────────
+// Nothing set these before, so checkout and admin could be framed and driven
+// by a clickjacking overlay. Hand-rolled rather than pulling in helmet: it is
+// five headers we control exactly, and one less dependency on a 512MB dyno.
+//
+// The resource policy ships Report-Only first, as the audit recommended —
+// the app loads React and Leaflet from unpkg, Paystack's inline checkout,
+// Google Identity, Fonts and GTM, and enforcing a wrong list would break the
+// shop. `frame-ancestors` is the one directive enforced immediately, because
+// it is the actual clickjacking fix and cannot break a first-party page.
+const CSP_DIRECTIVES = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' https://unpkg.com https://js.paystack.co https://accounts.google.com https://www.googletagmanager.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com",
+  "font-src 'self' data: https://fonts.gstatic.com",
+  "img-src 'self' data: blob: https://*.supabase.co https://*.tile.openstreetmap.org https://unpkg.com https://lh3.googleusercontent.com https://www.googletagmanager.com https://www.google.com",
+  "connect-src 'self' https://*.supabase.co https://api.paystack.co https://us1.locationiq.com https://nominatim.openstreetmap.org https://accounts.google.com https://www.google-analytics.com",
+  "frame-src https://js.paystack.co https://accounts.google.com",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join('; ');
+
+app.use((req, res, next) => {
+  res.set('X-Frame-Options', 'DENY');
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.set('Cross-Origin-Opener-Policy', 'same-origin-allow-popups'); // Paystack + Google open popups
+  res.set('Permissions-Policy', 'geolocation=(self), camera=(), microphone=(), payment=()');
+  res.set('Content-Security-Policy', "frame-ancestors 'none'");
+  res.set('Content-Security-Policy-Report-Only', CSP_DIRECTIVES);
+  // Render terminates TLS, so trust the proxy's protocol header.
+  if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
+    res.set('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  }
+  next();
+});
 // Send the legacy Render host to the custom domain so old bookmarks, shared
 // links, and home-screen installs land on sdg-mart.com. GET pages only:
 // /healthz stays (UptimeRobot's keep-awake ping must hit Render directly) and
@@ -184,6 +222,13 @@ function requireAuth(req, res, next) {
 function requireAdmin(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'Sign in required' });
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  // must_change_password was set but never enforced anywhere — it only ever
+  // drove a prompt in the UI, so an admin left on the bootstrap password kept
+  // full access indefinitely (audit A-16). Locking admin routes rather than
+  // login leaves /api/auth/change-password reachable, which is how they fix it.
+  if (req.user.mustChangePassword) {
+    return res.status(403).json({ error: 'Change your password before using admin.', code: 'MUST_CHANGE_PASSWORD' });
+  }
   next();
 }
 function riderOnly(req, res, next) {
@@ -198,6 +243,33 @@ function customerOnly(req, res, next) {
   if (req.user.role === 'rider') return res.status(403).json({ error: 'Not available for riders' });
   next();
 }
+function clientIp(req) {
+  const xff = req.headers['x-forwarded-for'];
+  if (xff) return String(xff).split(',')[0].trim();
+  return req.ip || req.socket.remoteAddress || 'unknown';
+}
+
+// Per-IP throttle for endpoints that accept anonymous writes (audit A-15).
+// Ghanaian mobile networks put many real customers behind one carrier NAT
+// address, so these ceilings are deliberately generous: they are sized to stop
+// a script in a loop, not to police normal use. Anything stricter would lock
+// out a whole neighbourhood on the same gateway.
+function rateLimitIp(name, opts) {
+  return (req, res, next) => {
+    const rl = db.rateCheck(`${name}:${clientIp(req)}`, opts);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(Math.ceil(rl.retryAfterMs / 1000)));
+      return res.status(429).json({ error: 'Too many requests from this connection. Please wait a moment and try again.' });
+    }
+    next();
+  };
+}
+const LIMIT_ORDERS   = { windowMs: 10 * 60 * 1000, max: 30,  blockMs: 10 * 60 * 1000 };
+const LIMIT_PAYMENT  = { windowMs: 10 * 60 * 1000, max: 30,  blockMs: 10 * 60 * 1000 };
+const LIMIT_SIGNUP   = { windowMs: 60 * 60 * 1000, max: 20,  blockMs: 30 * 60 * 1000 };
+const LIMIT_TELEMETRY= { windowMs:  5 * 60 * 1000, max: 200, blockMs:  5 * 60 * 1000 };
+const LIMIT_REQUESTS = { windowMs: 60 * 60 * 1000, max: 20,  blockMs: 30 * 60 * 1000 };
+
 app.use(authMiddleware);
 app.use('/api/me', customerOnly);
 
@@ -1291,7 +1363,7 @@ async function runRecurringOrders() {
   }
 }
 
-app.post('/api/orders', async (req, res) => {
+app.post('/api/orders', rateLimitIp('orders', LIMIT_ORDERS), async (req, res) => {
   try {
     const result = await createOrderFromBody(req.user, req.body, { paid: false });
     res.status(201).json(result);
@@ -1331,7 +1403,7 @@ app.get('/api/paystack/config', (req, res) => {
 // 1) Initialize a transaction. Server sets the amount + reference (locked in
 //    Paystack) and stashes the order draft so the order is only created after
 //    payment is confirmed.
-app.post('/api/paystack/init', async (req, res) => {
+app.post('/api/paystack/init', rateLimitIp('payinit', LIMIT_PAYMENT), async (req, res) => {
   if (!PAYSTACK_SECRET_KEY) return res.status(503).json({ error: 'Online payment is not configured' });
   if (!(await switchOn('online_payment_enabled'))) return res.status(503).json({ error: 'Online payment is temporarily unavailable — please choose Cash on Delivery.' });
   if (!(await switchOn('ordering_enabled'))) return res.status(503).json({ error: 'We have paused new orders for a short while. Please try again soon.' });
@@ -1520,13 +1592,8 @@ function publicUser(u) {
   const { passwordHash, password_hash, password, ...rest } = u;
   return rest;
 }
-function clientIp(req) {
-  const xff = req.headers['x-forwarded-for'];
-  if (xff) return String(xff).split(',')[0].trim();
-  return req.ip || req.socket.remoteAddress || 'unknown';
-}
 
-app.post('/api/auth/signup', async (req, res) => {
+app.post('/api/auth/signup', rateLimitIp('signup', LIMIT_SIGNUP), async (req, res) => {
   const { name, email, phone, password, refCode } = req.body || {};
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password are required' });
   const pwErr = db.validatePasswordStrength(password);
@@ -1546,12 +1613,22 @@ app.post('/api/auth/signup', async (req, res) => {
 });
 
 const LOGIN_LIMIT = { windowMs: 5 * 60 * 1000, max: 5, blockMs: 15 * 60 * 1000 };
+const LOGIN_IP_LIMIT = { windowMs: 15 * 60 * 1000, max: 50, blockMs: 15 * 60 * 1000 };
 
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
   const ip = clientIp(req);
   const key = `login:${ip}:${String(email).toLowerCase()}`;
+  // The per-account bucket alone gave spraying — one common password against
+  // thousands of accounts — a fresh allowance for every address tried, so it
+  // was never throttled at all (audit A-13). The IP bucket is what catches
+  // that; it is set well above what a household on one NAT address needs.
+  const ipRl = db.rateCheck(`login-ip:${ip}`, LOGIN_IP_LIMIT);
+  if (!ipRl.allowed) {
+    res.set('Retry-After', String(Math.ceil(ipRl.retryAfterMs / 1000)));
+    return res.status(429).json({ error: `Too many sign-in attempts from this connection. Try again in ${Math.ceil(ipRl.retryAfterMs / 60000)} minute(s).` });
+  }
   const rl = db.rateCheck(key, LOGIN_LIMIT);
   if (!rl.allowed) {
     res.set('Retry-After', String(Math.ceil(rl.retryAfterMs / 1000)));
@@ -1677,7 +1754,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
 app.post('/api/auth/change-password', requireAuth, customerOnly, async (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
   if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Both passwords required' });
-  if (!db.verifyPassword(currentPassword, req.user.passwordHash)) return res.status(401).json({ error: 'Current password is incorrect' });
+  if (!(await db.verifyPassword(currentPassword, req.user.passwordHash))) return res.status(401).json({ error: 'Current password is incorrect' });
   const pwErr = db.validatePasswordStrength(newPassword, { isAdminChange: req.user.role === 'admin' });
   if (pwErr) return res.status(400).json({ error: pwErr });
   try {
@@ -1728,7 +1805,7 @@ app.post('/api/me/delete-account', requireAuth, async (req, res) => {
   try {
     const hasPassword = !!req.user.passwordHash;
     if (hasPassword) {
-      if (!password || !db.verifyPassword(password, req.user.passwordHash)) {
+      if (!password || !(await db.verifyPassword(password, req.user.passwordHash))) {
         return res.status(401).json({ error: 'Password is incorrect' });
       }
     } else if (String(confirm || '').trim().toUpperCase() !== 'DELETE') {
@@ -1978,7 +2055,7 @@ app.get('/api/orders/:id/tracking', async (req, res) => {
 });
 
 // ── Search analytics ─────────────────────────────────────────────────────
-app.post('/api/search/log', async (req, res) => {
+app.post('/api/search/log', rateLimitIp('searchlog', LIMIT_TELEMETRY), async (req, res) => {
   const { query, resultCount } = req.body || {};
   try { await db.searchLog.record(query, req.user ? req.user.id : null, resultCount); res.json({ ok: true }); }
   catch (_) { res.json({ ok: true }); }
@@ -2057,6 +2134,15 @@ app.post('/api/me/reviews', requireAuth, async (req, res) => {
       if (!o || String(o.userId) !== String(req.user.id)) return res.status(403).json({ error: 'Not your order' });
       return res.json(await db.reviews.createForOrder({ userId: req.user.id, orderId, rating, message }));
     }
+    // Legacy per-product path. It used to write with no check at all that the
+    // reviewer had bought anything (audit A-20). The UI no longer sends
+    // productId, so this survives only for old clients — and now it proves
+    // ownership of the order and that the product was actually in it.
+    if (!orderId) return res.status(400).json({ error: 'orderId is required' });
+    const o = await db.orders.get(orderId);
+    if (!o || String(o.userId) !== String(req.user.id)) return res.status(403).json({ error: 'Not your order' });
+    const inOrder = (o.items || []).some((it) => String(it.id != null ? it.id : it.productId) === String(productId));
+    if (!inOrder) return res.status(403).json({ error: 'That product was not in this order' });
     res.json(await db.reviews.create({ userId: req.user.id, productId, orderId, rating, message }));
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -2227,7 +2313,7 @@ app.post('/api/admin/retention/notify', requireAdmin, async (req, res) => {
 });
 
 // Client-side crash reporter (from the React error boundary)
-app.post('/api/client-error', async (req, res) => {
+app.post('/api/client-error', rateLimitIp('clienterr', LIMIT_TELEMETRY), async (req, res) => {
   try {
     const { message, stack, path: p } = req.body || {};
     await db.errorLog.record({ message: 'CLIENT: ' + (message || 'unknown'), stack: stack || '', path: p || '', method: 'CLIENT', status: 0, userId: req.user ? req.user.id : null });
@@ -2300,7 +2386,7 @@ app.post('/api/admin/promotions/:id/publish', requireAdmin, async (req, res) => 
 });
 
 // ── Product requests ─────────────────────────────────────────────────────
-app.post('/api/product-requests', async (req, res) => {
+app.post('/api/product-requests', rateLimitIp('prodreq', LIMIT_REQUESTS), async (req, res) => {
   const { name, whatsappNumber, callNumber, contactWhatsapp, contactCall, productName, notes } = req.body || {};
   if (!productName || !name) return res.status(400).json({ error: 'Your name and the item are required' });
   if (!whatsappNumber && !callNumber) return res.status(400).json({ error: 'Please give us at least one number to reach you' });
@@ -2332,10 +2418,12 @@ app.post('/api/admin/upload-image', requireAdmin, async (req, res) => {
   try {
     const m = dataUrl.match(/^data:(.+?);base64,(.+)$/);
     if (!m) return res.status(400).json({ error: 'invalid data url' });
-    const mime = m[1];
     const buf = Buffer.from(m[2], 'base64');
     if (buf.length > 1.5 * 1024 * 1024) return res.status(413).json({ error: 'image too large (max ~1.5MB)' });
-    const url = await db.uploadProductPhoto(buf, mime);
+    // The declared MIME is deliberately ignored — uploadProductPhoto reads the
+    // real format from the bytes and rejects anything that is not an image.
+    if (!db.sniffImageType(buf)) return res.status(400).json({ error: 'Only JPEG, PNG and WebP images can be uploaded.' });
+    const url = await db.uploadProductPhoto(buf);
     res.json({ url });
   } catch (e) { fail(res, e, req); }
 });
@@ -2567,7 +2655,7 @@ async function start() {
   }
   app.listen(PORT, () => {
     console.log(`\n🏪 SDGMart running at http://localhost:${PORT}`);
-    console.log(`   Admin login: ${db.ADMIN_EMAIL} (default password: ${db.ADMIN_DEFAULT_PW})`);
+    console.log(`   Admin login: ${db.ADMIN_EMAIL}`);
   });
 }
 
