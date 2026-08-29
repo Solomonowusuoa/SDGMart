@@ -112,6 +112,8 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // Online payment (Paystack) availability + in-flight state
   const [paystackEnabled, setPaystackEnabled] = React.useState(false);
   const [paying, setPaying] = React.useState(false);
+  // null | 'network' | 'server' — drives the retry panel above the buttons.
+  const [submitError, setSubmitError] = React.useState(null);
 
   React.useEffect(() => {
     fetch('/api/paystack/config').then(r => r.ok ? r.json() : {}).then(cfg => {
@@ -375,15 +377,29 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   };
 
   // Cash on Delivery — create the order directly.
+  // The success screen is shown ONLY when the server confirms it saved the
+  // order and returns a real id. finishOrder() clears the cart and issues the
+  // tracking code, so reaching it after a failure would tell the customer their
+  // order is placed when it does not exist.
   const placeOrder = async () => {
+    if (paying) return;               // double-tap guard: one order per intent
+    setSubmitError(null);
+    setPaying(true);
     const snap = takeSnapshot();
-    let serverId = null;
     try {
       const r = await apiFetch('/api/orders', { method: 'POST', body: JSON.stringify(buildDraft(snap)) });
+      // fetch does NOT reject on 4xx/5xx — an error status arrives as a normal
+      // response, so it must be checked explicitly or it slips straight past.
+      if (!r.ok) throw new Error('server');
       const d = await r.json();
-      if (d && d.id != null) { serverId = d.id; var codTrackToken = d.trackToken; }
-    } catch (_) { /* proceed even if backend is unreachable */ }
-    await finishOrder(snap, serverId, typeof codTrackToken !== 'undefined' ? codTrackToken : null);
+      if (!d || d.id == null) throw new Error('server');
+      await finishOrder(snap, d.id, d.trackToken || null);
+      // paying stays true — the success screen replaces this view.
+    } catch (e) {
+      // Cart is deliberately left intact so retrying is a single tap.
+      setSubmitError(e && e.message === 'server' ? 'server' : 'network');
+      setPaying(false);
+    }
   };
 
   // Load the Paystack inline popup script on demand.
@@ -879,6 +895,28 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                 </div>
               </div>
 
+              {submitError && (
+                <div style={{ border: '1px solid var(--rule-2)', borderLeft: '3px solid var(--accent)', background: 'var(--surface-warm, #FFF7F2)', padding: '14px 16px', marginBottom: 12 }}>
+                  <div style={{ fontFamily: 'var(--f-ui)', fontSize: 14, fontWeight: 700, marginBottom: 5 }}>
+                    {submitError === 'network' ? 'Your order didn’t go through' : 'We couldn’t save your order'}
+                  </div>
+                  <div style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--rd-body)' }}>
+                    {submitError === 'network'
+                      ? 'Your connection dropped before we could send it. '
+                      : 'Something went wrong on our side. '}
+                    <strong>Nothing was charged and your items are still in your cart.</strong>{' '}
+                    {submitError === 'network'
+                      ? 'Check your internet, then tap Place Order again.'
+                      : 'Please tap Place Order again.'}
+                  </div>
+                  <a href={'https://wa.me/233599189773?text=' + encodeURIComponent('Hi SDGMart, I tried to place an order but it kept failing. Can you help?')}
+                     target="_blank" rel="noopener noreferrer"
+                     style={{ display: 'inline-block', marginTop: 10, fontFamily: 'var(--f-ui)', fontSize: 12.5, fontWeight: 600, color: 'var(--ink)', textDecoration: 'underline' }}>
+                    Still not working? Message us on WhatsApp →
+                  </a>
+                </div>
+              )}
+
               <div style={{ display: 'flex', gap: 10 }}>
                 <button onClick={() => setStep(2)} disabled={paying} style={{ flex: 1, background: 'transparent', color: 'var(--rd-muted)', border: '1px solid var(--border-input)', cursor: 'pointer', padding: '13px', fontFamily: 'var(--f-ui)', fontSize: 14, fontWeight: 600 }}>← Back</button>
                 {form.payMethod === 'paystack' ? (
@@ -888,7 +926,9 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                   </button>
                 ) : (
                   <button onClick={() => { setWaNumber(form.phone || ''); placeOrder(); }} disabled={paying}
-                    style={{ ...ckPrimary, flex: 2 }}>Place Order →</button>
+                    style={{ ...ckPrimary, flex: 2, opacity: paying ? .6 : 1, cursor: paying ? 'wait' : 'pointer' }}>
+                    {paying ? 'Placing your order…' : (submitError ? 'Place Order again →' : 'Place Order →')}
+                  </button>
                 )}
               </div>
             </>

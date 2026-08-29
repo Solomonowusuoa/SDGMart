@@ -364,7 +364,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
 
   const tabs = [
     ['overview','📊 Overview'],['dashboard','📈 Dashboard'],['orders','📦 Orders'],['inventory','🏪 Inventory'],
-    ['expiry','⏰ Expiry'],['routes','🗺 Routes'],['riders','🛵 Riders'],
+    ['expiry','⏰ Expiry'],['reconcile','💳 Reconcile'],['routes','🗺 Routes'],['riders','🛵 Riders'],
     ['promotions','⚡ Promotions'],['requests','🛒 Requests'],['issues','🚨 Issues'],
     ['analytics','🔎 Analytics'],['retention','🔁 Retention'],['leaderboard','🏆 Leaderboard'],['comms','📣 Comms'],
     ['errors','🐞 Errors'],['birthday','🎂 Birthday Gifts'],['settings','⚙️ Settings'],['security','🔐 Security'],
@@ -410,6 +410,45 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
     apiFetch('/api/admin/errors').then(r => r.ok ? r.json() : []).then(setErrorLogs).catch(() => {});
   }, []);
   React.useEffect(() => { if (adminTab === 'errors') loadErrors(); }, [adminTab, loadErrors]);
+
+  // ── Payment reconciliation ───────────────────────────────────────────────
+  const [orphans, setOrphans] = React.useState([]);
+  const [orphansLoading, setOrphansLoading] = React.useState(false);
+  const [orphansError, setOrphansError] = React.useState('');
+  const [orphanBusy, setOrphanBusy] = React.useState('');
+  const loadOrphans = React.useCallback(async () => {
+    setOrphansLoading(true); setOrphansError('');
+    try {
+      const r = await apiFetch('/api/admin/payments/orphans');
+      if (!r.ok) throw new Error('Could not load payments');
+      setOrphans(await r.json());
+    } catch (e) { setOrphansError(e.message || 'Could not load payments'); }
+    finally { setOrphansLoading(false); }
+  }, [apiFetch]);
+  React.useEffect(() => { if (adminTab === 'reconcile') loadOrphans(); }, [adminTab, loadOrphans]);
+  const recoverOrphan = async (ref) => {
+    if (!window.confirm('Create the real order for this payment? The customer has already been charged.')) return;
+    setOrphanBusy(ref);
+    try {
+      const r = await apiFetch('/api/admin/payments/orphans/' + encodeURIComponent(ref) + '/recover', { method: 'POST' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'Recovery failed');
+      alert('Order ' + window.orderCode(d.id) + ' created (GHS ' + Number(d.total || 0).toFixed(2) + ').');
+      loadOrphans(); loadOrders && loadOrders();
+    } catch (e) { alert(e.message); }
+    finally { setOrphanBusy(''); }
+  };
+  const dismissOrphan = async (ref) => {
+    if (!window.confirm('Discard this abandoned checkout? This only removes the saved basket, never a payment.')) return;
+    setOrphanBusy(ref);
+    try {
+      const r = await apiFetch('/api/admin/payments/orphans/' + encodeURIComponent(ref), { method: 'DELETE' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'Could not dismiss');
+      loadOrphans();
+    } catch (e) { alert(e.message); }
+    finally { setOrphanBusy(''); }
+  };
 
   // ── Settings tab state ──
   const [settings, setSettings] = React.useState({ showFreshness: false, deductStock: false });
@@ -998,6 +1037,73 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                       <span style={{ color: 'var(--sage-dark)', fontWeight: 700 }}>Clearance: GHS {(p.price*(1-disc/100)).toFixed(2)} (-{disc}%)</span>
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 6 }}>BB: {new Date(p.bestBefore).toLocaleDateString('en-GB')} · Stock: {p.stock}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* RECONCILE — payments taken with no order against them */}
+        {adminTab === 'reconcile' && (
+          <div>
+            <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Payment reconciliation</h2>
+            <p style={{ fontSize: 13, color: 'var(--warm-gray)', maxWidth: 640, lineHeight: 1.6, marginBottom: 18 }}>
+              Checkouts started more than 15 minutes ago that never became an order. Each one is checked against Paystack:
+              <strong> PAID</strong> means money was collected and the customer is waiting — recover it.
+              <strong> Abandoned</strong> means they never completed payment and it can be discarded.
+            </p>
+            <button onClick={loadOrphans} disabled={orphansLoading}
+              style={{ background: 'var(--sage-dark)', color: '#fff', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 600, marginBottom: 16, opacity: orphansLoading ? .6 : 1 }}>
+              {orphansLoading ? 'Checking…' : '↻ Refresh'}
+            </button>
+
+            {orphansError && <div style={{ background: '#FDECEA', color: '#8A1C13', padding: '12px 14px', borderRadius: 8, fontSize: 13, marginBottom: 14 }}>{orphansError}</div>}
+            {!orphansLoading && !orphansError && !orphans.length && (
+              <div style={{ border: '1px dashed var(--rule-2, #ddd)', padding: '28px 20px', textAlign: 'center', color: 'var(--warm-gray)', fontSize: 13.5, borderRadius: 8 }}>
+                Nothing unreconciled. Every payment has an order against it.
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {orphans.map((o) => {
+                const isPaid = o.paid === true;
+                const unknown = o.paid === null;
+                return (
+                  <div key={o.reference} style={{ border: '1px solid ' + (isPaid ? '#C9601F' : '#E4E4E4'), borderLeft: '4px solid ' + (isPaid ? '#C9601F' : unknown ? '#B9A44A' : '#CFCFCF'), borderRadius: 8, padding: '14px 16px', background: '#fff' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginBottom: 8 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.08em', padding: '3px 8px', borderRadius: 999, background: isPaid ? '#FBE9DC' : unknown ? '#FAF5E2' : '#F0F0F0', color: isPaid ? '#8A3D10' : unknown ? '#6F5A00' : '#666' }}>
+                        {isPaid ? 'PAID — NEEDS ACTION' : unknown ? 'STATUS UNKNOWN' : 'ABANDONED'}
+                      </span>
+                      <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--warm-gray)' }}>{o.reference}</span>
+                      <span style={{ fontSize: 12, color: 'var(--warm-gray)' }}>{new Date(o.createdAt).toLocaleString()}</span>
+                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 3 }}>
+                      {o.customer || 'Unknown customer'}{o.phone ? ' · ' + o.phone : ''}
+                    </div>
+                    <div style={{ fontSize: 13, color: 'var(--warm-gray)', marginBottom: 8 }}>
+                      GHS {Number(o.paystackAmount != null ? o.paystackAmount : o.amount || 0).toFixed(2)}
+                      {o.channel ? ' · ' + o.channel : ''}
+                      {o.neighborhood ? ' · ' + o.neighborhood : ''}
+                      {o.itemCount ? ' · ' + o.itemCount + ' item' + (o.itemCount === 1 ? '' : 's') : ''}
+                    </div>
+                    {!!(o.items && o.items.length) && (
+                      <div style={{ fontSize: 12.5, color: 'var(--warm-gray)', background: '#FAFAFA', borderRadius: 6, padding: '8px 10px', marginBottom: 10, lineHeight: 1.6 }}>
+                        {o.items.map((i) => i.name + ' ×' + i.qty).join(', ')}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button onClick={() => recoverOrphan(o.reference)} disabled={orphanBusy === o.reference || o.paid === false}
+                        title={o.paid === false ? 'Paystack reports no successful payment' : ''}
+                        style={{ background: o.paid === false ? '#DDD' : 'var(--sage-dark)', color: o.paid === false ? '#888' : '#fff', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 600, cursor: o.paid === false ? 'not-allowed' : 'pointer', opacity: orphanBusy === o.reference ? .6 : 1 }}>
+                        {orphanBusy === o.reference ? 'Working…' : 'Create the order'}
+                      </button>
+                      <button onClick={() => dismissOrphan(o.reference)} disabled={orphanBusy === o.reference || isPaid}
+                        title={isPaid ? 'Cannot discard a payment that succeeded' : ''}
+                        style={{ background: 'transparent', color: isPaid ? '#BBB' : 'var(--warm-gray)', border: '1px solid #DDD', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 600, cursor: isPaid ? 'not-allowed' : 'pointer' }}>
+                        Discard
+                      </button>
+                    </div>
                   </div>
                 );
               })}

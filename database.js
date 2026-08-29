@@ -425,9 +425,24 @@ const orders = {
     return rowOut(data);
   },
   async setStatus(id, status, riderId = null) {
+    // Read the CURRENT state first: rewards are granted only on the transition
+    // INTO 'delivered', never on a repeat call (riders on flaky connections tap
+    // twice), and never on delivered -> delivered.
+    const before = await orders.get(id);
     const patch = { status };
     if (riderId != null) patch.rider_id = riderId;
     const o = await orders.update(id, patch);
+    if (status === 'delivered' && before && before.status !== 'delivered' && before.userId) {
+      // Accrual lives here, not at checkout — see createOrderFromBody. Best
+      // effort: a failure must not block the rider marking the order delivered.
+      try {
+        const u = await users.get(before.userId);
+        if (u) {
+          await squads.recordSpend(before.userId, Number(before.subtotal || 0));
+          await referrals.creditFirstPurchase(u);
+        }
+      } catch (e) { console.warn('reward accrual on delivery failed for order ' + id + ':', e.message); }
+    }
     // Stamp the delivery time (separate best-effort write so the status
     // update above still succeeds if supabase-schema-delivered-at.sql
     // hasn't been run yet).
@@ -963,6 +978,25 @@ const pendingPayments = {
   async delete(reference) {
     await sb.from('pending_payments').delete().eq('reference', reference);
   },
+  // Drafts old enough that the customer has either paid or walked away, which
+  // still have no order against their reference. A draft is only deleted after
+  // its order is successfully created, so anything left here is either an
+  // abandoned checkout (harmless) or a payment we took and failed to fulfil.
+  async listOrphans({ olderThanMinutes = 15, limit = 50 } = {}) {
+    const cutoff = new Date(Date.now() - olderThanMinutes * 60000).toISOString();
+    const { data, error } = await sb.from('pending_payments').select('*')
+      .lt('created_at', cutoff).order('created_at', { ascending: false }).limit(limit);
+    if (error) throw error;
+    const rows = data || [];
+    if (!rows.length) return [];
+    const refs = rows.map((r) => r.reference);
+    const { data: matched } = await sb.from('orders').select('paystack_ref').in('paystack_ref', refs);
+    const claimed = new Set((matched || []).map((m) => m.paystack_ref));
+    return rows.filter((r) => !claimed.has(r.reference)).map((r) => ({
+      reference: r.reference, userId: r.user_id, amount: r.amount,
+      createdAt: r.created_at, draft: r.draft,
+    }));
+  },
 };
 
 // ── Referrals: credit the referrer after the referee's FIRST purchase ─────
@@ -1086,7 +1120,35 @@ async function cancelOrder(orderId, userId, reason) {
     cancel_reason: String(reason || '').slice(0, 300),
     cancelled_at: new Date().toISOString(),
   }).eq('id', orderId);
+  // Hand back whatever this order consumed. Without this a customer who spent
+  // loyalty on an order and then cancelled simply lost the credit, and the
+  // first-delivery-free perk stayed burned on an order that never happened.
+  if (o.userId) { try { await reverseOrderRewards(o); } catch (e) { console.warn('reverseOrderRewards failed for order ' + orderId + ':', e.message); } }
   return { ok: true };
+}
+
+// Restore the value a cancelled order took from the customer. Accrual (spend
+// tiers, squad progress, referral credit) is NOT reversed here because it is
+// never granted until delivery — see orders.setStatus.
+async function reverseOrderRewards(o) {
+  const userId = o.userId;
+  if (!userId) return;
+  const u = await users.get(userId);
+  if (!u) return;
+  const patch = {};
+  // 1. Loyalty the customer spent on this order.
+  const spent = Number(o.loyaltyUsed || 0);
+  if (spent > 0) patch.loyalty_balance = Number(u.loyaltyBalance || 0) + spent;
+  // 2. The one-off squad discount, if this order used it.
+  if (Number(o.discount || 0) > 0 && !u.discountPending) patch.discount_pending = true;
+  // 3. The first-order-free-delivery perk: hand it back only when this customer
+  //    has no other live order, i.e. this really was the order that used it.
+  if (u.firstOrderDone) {
+    const { data: others } = await sb.from('orders').select('id')
+      .eq('user_id', userId).neq('status', 'cancelled').neq('id', o.id).limit(1);
+    if (!others || !others.length) patch.first_order_done = false;
+  }
+  if (Object.keys(patch).length) await sb.from('users').update(patch).eq('id', userId);
 }
 
 // ── Persistent cart (signed-in users; syncs across devices) ──────────────

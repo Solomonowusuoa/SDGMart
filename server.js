@@ -614,19 +614,23 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
   // Optional stock depletion — OFF by default (admin toggle 'deduct_stock').
   try { if (await db.appConfig.get('deduct_stock')) await db.products.decrementStock(itemsList); } catch (_) {}
 
-  let squadInfo = null;
+  // ── Rewards: CONSUMPTION happens now, ACCRUAL happens on delivery ────────
+  // Value the customer SPENDS (loyalty, squad discount, the first-order perk) is
+  // taken here, because they are getting the benefit on this order right now —
+  // and it is given back by reverseOrderRewards() if the order is cancelled.
+  //
+  // Value the customer EARNS (spend tiers, squad progress, referral credit) is
+  // granted in db.orders.setStatus() when the order reaches 'delivered'. Doing
+  // it here let anyone mint loyalty for free: place a large cash order, collect
+  // the credit, cancel inside the 15-minute window, repeat. You cannot earn from
+  // an order that never arrives.
   if (userId) {
     if (pricing.discountApplied) await db.squads.consumeDiscount(userId);
     if (pricing.loyaltyUsed) await db.squads.consumeLoyalty(userId, pricing.loyaltyUsed);
-    squadInfo = await db.squads.recordSpend(userId, pricing.subtotal);
     // The first-order-free-delivery perk persists until it is actually used:
-    // small (< GHS 50) first orders don't consume it. Referral credit rides the
-    // same flag, so the referrer is credited on the referee's first QUALIFYING
-    // order (also blocks GHS-1 referral farming).
+    // small (< GHS 50) first orders don't consume it.
     if (!reqUser.firstOrderDone && pricing.firstOrderFree) {
       await db.sb.from('users').update({ first_order_done: true }).eq('id', userId);
-      // Credit the referrer (GHS 5) now that this referred user has actually bought.
-      await db.referrals.creditFirstPurchase(reqUser);
     }
     if (loc) await db.addresses.markLastUsed(userId, loc, neighborhood);
   }
@@ -640,12 +644,91 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
   return {
     ok: true, id: created.id, total: pricing.total,
     deliveryDate: deliveryDateStr, deliverySlot, priority,
-    loyaltyEarned: squadInfo ? squadInfo.loyaltyEarned : 0,
-    squadGoalHit: !!(squadInfo && squadInfo.squadGoalHit),
+    // Earned on delivery now, not at checkout — see the rewards note above.
+    loyaltyEarned: 0,
+    squadGoalHit: false,
     // Lets guests track this order later (stored client-side; see orderTrackToken)
     trackToken: orderTrackToken(created.id),
   };
 }
+
+// ── Payment reconciliation ───────────────────────────────────────────────
+// Answers "did Paystack take money we never turned into an order?" — the
+// recovery path for a webhook or verify that failed. Each orphan is checked
+// against Paystack itself so PAID (needs action) is separated from ABANDONED
+// (customer never completed; safe to dismiss).
+app.get('/api/admin/payments/orphans', requireAdmin, async (req, res) => {
+  try {
+    const orphans = await db.pendingPayments.listOrphans({
+      olderThanMinutes: Math.max(1, parseInt(req.query.minutes, 10) || 15),
+      limit: Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 25)),
+    });
+    const out = [];
+    for (const o of orphans) {
+      let paid = null, paystackAmount = null, channel = null;
+      if (PAYSTACK_SECRET_KEY) {
+        try {
+          const ver = await paystackApi('/transaction/verify/' + encodeURIComponent(o.reference));
+          if (ver && ver.status && ver.data) {
+            paid = ver.data.status === 'success';
+            paystackAmount = ver.data.amount != null ? ver.data.amount / 100 : null;
+            channel = ver.data.channel || null;
+          }
+        } catch (_) { /* unknown — shown as such, never guessed */ }
+      }
+      const d = o.draft || {};
+      out.push({
+        reference: o.reference, createdAt: o.createdAt, userId: o.userId,
+        amount: o.amount, paid, paystackAmount, channel,
+        customer: d.customer || '', phone: d.phone || '',
+        neighborhood: d.neighborhood || '', address: d.address || '',
+        itemCount: Array.isArray(d.items) ? d.items.length : 0,
+        items: Array.isArray(d.items) ? d.items.slice(0, 40).map((i) => ({ id: i.id, name: i.name || ('#' + i.id), qty: i.qty || 1 })) : [],
+      });
+    }
+    res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Turn a stranded draft into a real order — but ONLY after Paystack confirms
+// the money was actually collected. Never create a free order by hand.
+app.post('/api/admin/payments/orphans/:reference/recover', requireAdmin, async (req, res) => {
+  const reference = req.params.reference;
+  try {
+    const existing = await db.orders.findByPaystackRef(reference);
+    if (existing) return res.status(409).json({ error: 'An order already exists for this payment', id: existing.id });
+    const pending = await db.pendingPayments.get(reference);
+    if (!pending || !pending.draft) return res.status(404).json({ error: 'No stored draft for this reference' });
+    if (!PAYSTACK_SECRET_KEY) return res.status(503).json({ error: 'Paystack is not configured — cannot confirm payment' });
+    const ver = await paystackApi('/transaction/verify/' + encodeURIComponent(reference));
+    if (!ver || !ver.status || !ver.data || ver.data.status !== 'success') {
+      return res.status(400).json({ error: 'Paystack does not report this payment as successful — not recovering' });
+    }
+    const reqUser = pending.userId ? await db.users.get(pending.userId) : null;
+    const result = await createOrderFromBody(reqUser, pending.draft, { paid: true, paystackRef: reference });
+    await db.pendingPayments.delete(reference);
+    res.json({ ok: true, id: result.id, total: result.total });
+  } catch (e) {
+    console.error('orphan recovery failed for ' + reference + ':', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Discard an abandoned checkout. Refuses while Paystack still reports the
+// payment as successful, so money that was taken cannot be tidied away.
+app.delete('/api/admin/payments/orphans/:reference', requireAdmin, async (req, res) => {
+  const reference = req.params.reference;
+  try {
+    if (PAYSTACK_SECRET_KEY) {
+      const ver = await paystackApi('/transaction/verify/' + encodeURIComponent(reference));
+      if (ver && ver.status && ver.data && ver.data.status === 'success') {
+        return res.status(409).json({ error: 'This payment succeeded — recover it into an order instead of dismissing it.' });
+      }
+    }
+    await db.pendingPayments.delete(reference);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // ── Recurring orders (auto-reorder) ──────────────────────────────────────
 // Places any recurring order whose next_run_at has arrived, reusing the same
@@ -784,7 +867,13 @@ app.post('/api/paystack/init', async (req, res) => {
       currency: 'GHS',
       reference,
       channels: ['mobile_money', 'card'],
-      metadata: { order_for: draft.customer || '', phone: draft.phone || '' },
+      // Last-resort recovery copy: if our pending_payments draft is ever lost,
+      // the order can still be reconstructed from Paystack's own record.
+      metadata: {
+        order_for: draft.customer || '', phone: draft.phone || '',
+        neighborhood: draft.neighborhood || '',
+        items: (pricing.items || []).map((i) => i.id + 'x' + i.qty).join(',').slice(0, 900),
+      },
     });
     if (!init || !init.status || !init.data) return res.status(502).json({ error: (init && init.message) || 'Could not start payment' });
     await db.pendingPayments.create(reference, req.user ? req.user.id : null, draft, ghs);
@@ -833,11 +922,35 @@ app.post('/api/paystack/webhook', async (req, res) => {
           const reqUser = pending.userId ? await db.users.get(pending.userId) : null;
           await createOrderFromBody(reqUser, pending.draft, { paid: true, paystackRef: ref });
           await db.pendingPayments.delete(ref);
+        } else {
+          // Paid, but the draft is gone and no order exists — a retry can never
+          // fix this, so we still ACK (200 below) to stop Paystack looping on
+          // something unrecoverable. This needs a human: the customer has been
+          // charged and has no order. Make it impossible to miss.
+          const msg = 'PAID BUT NO ORDER — Paystack ref ' + ref + ' has no pending draft and no order. Customer was charged; refund or create the order manually.';
+          console.error(msg);
+          await db.errorLog.record({ message: msg, path: '/api/paystack/webhook', method: 'POST', status: 500 });
+          if (Sentry) { try { Sentry.captureException(new Error(msg)); } catch (_) {} }
+          notifyAdmins({ title: '⚠️ Paid but no order', body: 'Ref ' + ref + ' — customer charged, no order created. Check Admin → Errors.', url: '/admin', tag: 'admin-payment-orphan-' + ref }).catch(() => {});
         }
       }
     }
     res.sendStatus(200);
-  } catch (e) { console.error('paystack webhook error:', e.message); res.sendStatus(200); }
+  } catch (e) {
+    // MUST be 500, never 200. A 2xx tells Paystack the event was durably
+    // handled and it will never resend it — silently losing a paid order on a
+    // transient failure (DB blip, timeout). A 500 makes Paystack retry on its
+    // own backoff schedule, which recovers exactly those cases.
+    // Safe to retry: the findByPaystackRef guard above means a retry that
+    // arrives after the order was created finds it and skips.
+    console.error('paystack webhook error:', e.message);
+    await db.errorLog.record({
+      message: 'paystack webhook failed (Paystack will retry): ' + e.message,
+      stack: e.stack || '', path: '/api/paystack/webhook', method: 'POST', status: 500,
+    });
+    if (Sentry) { try { Sentry.captureException(e); } catch (_) {} }
+    res.sendStatus(500);
+  }
 });
 
 // Admin: manually assign (or reassign / unassign) an order to a rider
@@ -1012,7 +1125,10 @@ app.post('/api/auth/reset-password', async (req, res) => {
   } catch (e) { console.error('reset-password failed:', e); res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/auth/change-password', requireAuth, async (req, res) => {
+// customerOnly (not just requireAuth): riders have their own id space, so a
+// rider reaching db.users.changePassword(req.user.id) would overwrite the
+// UNRELATED customer holding that same numeric id.
+app.post('/api/auth/change-password', requireAuth, customerOnly, async (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
   if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Both passwords required' });
   if (!db.verifyPassword(currentPassword, req.user.passwordHash)) return res.status(401).json({ error: 'Current password is incorrect' });
@@ -1719,13 +1835,14 @@ app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, 'terms.html'))
 app.get('/about', (req, res) => res.sendFile(path.join(__dirname, 'about.html')));
 
 // ── Block direct download of source, configs, docs, and schema ───────────
-// express.static(__dirname) below would otherwise serve server.js, database.js,
+// express.static(__dirname, { dotfiles: 'ignore' }) below would otherwise serve server.js, database.js,
 // HANDOFF.md, package.json, *.sql, etc. as plain text. The client only ever
 // needs the built bundle (/app.bundle.js), /data, /icons, the HTML, css, sw.js
 // and manifest — all of which are unaffected by this guard.
 app.use((req, res, next) => {
   const p = req.path;
-  if (/^\/(components|scripts)\//.test(p)
+  if (/(^|\/)\.[^\/]/.test(p)                       // any dot-segment: /.git/, /.env, /a/.ssh/…
+    || /^\/(components|scripts)\//.test(p)
     || /^\/(server|database|hooks|tweaks-panel|App)\.jsx?$/.test(p)
     || /^\/package(-lock)?\.json$/.test(p)
     || /\.(md|sql|log|sh|ya?ml|env)$/i.test(p)) {
@@ -1735,7 +1852,7 @@ app.use((req, res, next) => {
 });
 
 // ── Static files ─────────────────────────────────────────────────────────
-app.use('/icons', express.static(path.join(__dirname, 'icons')));
+app.use('/icons', express.static(path.join(__dirname, 'icons'), { dotfiles: 'ignore' }));
 app.use(express.static(__dirname, { index: 'SDGMart.html' }));
 
 // ── SPA client routes ────────────────────────────────────────────────────
