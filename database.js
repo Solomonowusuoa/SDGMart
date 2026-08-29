@@ -211,10 +211,31 @@ function rateCheck(key, { windowMs = 5 * 60 * 1000, max = 5, blockMs = 15 * 60 *
 }
 function rateClear(key) { rateBuckets.delete(key); }
 
+// Audit D-07: these took no limit at all, and the admin panel renders them in
+// full in the browser, so the cost landed twice. A bound high enough that no
+// real screen notices, low enough that one bad table cannot take the page down.
+const LIST_LIMIT_DEFAULT = 200;
+const LIST_LIMIT_MAX = 1000;
+const listLimit = (n) => Math.min(Math.max(parseInt(n, 10) || LIST_LIMIT_DEFAULT, 1), LIST_LIMIT_MAX);
+
 // ── Products ─────────────────────────────────────────────────────────────
+// Audit D-10: /data/products.js is loaded on every page view and serialised
+// every column of every product into it. description and low_stock_threshold
+// are read only by AdminPage — which refetches the full rows from
+// /api/products on mount — and created_at is read by nothing at all. The
+// shopper catalogue projects the rest explicitly. best_before stays: unlike
+// the finding assumed, HomePage, CategoryPage and ProductPage all render it.
+const CATALOG_COLUMNS = 'id, name, category, price, unit, best_before, stock, bestseller, img';
+
 const products = {
   async list() {
     const { data, error } = await sb.from('products').select('*').order('id');
+    if (error) throw error;
+    return rowsOut(data);
+  },
+  // The shopper-facing catalogue. Admin keeps using list().
+  async listForCatalog() {
+    const { data, error } = await sb.from('products').select(CATALOG_COLUMNS).order('id');
     if (error) throw error;
     return rowsOut(data);
   },
@@ -280,6 +301,14 @@ const users = {
     const { data, error } = await sb.from('users').select('*').eq('email', String(email || '').toLowerCase().trim()).maybeSingle();
     if (error) throw error;
     return rowOut(data);
+  },
+  // Audit D-09: several callers looped `await users.get(id)` over a list.
+  async listByIds(ids) {
+    const clean = [...new Set((ids || []).map(String))].filter(Boolean);
+    if (!clean.length) return [];
+    const { data, error } = await sb.from('users').select('*').in('id', clean);
+    if (error) throw error;
+    return rowsOut(data);
   },
   async findByRefCode(code) {
     if (!code) return null;
@@ -930,33 +959,44 @@ const searchLog = {
       result_count: resultCount,
     });
   },
-  async topQueries({ days = 30, limit = 20 } = {}) {
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-    const { data, error } = await sb.from('search_queries').select('query').gte('created_at', since);
+  // Audit D-08: these selected every row in the window and counted in Node.
+  // search_queries is unauthenticated-write, so it is the table most likely to
+  // reach millions of rows first — and the aggregate downloaded it. Postgres
+  // does the group-by now, returning a handful of rows.
+  //
+  // The rpc falls back to the old path when the function is absent, so this
+  // deploys safely ahead of supabase-schema-aggregates.sql.
+  async _aggregate(rpcName, { days, limit, unmatchedOnly }) {
+    try {
+      const { data, error } = await sb.rpc(rpcName, { days, lim: limit });
+      if (!error && Array.isArray(data)) {
+        return data.map((r) => ({ query: r.query, count: Number(r.count) }));
+      }
+      if (error) console.warn('searchLog: ' + rpcName + ' unavailable, counting in Node (run supabase-schema-aggregates.sql):', error.message);
+    } catch (e) {
+      console.warn('searchLog: ' + rpcName + ' failed, counting in Node:', e.message);
+    }
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    let q = sb.from('search_queries').select('query').gte('created_at', since).limit(50000);
+    if (unmatchedOnly) q = q.eq('result_count', 0);
+    const { data, error } = await q;
     if (error) throw error;
     const counts = new Map();
-    for (const r of data) {
-      const q = String(r.query || '').toLowerCase();
-      counts.set(q, (counts.get(q) || 0) + 1);
+    for (const r of data || []) {
+      const key = String(r.query || '').trim().toLowerCase();
+      if (!key) continue;
+      counts.set(key, (counts.get(key) || 0) + 1);
     }
     return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1])
+      .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
       .slice(0, limit)
       .map(([query, count]) => ({ query, count }));
   },
+  async topQueries({ days = 30, limit = 20 } = {}) {
+    return searchLog._aggregate('search_top_queries', { days, limit, unmatchedOnly: false });
+  },
   async unmatchedQueries({ days = 30, limit = 20 } = {}) {
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-    const { data, error } = await sb.from('search_queries').select('query, result_count').gte('created_at', since).eq('result_count', 0);
-    if (error) throw error;
-    const counts = new Map();
-    for (const r of data) {
-      const q = String(r.query || '').toLowerCase();
-      counts.set(q, (counts.get(q) || 0) + 1);
-    }
-    return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, limit)
-      .map(([query, count]) => ({ query, count }));
+    return searchLog._aggregate('search_unmatched_queries', { days, limit, unmatchedOnly: true });
   },
 };
 
@@ -1025,8 +1065,8 @@ const productRequests = {
     if (error) throw error;
     return rowOut(data);
   },
-  async listAll({ status = null } = {}) {
-    let q = sb.from('product_requests').select('*').order('created_at', { ascending: false });
+  async listAll({ status = null, limit } = {}) {
+    let q = sb.from('product_requests').select('*').order('created_at', { ascending: false }).limit(listLimit(limit));
     if (status) q = q.eq('status', status);
     const { data, error } = await q;
     if (error) throw error;
@@ -1108,8 +1148,10 @@ async function bootstrap() {
 
 // ── Saved addresses ──────────────────────────────────────────────────────
 const addresses = {
-  async list(userId) {
-    const { data, error } = await sb.from('addresses').select('*').eq('user_id', userId).order('is_default', { ascending: false }).order('created_at');
+  async list(userId, { limit = 100 } = {}) {
+    const { data, error } = await sb.from('addresses').select('*').eq('user_id', userId)
+      .order('is_default', { ascending: false }).order('created_at')
+      .limit(Math.min(Math.max(parseInt(limit, 10) || 100, 1), 500));
     if (error) throw error;
     return rowsOut(data);
   },
@@ -1268,9 +1310,9 @@ const issueReports = {
     if (error) throw error;
     return rowOut(data);
   },
-  async listAll() {
+  async listAll({ limit } = {}) {
     const { data, error } = await sb.from('issue_reports')
-      .select('*, users(name, email)').order('created_at', { ascending: false });
+      .select('*, users(name, email)').order('created_at', { ascending: false }).limit(listLimit(limit));
     if (error) throw error;
     return (data || []).map((r) => {
       const { users: u, ...rest } = r;
@@ -1294,8 +1336,8 @@ const promotions = {
     if (error) throw error;
     return rowsOut(data);
   },
-  async listAll() {
-    const { data, error } = await sb.from('promotions').select('*').order('created_at', { ascending: false });
+  async listAll({ limit } = {}) {
+    const { data, error } = await sb.from('promotions').select('*').order('created_at', { ascending: false }).limit(listLimit(limit));
     if (error) throw error;
     return rowsOut(data);
   },
@@ -1353,7 +1395,12 @@ const stats = {
 const metrics = {
   async overview({ days = 30 } = {}) {
     const since = new Date(Date.now() - days * 86400000);
-    const { data: allOrders } = await sb.from('orders').select('*').gte('created_at', since.toISOString());
+    // Only the four columns this function actually reads — it was pulling every
+    // column of every order in the window, addresses and phone numbers included
+    // (audit D-08/D-10). `items` is the heavy one and is genuinely needed for
+    // the top-products breakdown.
+    const { data: allOrders } = await sb.from('orders')
+      .select('status, created_at, total, items').gte('created_at', since.toISOString());
     const orders = rowsOut(allOrders || []);
     const nonCancelled = orders.filter(o => o.status !== 'cancelled');
     const delivered = orders.filter(o => o.status === 'delivered');
@@ -1582,12 +1629,14 @@ const leaderboard = {
       const counts = {};
       (data || []).forEach(r => { counts[r.referrer_id] = (counts[r.referrer_id] || 0) + 1; });
       const ranked = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, limit);
-      const out = [];
-      for (const [rid, count] of ranked) {
-        const u = await users.get(rid);
-        out.push({ id: rid, name: (u && u.name) || 'A friend', referralCount: count, loyaltyBalance: u ? u.loyaltyBalance : 0 });
-      }
-      return out;
+      // One query for the whole page of referrers rather than one each — this
+      // is reached from a public, uncached endpoint (audit D-09).
+      const people = await users.listByIds(ranked.map(([rid]) => rid));
+      const byId = new Map(people.map((u) => [String(u.id), u]));
+      return ranked.map(([rid, count]) => {
+        const u = byId.get(String(rid));
+        return { id: rid, name: (u && u.name) || 'A friend', referralCount: count, loyaltyBalance: u ? u.loyaltyBalance : 0 };
+      });
     } catch (e) { console.warn('leaderboard failed:', e.message); return []; }
   },
   // Award last month's top referrer GHS 15 (once). Cron-less: runs on demand,

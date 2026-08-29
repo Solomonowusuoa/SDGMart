@@ -522,7 +522,7 @@ app.get('/data/products.js', async (req, res) => {
       res.setHeader('Cache-Control', 'no-cache');
       return res.send(_catalogCache.js);
     }
-    const productsList = (await db.products.list()).map(p => ({ ...p, bestseller: !!p.bestseller, img: p.img || null }));
+    const productsList = (await db.products.listForCatalog()).map(p => ({ ...p, bestseller: !!p.bestseller, img: p.img || null }));
     const counts = await getOrderItemCounts();
     const TOP_IDS_BY_ORDERS = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => Number(id));
     const categories = ["Rice & Grains","Cooking Oil","Canned & Sauces","Spices & Seasoning","Dairy & Eggs","Drinks","Snacks & Biscuits","Breakfast & Cereals","Baking & Sugar","Coffee, Tea & Cocoa","Fruits & Vegetables","Staples (Tubers & Fufu)","Meat, Poultry & Seafood","Toiletries & Personal Care"];
@@ -1328,9 +1328,18 @@ async function runRecurringOrders() {
   try { products = await db.products.list(); } catch (e) { console.warn('runRecurringOrders: products.list failed:', e.message); return; }
   const byId = new Map(products.map((p) => [p.id, p]));
 
+  // One query for every customer in the batch instead of one per due row
+  // (audit D-09). This job already loads the whole catalogue once for the
+  // same reason.
+  let usersById = new Map();
+  try {
+    const people = await db.users.listByIds(due.map((r) => r.userId));
+    usersById = new Map(people.map((u) => [String(u.id), u]));
+  } catch (e) { console.warn('runRecurringOrders: users.listByIds failed:', e.message); return; }
+
   for (const r of due) {
     try {
-      const user = await db.users.get(r.userId);
+      const user = usersById.get(String(r.userId));
       if (!user) { // account deleted — stop retrying this row forever
         await db.recurring.setActive(r.id, r.userId, false).catch(() => {});
         continue;
@@ -1933,6 +1942,11 @@ async function runDailyJobs() {
       await db.sb.from('users').update({ birthday_notified_year: year }).eq('id', u.id);
     }
     await runRecurringOrders();
+    // Was fired from the public GET /api/leaderboard on every request, to do
+    // work that matters once a month (audit D-09). It is idempotent via an
+    // app_config marker, so running it here changes nothing but the cost.
+    try { await db.leaderboard.awardLastMonthWinner(); }
+    catch (e) { console.warn('leaderboard award failed:', e.message); }
     // Prune the tables nothing else ever deletes from (audit B-12). Last,
     // and in its own catch, so a sweep failure cannot cost anyone their
     // recurring order or their birthday push.
@@ -2022,9 +2036,17 @@ app.post('/api/rider/orders/:id/status', riderOnly, async (req, res) => {
 });
 
 // Customer: list my own orders
+// Audit D-07: this returned every order the customer had ever placed, to
+// render one screen. Bounded now — but generously, and NOT at the 20 the
+// finding suggested: MyOrdersPage has no paging UI, so a low default would
+// silently hide a customer's history rather than page it. 100 is past any
+// realistic Tamale shopper while still capping the query.
+const ME_ORDERS_DEFAULT = 100;
 app.get('/api/me/orders', requireAuth, async (req, res) => {
   try {
-    const { data, error } = await db.sb.from('orders').select('*').eq('user_id', req.user.id).order('created_at', { ascending: false });
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || ME_ORDERS_DEFAULT, 1), 500);
+    const { data, error } = await db.sb.from('orders').select('*').eq('user_id', req.user.id)
+      .order('created_at', { ascending: false }).limit(limit);
     if (error) throw error;
     // Attach each order's shareable tracking token (deterministic HMAC) so the
     // customer can copy/share a track-on-any-device link (e.g. give a Family
@@ -2260,15 +2282,24 @@ app.get('/api/admin/leaderboard', requireAdmin, async (req, res) => {
   catch (e) { fail(res, e, req); }
 });
 // Public version (first names only) for the squad page gamification
+// Public and uncached, and it fired awardLastMonthWinner on every single
+// request — an app_config read plus a referrals scan per visitor, to do work
+// that matters once a month. The award moved into runDailyJobs; the board
+// itself is cached for a minute, which is far finer than it changes (audit D-09).
+const LEADERBOARD_TTL_MS = 60 * 1000;
+let _leaderboardCache = { at: 0, data: null };
 app.get('/api/leaderboard', async (req, res) => {
   try {
-    // Opportunistically award last month's winner (idempotent, cron-less).
-    db.leaderboard.awardLastMonthWinner().catch(() => {});
+    if (_leaderboardCache.data && Date.now() - _leaderboardCache.at < LEADERBOARD_TTL_MS) {
+      return res.json(_leaderboardCache.data);
+    }
     const list = await db.leaderboard.topReferrers(10);
-    res.json(list.map(u => ({
+    const out = list.map(u => ({
       name: (u.name || 'A friend').split(' ')[0],
       referralCount: u.referralCount,
-    })));
+    }));
+    _leaderboardCache = { at: Date.now(), data: out };
+    res.json(out);
   } catch (e) { fail(res, e, req); }
 });
 
@@ -2556,11 +2587,9 @@ app.get('/api/birthday/gifts', requireAuth, customerOnly, async (req, res) => {
   try {
     const { cfg, eligible } = await birthdayGiftStatus(req.user);
     if (!eligible) return res.json({ eligible: false, products: [] });
-    const products = [];
-    for (const id of cfg.productIds) {
-      const p = await db.products.get(id);
-      if (p && (p.stock == null || p.stock > 0)) products.push(p);
-    }
+    // One query for the whole gift list rather than one per id (audit D-09).
+    const found = await db.products.listByIds(cfg.productIds);
+    const products = found.filter((p) => p && (p.stock == null || p.stock > 0));
     res.json({ eligible: products.length > 0, products });
   } catch (e) { fail(res, e, req); }
 });
