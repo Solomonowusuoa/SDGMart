@@ -45,6 +45,10 @@ const REQUIRED_SCHEMA = [
   ['orders',   'delivery_slot',       'supabase-schema-tweaks.sql',          true],
   ['orders',   'client_request_id',   'supabase-schema-order-idempotency.sql', false],
   ['users',    'referred_by',         'supabase-schema-referrals.sql',       true],
+  // The A-18 concurrency fix claims this column before paying a referrer. If
+  // it were missing the CAS would throw into a catch and credit would silently
+  // never be paid, so the drift check has to see it too.
+  ['users',    'referral_credited',   'supabase-schema-referrals.sql',       true],
   ['users',    'first_order_done',    'supabase-schema-additions.sql',       true],
   ['users',    'birthday_gift_claimed_year', 'supabase-schema-tweaks.sql',   true],
   ['carts',    'items',               'supabase-schema-cart.sql',            true],
@@ -133,6 +137,31 @@ async function verifyPassword(plain, stored) {
 const DUMMY_PASSWORD_HASH = '0'.repeat(32) + ':' + '0'.repeat(SCRYPT_KEYLEN * 2);
 async function burnPasswordTiming(plain) {
   try { await verifyPassword(String(plain || ''), DUMMY_PASSWORD_HASH); } catch (_) {}
+}
+
+// ── Business timezone (audit B-11) ───────────────────────────────────────
+// Delivery dates used toISOString() (UTC) while the noon cutoff used
+// getHours() (server-local). They agreed only because Render happens to run
+// UTC and Ghana has no daylight saving — an accident nothing in code, config
+// or docs recorded, so setting TZ or moving region would have silently shifted
+// the cutoff and dated orders to the wrong day. Both now come from one
+// explicit zone. Stored instants were always correct (timestamptz throughout);
+// only the derivation of "today" and "past noon" was ambiguous.
+const BUSINESS_TZ = process.env.BUSINESS_TZ || 'Africa/Accra';
+const _dateFmt = new Intl.DateTimeFormat('en-CA', {
+  timeZone: BUSINESS_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+});
+const _hourFmt = new Intl.DateTimeFormat('en-GB', {
+  timeZone: BUSINESS_TZ, hour: '2-digit', hour12: false,
+});
+// YYYY-MM-DD in the business timezone. en-CA formats exactly that way.
+function businessDate(d = new Date()) { return _dateFmt.format(d); }
+// 0-23 in the business timezone.
+function businessHour(d = new Date()) { return parseInt(_hourFmt.format(d), 10); }
+// Shift by whole days and re-derive — safe across any future DST change.
+function businessDatePlus(days, d = new Date()) {
+  const shifted = new Date(d.getTime() + days * 86400000);
+  return businessDate(shifted);
 }
 
 // ── camelCase ↔ snake_case helpers ───────────────────────────────────────
@@ -622,6 +651,11 @@ const riders = {
 };
 
 async function createRider({ name, email, phone, password }) {
+  // Audit B-14: this route never ran the strength check, so rider accounts —
+  // which reach customer-facing order data — could have one-character
+  // passwords. Same rules as every other account.
+  const pwErr = validatePasswordStrength(password);
+  if (pwErr) throw new Error(pwErr);
   const { data, error } = await sb.from('riders').insert({
     name, email: String(email).toLowerCase().trim(), phone, password_hash: await hashPassword(password),
   }).select().single();
@@ -832,8 +866,8 @@ const orders = {
   },
   async assignQueuedForToday() {
     const now = new Date();
-    if (now.getHours() < 12) return [];
-    const today = now.toISOString().slice(0, 10);
+    if (businessHour(now) < 12) return [];
+    const today = businessDate(now);
     const { data, error } = await sb.from('orders').select('*')
       .eq('status', 'queued').is('rider_id', null).not('location', 'is', null)
       .or(`delivery_date.is.null,delivery_date.lte.${today}`);
@@ -927,16 +961,40 @@ const searchLog = {
 };
 
 // ── Recurring orders ─────────────────────────────────────────────────────
+const MIN_CADENCE_DAYS = 1;
+const MAX_CADENCE_DAYS = 90;
+const MAX_SCHEDULE_AHEAD_DAYS = 365;
+const MAX_ACTIVE_RECURRING = 10;
 const recurring = {
   async listForUser(userId) {
     const { data, error } = await sb.from('recurring_orders').select('*').eq('user_id', userId).order('next_run_at');
     if (error) throw error;
     return rowsOut(data);
   },
+  // Audit B-10: next_run_at went in unvalidated, so a past date made the row
+  // due on the very next sweep — and with no cap on rows per user, a few
+  // hundred back-dated rows became a few hundred real cash orders in one
+  // runDailyJobs pass. Cadence and horizon are now bounded, and a user can
+  // only hold so many active schedules.
   async create({ userId, items, cadenceDays, nextRunAt, deliveryInfo }) {
+    // Reject a non-numeric cadence rather than clamping it: `parseInt('abc') || 0`
+    // then clamped upward would have quietly become 1 — a daily order.
+    const rawCadence = parseInt(cadenceDays, 10);
+    if (!Number.isFinite(rawCadence)) throw new Error('cadenceDays must be a number of days.');
+    const cadence = Math.min(Math.max(rawCadence, MIN_CADENCE_DAYS), MAX_CADENCE_DAYS);
+    const run = String(nextRunAt || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(run)) throw new Error('nextRunAt must be a YYYY-MM-DD date.');
+    // Never in the past (that is the immediate-fire bug) and never further out
+    // than a year, which is well past any real reorder.
+    const today = businessDate();
+    if (run < today) throw new Error('nextRunAt cannot be in the past.');
+    if (run > businessDatePlus(MAX_SCHEDULE_AHEAD_DAYS)) throw new Error('nextRunAt is too far ahead.');
+    const { count } = await sb.from('recurring_orders')
+      .select('id', { count: 'exact', head: true }).eq('user_id', userId).eq('active', true);
+    if (Number(count || 0) >= MAX_ACTIVE_RECURRING) throw new Error('You already have ' + MAX_ACTIVE_RECURRING + ' active auto-reorders. Pause or delete one first.');
     const { data, error } = await sb.from('recurring_orders').insert({
-      user_id: userId, items, cadence_days: cadenceDays,
-      next_run_at: nextRunAt, delivery_info: deliveryInfo || null,
+      user_id: userId, items: Array.isArray(items) ? items.slice(0, 100) : items, cadence_days: cadence,
+      next_run_at: run, delivery_info: deliveryInfo || null,
     }).select().single();
     if (error) throw error;
     return rowOut(data);
@@ -1062,9 +1120,15 @@ const addresses = {
       if (!count) isDefault = true;
     }
     if (isDefault) await sb.from('addresses').update({ is_default: false }).eq('user_id', userId);
-    const { data, error } = await sb.from('addresses').insert({
-      user_id: userId, label, neighborhood, address, location: location || null, is_default: !!isDefault,
-    }).select().single();
+    const insert = { user_id: userId, label, neighborhood, address, location: location || null, is_default: !!isDefault };
+    let { data, error } = await sb.from('addresses').insert(insert).select().single();
+    // With the partial unique index in place (audit B-13) a concurrent save
+    // that also cleared and claimed the default loses here instead of leaving
+    // two defaults behind. Re-clear and retry once; the row still gets saved.
+    if (error && isDefault && /unique|duplicate/i.test(error.message || '')) {
+      await sb.from('addresses').update({ is_default: false }).eq('user_id', userId);
+      ({ data, error } = await sb.from('addresses').insert(insert).select().single());
+    }
     if (error) throw error;
     return rowOut(data);
   },
@@ -1078,7 +1142,11 @@ const addresses = {
       if (Object.prototype.hasOwnProperty.call(patch || {}, k)) safe[k] = patch[k];
     }
     if (safe.isDefault) await sb.from('addresses').update({ is_default: false }).eq('user_id', userId);
-    const { data, error } = await sb.from('addresses').update(rowIn(safe)).eq('id', id).eq('user_id', userId).select().single();
+    let { data, error } = await sb.from('addresses').update(rowIn(safe)).eq('id', id).eq('user_id', userId).select().single();
+    if (error && safe.isDefault && /unique|duplicate/i.test(error.message || '')) {
+      await sb.from('addresses').update({ is_default: false }).eq('user_id', userId);
+      ({ data, error } = await sb.from('addresses').update(rowIn(safe)).eq('id', id).eq('user_id', userId).select().single());
+    }
     if (error) throw error;
     return rowOut(data);
   },
@@ -1150,13 +1218,23 @@ const reviews = {
   },
   // Order-level review ("how was your order?") — product_id NULL marks it.
   // Requires supabase-schema-order-reviews.sql (product_id made nullable).
+  // reviews_one_per_order (audit B-13) now makes a second review of the same
+  // order a unique violation rather than a silent duplicate. Turn that into
+  // something the customer can read instead of a 500.
   async createForOrder({ userId, orderId, rating, message }) {
     const { data, error } = await sb.from('reviews').insert({
       user_id: userId, product_id: null, order_id: orderId,
       rating: Math.max(1, Math.min(5, parseInt(rating))),
       message: (message || '').slice(0, 800),
     }).select().single();
-    if (error) throw error;
+    if (error) {
+      if (/unique|duplicate/i.test(error.message || '')) {
+        const e = new Error('You have already rated this order.');
+        e.status = 409;
+        throw e;
+      }
+      throw error;
+    }
     return rowOut(data);
   },
   // Returns recent delivered ORDERS the user hasn't reviewed yet (one prompt
@@ -1280,8 +1358,9 @@ const metrics = {
     const nonCancelled = orders.filter(o => o.status !== 'cancelled');
     const delivered = orders.filter(o => o.status === 'delivered');
 
-    // Per-day buckets (oldest → newest)
-    const dayKey = (d) => new Date(d).toISOString().slice(0, 10);
+    // Per-day buckets (oldest → newest), bucketed by the business day so the
+    // dashboard's "today" matches the shop's, not the server's (audit B-11).
+    const dayKey = (d) => businessDate(new Date(d));
     const buckets = {};
     for (let i = days - 1; i >= 0; i--) {
       const k = dayKey(Date.now() - i * 86400000);
@@ -1411,7 +1490,17 @@ const referrals = {
         expect: { loyalty_balance: money(cur.loyaltyBalance) },
         value: true,
       }));
-    } catch (e) { console.warn('referral credit failed (run schema-referrals.sql?):', e.message); }
+    } catch (e) {
+      // This is money owed to a real person. It used to warn and vanish
+      // (audit E-10); now it is recorded where someone will see it.
+      console.error('REFERRAL CREDIT FAILED for referee ' + refereeUser.id + ' → referrer ' + refereeUser.referredBy + ':', e.message);
+      try {
+        await errorLog.record({
+          message: 'REFERRAL CREDIT FAILED: referee ' + refereeUser.id + ' -> referrer ' + refereeUser.referredBy + ' (GHS 5 not paid): ' + e.message,
+          path: 'referrals.creditFirstPurchase', method: 'JOB', status: 500, userId: refereeUser.id,
+        });
+      } catch (_) {}
+    }
   },
 };
 
@@ -1469,7 +1558,13 @@ const errorLog = {
         status: status || null,
         user_id: userId || null,
       });
-    } catch (_) { /* never let logging throw */ }
+    } catch (e) {
+      // Logging must never throw, but failing invisibly meant the error log
+      // could be dead for weeks with nothing to show it (audit E-10). The
+      // console is the one sink that cannot itself be down.
+      console.error('ERROR LOG WRITE FAILED — the error below was never recorded:', e.message);
+      console.error('   ', String(message || '').slice(0, 300));
+    }
   },
   async list(limit = 100) {
     const { data, error } = await sb.from('error_logs').select('*').order('created_at', { ascending: false }).limit(limit);
@@ -1656,6 +1751,7 @@ module.exports = {
   rowOut, rowsOut,
   hashPassword, verifyPassword, burnPasswordTiming, validatePasswordStrength,
   rateCheck, rateClear,
+  businessDate, businessHour, businessDatePlus, BUSINESS_TZ,
   makeEmailToken, consumeEmailToken,
   createRider, attachOrderLocation,
   uploadProductPhoto, sniffImageType, cancelOrder,

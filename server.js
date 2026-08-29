@@ -598,6 +598,8 @@ app.get('/api/products/:id', async (req, res) => {
 app.post('/api/products', requireAdmin, async (req, res) => {
   try {
     const { name, category, price, unit, bestBefore, stock, description, bestseller, lowStockThreshold } = req.body;
+    const vErr = validateProductFields({ price, stock, lowStockThreshold });
+    if (vErr) return res.status(400).json({ error: vErr });
     const created = await db.products.create({ name, category, price: parseFloat(price), unit, bestBefore, stock: parseInt(stock) || 0, description: description || '', bestseller: !!bestseller, lowStockThreshold: lowStockThreshold != null ? parseInt(lowStockThreshold) : undefined });
     invalidateCatalog();
     res.status(201).json({ ...created, bestseller: !!created.bestseller });
@@ -607,6 +609,8 @@ app.post('/api/products', requireAdmin, async (req, res) => {
 app.put('/api/products/:id', requireAdmin, async (req, res) => {
   try {
     const { name, category, price, unit, bestBefore, stock, description, bestseller, lowStockThreshold } = req.body;
+    const vErr = validateProductFields({ price, stock, lowStockThreshold });
+    if (vErr) return res.status(400).json({ error: vErr });
     const updated = await db.products.update(req.params.id, { name, category, price: parseFloat(price), unit, bestBefore, stock: parseInt(stock) || 0, description: description || '', bestseller: !!bestseller, ...(lowStockThreshold != null ? { lowStockThreshold: parseInt(lowStockThreshold) } : {}) });
     invalidateCatalog();
     res.json({ ...updated, bestseller: !!updated.bestseller });
@@ -651,6 +655,25 @@ async function birthdayGiftStatus(user) {
 const STANDARD_DELIVERY = 10;
 const FREE_DELIVERY_MIN = 150;
 const FIRST_ORDER_FREE_MIN = 50; // first-order free delivery only when the order is ≥ this (GHS)
+
+// Audit B-14: product writes took parseFloat(price) with no floor and no CHECK
+// behind them. computeOrderPricing already clamps a line to >= 0, so a
+// negative price could not drive a cart total down, but it would still show
+// as a negative price in the catalogue and in every admin figure.
+function validateProductFields({ price, stock, lowStockThreshold }) {
+  const p = parseFloat(price);
+  if (!Number.isFinite(p) || p < 0) return 'Price must be a number of 0 or more.';
+  if (p > 100000) return 'Price looks wrong — over GHS 100,000.';
+  if (stock != null && stock !== '') {
+    const st = parseInt(stock, 10);
+    if (!Number.isFinite(st) || st < 0) return 'Stock cannot be negative.';
+  }
+  if (lowStockThreshold != null && lowStockThreshold !== '') {
+    const t = parseInt(lowStockThreshold, 10);
+    if (!Number.isFinite(t) || t < 0) return 'Low-stock threshold cannot be negative.';
+  }
+  return null;
+}
 // A cart cannot legitimately contain more distinct products than this; the cap
 // exists so one request cannot be turned into an unbounded amount of work.
 const MAX_ORDER_LINES = 100;
@@ -932,19 +955,19 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
   const now = new Date();
   // Scheduled delivery: customer may choose a future date (within 7 days) + a
   // time slot. Otherwise fall back to same-day / next-day on the 12:00 cutoff.
-  const todayStr = now.toISOString().slice(0, 10);
-  const maxDate = new Date(now); maxDate.setDate(maxDate.getDate() + 7);
-  const maxStr = maxDate.toISOString().slice(0, 10);
+  // Both the date and the cutoff below come from the business timezone. They
+  // used to mix toISOString() (UTC) with getHours() (server-local) and agreed
+  // only because Render runs UTC and Ghana has no DST (audit B-11).
+  const todayStr = db.businessDate(now);
+  const maxStr = db.businessDatePlus(7, now);
   let deliveryDateStr, deliverySlot = null, priority;
   if (reqDate && /^\d{4}-\d{2}-\d{2}$/.test(reqDate) && reqDate > todayStr && reqDate <= maxStr) {
     deliveryDateStr = reqDate;
     deliverySlot = reqSlot ? String(reqSlot).slice(0, 20) : null;
     priority = false;
   } else {
-    const afterCutoff = now.getHours() >= 12;
-    const d = new Date(now);
-    if (afterCutoff) d.setDate(d.getDate() + 1);
-    deliveryDateStr = d.toISOString().slice(0, 10);
+    const afterCutoff = db.businessHour(now) >= 12;
+    deliveryDateStr = afterCutoff ? db.businessDatePlus(1, now) : db.businessDate(now);
     priority = afterCutoff;
   }
   const loc = location && typeof location.lat === 'number' ? location : null;
@@ -1127,7 +1150,7 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
 app.get('/api/admin/revenue', requireAdmin, async (req, res) => {
   try {
     const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || ''))
-      ? req.query.date : new Date().toISOString().slice(0, 10);
+      ? req.query.date : db.businessDate();
     const [dayOrders, riders] = await Promise.all([db.orders.forDay(date), db.riders.list()]);
     const riderName = new Map(riders.map((r) => [String(r.id), r.name]));
 
@@ -1288,7 +1311,7 @@ app.delete('/api/admin/payments/orphans/:reference', requireAdmin, async (req, r
 // runDailyJobs (see below) — there's no real cron on this host.
 function serverOrderCode(id) { return 'SDG-' + String(id).replace(/\D/g, '').padStart(5, '0'); }
 async function runRecurringOrders() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = db.businessDate();
   let due = [];
   try {
     const { data, error } = await db.sb.from('recurring_orders')
@@ -1326,9 +1349,8 @@ async function runRecurringOrders() {
 
       // Advance the schedule regardless of outcome — a bad run must not
       // retry forever and spam the customer daily.
-      const next = new Date();
-      next.setDate(next.getDate() + Math.max(1, Number(r.cadenceDays) || 14));
-      await db.sb.from('recurring_orders').update({ next_run_at: next.toISOString().slice(0, 10) }).eq('id', r.id);
+      const nextRun = db.businessDatePlus(Math.max(1, Number(r.cadenceDays) || 14));
+      await db.sb.from('recurring_orders').update({ next_run_at: nextRun }).eq('id', r.id);
 
       if (!validItems.length) {
         await pushToUser(user.id, {
@@ -1605,8 +1627,13 @@ app.post('/api/auth/signup', rateLimitIp('signup', LIMIT_SIGNUP), async (req, re
     const u = await db.users.create({ name, email, phone, password, refCode, role: 'customer' });
     // Email verification is disabled — accounts are usable immediately. Mark
     // verified so no banner/gate ever appears.
-    try { await db.users.markEmailVerified(u.id); } catch (_) {}
-    u.emailVerified = true;
+    // This used to swallow the failure and tell the client emailVerified:true
+    // regardless, so the account and the response disagreed from the first
+    // second (audit E-10). Report what the database actually holds.
+    let verified = false;
+    try { await db.users.markEmailVerified(u.id); verified = true; }
+    catch (e) { console.error('signup: markEmailVerified failed for user ' + u.id + ':', e.message); }
+    u.emailVerified = verified;
     const token = await db.sessions.create(u.id);
     res.status(201).json({ user: publicUser(u), token, message: 'Account created — welcome to SDGMart!' });
   } catch (e) { fail(res, e, req, '/api/auth/signup'); }
@@ -1867,7 +1894,7 @@ async function runDailyJobs() {
   // config read, so two concurrent /healthz hits both got past it.
   if (_dailyJobRunning) return;
   _dailyJobRunning = true;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = db.businessDate();
   try {
     // Claim the day in the database, not in memory. The in-process flag only
     // guards one process; this is what actually decides the winner when

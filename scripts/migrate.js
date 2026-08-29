@@ -80,6 +80,7 @@ const ORDER = [
   'supabase-schema-order-idempotency.sql',
   'supabase-schema-indexes-and-email.sql',
   'supabase-schema-constraints.sql',
+  'supabase-schema-constraints-2.sql',
 ];
 
 const sha = (t) => crypto.createHash('sha256').update(t).digest('hex').slice(0, 16);
