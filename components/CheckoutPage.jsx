@@ -124,19 +124,36 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // null | 'network' | 'server' — drives the retry panel above the buttons.
   const [submitError, setSubmitError] = React.useState(null);
 
-  React.useEffect(() => {
-    fetch('/api/paystack/config').then(r => r.ok ? r.json() : {}).then(cfg => {
+  // Whether the payment options are known, or merely absent because the
+  // request failed. Without this the two are indistinguishable on screen.
+  const [payConfigFailed, setPayConfigFailed] = React.useState(false);
+  const loadPaystackConfig = React.useCallback(async () => {
+    try {
+      const r = await fetch('/api/paystack/config');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const cfg = await r.json();
+      setPayConfigFailed(false);
       if (cfg && cfg.enabled) { setPaystackEnabled(true); setForm(f => ({ ...f, payMethod: 'paystack' })); }
-    }).catch(() => {});
+    } catch (e) {
+      setPayConfigFailed(true);
+      reportClientError('checkout: payment config failed', e);
+    }
   }, []);
+  React.useEffect(() => { loadPaystackConfig(); }, [loadPaystackConfig]);
 
   React.useEffect(() => {
-    fetch('/api/delivery/slots').then(r => r.ok ? r.json() : {}).then(d => { if (Array.isArray(d.slots)) setSlots(d.slots); }).catch(() => {});
+    // A missing slot list degrades to the default slot, which is honest — but
+    // it should still be visible in the error log rather than nowhere.
+    fetch('/api/delivery/slots').then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+      .then(d => { if (Array.isArray(d.slots)) setSlots(d.slots); })
+      .catch(e => reportClientError('checkout: delivery slots failed', e));
   }, []);
 
   React.useEffect(() => {
     if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
-    apiFetch('/api/birthday/gifts').then(r => r.ok ? r.json() : {}).then(d => { if (d && d.eligible) setBdayGifts({ eligible: true, products: d.products || [] }); }).catch(() => {});
+    apiFetch('/api/birthday/gifts').then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+      .then(d => { if (d && d.eligible) setBdayGifts({ eligible: true, products: d.products || [] }); })
+      .catch(e => reportClientError('checkout: birthday gifts failed', e));
   }, []);
 
   const [form, setForm] = React.useState({
@@ -908,6 +925,18 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
               <div style={{ marginBottom: 24 }}>
                 <div style={{ ...ckLbl, marginBottom: 12 }}>Payment Method</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {payConfigFailed && !paystackEnabled && (
+                    <div style={{ ...ckNotice('var(--accent)'), marginBottom: 0 }}>
+                      <div style={{ fontSize: 12, color: 'var(--rd-body)', lineHeight: 1.5 }}>
+                        We couldn't check whether online payment is available just now.
+                        Cash on delivery still works.{' '}
+                        <button onClick={loadPaystackConfig}
+                          style={{ background: 'none', border: 'none', padding: 0, font: 'inherit', fontWeight: 700, color: 'var(--ink)', textDecoration: 'underline', cursor: 'pointer' }}>
+                          Try again
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   {paystackEnabled && (
                     <button onClick={() => set('payMethod', 'paystack')}
                       style={{ textAlign: 'left', padding: '14px 16px', border: form.payMethod === 'paystack' ? '2px solid var(--ink)' : '1px solid var(--border-input)', background: '#fff', cursor: 'pointer' }}>

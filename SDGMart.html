@@ -222,6 +222,38 @@ img{display:block;max-width:100%}
   font-family: inherit;
 }
 #pwa-btn-dismiss:hover { background: rgba(255,255,255,.25); }
+
+/* ── Keyboard focus (audit F-07) ────────────────────────────────────────
+   The foundations here are sound — real buttons outnumber clickable divs
+   seventeen to one, every image has an alt, prefers-reduced-motion is
+   respected. But there was no :focus or :focus-visible rule anywhere, and
+   because every control is styled inline against custom backgrounds, keyboard
+   focus was at best whatever the browser drew over a coloured surface, and
+   often invisible.
+
+   :focus-visible, not :focus — a mouse click on a button should not leave a
+   ring behind, which is why the plain :focus outline was removed from designs
+   in the first place. This shows the ring for keyboard and assistive
+   navigation only. */
+:focus-visible {
+  outline: 3px solid #c9591f;          /* --accent; literal so this works before tokens load */
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+/* On dark surfaces the orange alone is low-contrast; the white companion ring
+   guarantees a visible edge on both. */
+.rd-dark :focus-visible,
+[data-theme="dark"] :focus-visible,
+footer :focus-visible {
+  outline-color: #fff;
+  box-shadow: 0 0 0 5px rgba(201, 89, 31, .55);
+}
+/* Skip-to-content: present for keyboard users, out of the way for everyone. */
+.skip-link {
+  position: absolute; left: -9999px; top: 0; z-index: 10000;
+  background: #000; color: #fff; padding: 10px 16px; font-weight: 700;
+}
+.skip-link:focus { left: 8px; top: 8px; }
 </style>
 
 <div id="pwa-install-banner" role="banner" aria-label="Install SDGMart app">

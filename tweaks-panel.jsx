@@ -136,6 +136,33 @@ const __TWEAKS_STYLE = `
 // ── useTweaks ───────────────────────────────────────────────────────────────
 // Single source of truth for tweak values. setTweak persists via the host
 // (__edit_mode_set_keys → host rewrites the EDITMODE block on disk).
+// ── Design-tool host protocol (audit G-07) ──────────────────────────────
+// This panel is tooling from the design-refresh workflow, driven by a host
+// page that frames the app. The message listener used to accept a message
+// from ANY origin, and the three posts went to window.parent with a '*'
+// target.
+//
+// The original finding called the whole file dead code; that was wrong —
+// App.jsx uses useTweaks() for the active theme, and dropping it from the
+// bundle crashed the app. What stands is this listener.
+//
+// A-17 now sends frame-ancestors 'none', so in production the app cannot be
+// framed and none of this can run. Belt and braces anyway: engage only when
+// actually embedded by a host we recognise, and address the parent by its
+// real origin rather than '*'.
+//
+// Module scope, not component scope: useTweaks() posts edits too, and it is a
+// separate function from TweaksPanel.
+const HOST_ORIGIN = (() => {
+  try {
+    if (typeof window === 'undefined') return null;
+    if (window.parent === window) return null;            // not framed
+    if (!document.referrer) return null;                  // no verifiable host
+    const origin = new URL(document.referrer).origin;
+    return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ? origin : null;
+  } catch (_) { return null; }
+})();
+
 function useTweaks(defaults) {
   const [values, setValues] = React.useState(defaults);
   // Accepts either setTweak('key', value) or setTweak({ key: value, ... }) so a
@@ -145,7 +172,7 @@ function useTweaks(defaults) {
     const edits = typeof keyOrEdits === 'object' && keyOrEdits !== null
       ? keyOrEdits : { [keyOrEdits]: val };
     setValues((prev) => ({ ...prev, ...edits }));
-    window.parent.postMessage({ type: '__edit_mode_set_keys', edits }, '*');
+    if (HOST_ORIGIN) window.parent.postMessage({ type: '__edit_mode_set_keys', edits }, HOST_ORIGIN);
   }, []);
   return [values, setTweak];
 }
@@ -189,20 +216,36 @@ function TweaksPanel({ title = 'Tweaks', children }) {
     return () => ro.disconnect();
   }, [open, clampToViewport]);
 
+  // ── Design-tool host protocol (audit G-07) ────────────────────────────
+  // This panel is tooling from the design-refresh workflow, driven by a host
+  // page that frames the app. The listener used to accept a message from ANY
+  // origin and the three posts went to window.parent with a '*' target.
+  //
+  // The original finding called the whole file dead code; that was wrong —
+  // App.jsx uses useTweaks() for the active theme, and dropping it from the
+  // bundle crashed the app. What stands is this listener.
+  //
+  // A-17 now sends frame-ancestors 'none', so in production the app cannot be
+  // framed and none of this can run at all. Belt and braces anyway: engage
+  // only when actually embedded by a host we recognise, and address the
+  // parent by its real origin rather than '*'.
+
   React.useEffect(() => {
+    if (!HOST_ORIGIN) return;
     const onMsg = (e) => {
+      if (e.origin !== HOST_ORIGIN || e.source !== window.parent) return;
       const t = e?.data?.type;
       if (t === '__activate_edit_mode') setOpen(true);
       else if (t === '__deactivate_edit_mode') setOpen(false);
     };
     window.addEventListener('message', onMsg);
-    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+    window.parent.postMessage({ type: '__edit_mode_available' }, HOST_ORIGIN);
     return () => window.removeEventListener('message', onMsg);
   }, []);
 
   const dismiss = () => {
     setOpen(false);
-    window.parent.postMessage({ type: '__edit_mode_dismissed' }, '*');
+    if (HOST_ORIGIN) window.parent.postMessage({ type: '__edit_mode_dismissed' }, HOST_ORIGIN);
   };
 
   const onDragStart = (e) => {

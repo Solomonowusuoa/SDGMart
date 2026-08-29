@@ -44,6 +44,7 @@ const FeedbackBox = ({ dark }) => {
           <>
             <textarea value={msg} onChange={e => { setMsg(e.target.value); if (error) setError(''); }} rows={2} maxLength={1000}
               placeholder="Describe the problem or share your suggestion…"
+              aria-label="Your feedback"
               style={{ width: '100%', minHeight: 56, padding: '14px', border: '1px solid var(--dark-rule)', background: 'transparent', color: '#fff', fontFamily: 'var(--f-ui)', fontSize: 13.5, outline: 'none', resize: 'vertical' }} />
             {error && <div style={{ fontSize: 12.5, color: 'var(--accent-light)' }}>{error}</div>}
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', paddingTop: 2 }}>
@@ -84,6 +85,7 @@ const FeedbackBox = ({ dark }) => {
             value={msg}
             onChange={e => { setMsg(e.target.value); if (error) setError(''); }}
             placeholder="Describe the problem or share your suggestion…"
+              aria-label="Your feedback"
             rows={3}
             maxLength={1000}
             style={{ width: '100%', padding: '11px 14px', borderRadius: 10, border: '1.5px solid var(--cream-dark)', fontSize: 14, outline: 'none', resize: 'vertical', fontFamily: 'inherit', background: 'var(--white)', color: 'inherit' }}

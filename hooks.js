@@ -1,3 +1,30 @@
+// ── Client error reporting (audit F-05) ─────────────────────────────────
+// Thirty-one catches in the client swallowed their error entirely, four of
+// them on the checkout screen where the result changes what the customer is
+// offered. Where a failure genuinely is recoverable and the UI degrades
+// honestly, it still belongs in the error log rather than nowhere.
+//
+// Declared here because the bundle is a plain concatenation into one scope
+// (see buildAppBundle), so this hoists for every component file.
+//
+// Deliberately fire-and-forget and never throws: a reporting failure must not
+// become a second error on top of the first.
+function reportClientError(what, err) {
+  try {
+    console.warn(what, err);
+    const message = String(what) + ': ' + String((err && err.message) || err || 'unknown');
+    fetch('/api/client-error', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: message.slice(0, 500),
+        stack: String((err && err.stack) || '').slice(0, 2000),
+        path: (typeof location !== 'undefined' && location.pathname) || '',
+      }),
+    }).catch(() => {});
+  } catch (_) { /* reporting must never throw */ }
+}
+
 // Global hooks — loaded before any component, available on window
 
 // Human-friendly order code derived from the real DB order id, e.g. SDG-00017.

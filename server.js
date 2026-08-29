@@ -514,7 +514,8 @@ async function getOrderItemCounts() {
 // mutations call invalidateCatalog() so edits still appear immediately.
 const CATALOG_TTL_MS = 60 * 1000;
 let _catalogCache = { js: null, at: 0 };
-function invalidateCatalog() { _catalogCache = { js: null, at: 0 }; }
+let _catalogJsonCache = { data: null, at: 0 };
+function invalidateCatalog() { _catalogCache = { js: null, at: 0 }; _catalogJsonCache = { data: null, at: 0 }; }
 app.get('/data/products.js', async (req, res) => {
   try {
     if (_catalogCache.js && Date.now() - _catalogCache.at < CATALOG_TTL_MS) {
@@ -563,6 +564,28 @@ if (typeof window !== 'undefined') {
     console.error('products.js failed:', e);
     res.status(500).send('// error loading products');
   }
+});
+
+// Audit F-06/C-09: /data/products.js is a <script>, so the client cannot
+// re-read it without eval — which the A-17 CSP rightly does not allow. This
+// serves the same shopper catalogue as JSON so a PWA returning from the
+// background can refresh prices and stock. Shares the 5-minute cache and is
+// invalidated by the same admin writes.
+app.get('/api/catalog', async (req, res) => {
+  try {
+    if (_catalogJsonCache.data && Date.now() - _catalogJsonCache.at < CATALOG_TTL_MS) {
+      return res.json(_catalogJsonCache.data);
+    }
+    const products = (await db.products.listForCatalog())
+      .map(p => ({ ...p, bestseller: !!p.bestseller, img: p.img || null }));
+    const payload = {
+      products,
+      showFreshness: !!(await db.appConfig.get('show_freshness')),
+      showStock: !!(await db.appConfig.get('deduct_stock')),
+    };
+    _catalogJsonCache = { data: payload, at: Date.now() };
+    res.json(payload);
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Products API ─────────────────────────────────────────────────────────

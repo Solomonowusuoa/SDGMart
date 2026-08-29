@@ -184,7 +184,7 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
     return [...flagged, ...pool.filter(p => !p.bestseller)].slice(0, 10);
   });
   React.useEffect(() => {
-    fetch('/api/products/top?limit=10').then(r => r.json()).then(d => { if (Array.isArray(d) && d.length) setBestsellers(d); }).catch(() => {});
+    fetch('/api/products/top?limit=10').then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))).then(d => { if (Array.isArray(d) && d.length) setBestsellers(d); }).catch(e => reportClientError('home: bestsellers failed', e));
   }, []);
 
   // Essentials
@@ -196,8 +196,8 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
   const [deliveredCount, setDeliveredCount] = React.useState(null);
   const [promos, setPromos] = React.useState([]);
   React.useEffect(() => {
-    fetch('/api/stats/delivered-count').then(r => r.ok ? r.json() : { count: 0 }).then(d => setDeliveredCount(d.count)).catch(() => {});
-    fetch('/api/promotions/active').then(r => r.ok ? r.json() : []).then(setPromos).catch(() => {});
+    fetch('/api/stats/delivered-count').then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))).then(d => setDeliveredCount(d.count)).catch(e => reportClientError('home: delivered count failed', e));
+    fetch('/api/promotions/active').then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))).then(setPromos).catch(e => reportClientError('home: promotions failed', e));
     const t = setInterval(() => fetch('/api/stats/delivered-count').then(r => r.ok ? r.json() : null).then(d => d && setDeliveredCount(d.count)).catch(() => {}), 60000);
     return () => clearInterval(t);
   }, []);

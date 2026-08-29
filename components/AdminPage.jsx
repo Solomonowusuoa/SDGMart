@@ -672,7 +672,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
 
             {/* Recent orders */}
             <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 20, fontWeight: 700, marginBottom: 14 }}>Recent Orders</h2>
-            <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
+            <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow)', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: 'var(--cream-dark)' }}>
@@ -942,7 +942,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                   </button>
                 </div>
               </div>
-              <div style={{ maxHeight: 500, overflowY: 'auto' }}>
+              <div style={{ maxHeight: 500, overflowY: 'auto', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead style={{ position: 'sticky', top: 0, background: 'var(--cream-dark)', zIndex: 1 }}>
                     <tr>
@@ -1561,7 +1561,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                     {d}d
                   </button>
                 ))}
-                <button onClick={loadMetrics} style={{ fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 8, background: 'var(--cream)', color: 'var(--warm-gray)' }}>↻</button>
+                <button onClick={loadMetrics} aria-label="Refresh metrics" title="Refresh metrics" style={{ fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 8, background: 'var(--cream)', color: 'var(--warm-gray)' }}>↻</button>
               </div>
             </div>
 
@@ -2063,6 +2063,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
               {riders.length === 0 ? (
                 <div style={{ fontSize: 13, color: 'var(--warm-gray)', padding: 14 }}>No riders yet. Create one above.</div>
               ) : (
+                <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid var(--cream-dark)', textAlign: 'left' }}>
@@ -2090,6 +2091,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                     ))}
                   </tbody>
                 </table>
+                </div>
               )}
             </div>
           </div>
