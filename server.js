@@ -443,6 +443,46 @@ function newestSourceMtime(files = BUNDLE_FILES) {
   return newest;
 }
 
+// ── Build id for the service worker (audit G-05) ────────────────────────
+// Every release used to require hand-editing CACHE_NAME in sw.js. Forget it
+// and phones keep serving the PREVIOUS bundle from cache while the server
+// happily serves the new one — with nothing to say so. That is exactly what
+// happened during v81 testing (HANDOFF). A release step that depends on
+// remembering will eventually run without it, and this one fails silently.
+//
+// So the server fills the version in, from three sources in order of how
+// trustworthy they are:
+//   1. RENDER_GIT_COMMIT — set by Render on every deploy. Exact.
+//   2. .git/HEAD, read directly (no subprocess, git need not be installed).
+//   3. Newest mtime across everything we serve. Always available; on a fresh
+//      clone this is checkout time, so it changes each deploy regardless.
+// A redundant cache bust costs one download. A missed one strands every
+// installed phone on stale code, so the fallbacks err towards busting.
+let _buildId = null;
+function buildId() {
+  if (_buildId) return _buildId;
+  const short = (v) => String(v).replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
+
+  const fromEnv = process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || '';
+  if (fromEnv) return (_buildId = short(fromEnv));
+
+  try {
+    const head = fs.readFileSync(path.join(__dirname, '.git', 'HEAD'), 'utf8').trim();
+    const m = head.match(/^ref:\s*(.+)$/);
+    const sha = m
+      ? fs.readFileSync(path.join(__dirname, '.git', m[1]), 'utf8').trim()
+      : head;                                   // detached HEAD holds the sha itself
+    if (sha) return (_buildId = short(sha));
+  } catch (_) { /* no .git — a deployed tarball, say */ }
+
+  const newest = Math.max(
+    newestSourceMtime(BUNDLE_FILES),
+    newestSourceMtime(STAFF_BUNDLE_FILES),
+    newestSourceMtime(['SDGMart.html', 'responsive.css', 'sw.js']),
+  );
+  return (_buildId = 't' + short(Math.round(newest).toString(36)));
+}
+
 function buildAppBundle(files = BUNDLE_FILES) {
   if (!_esbuild) _esbuild = require('esbuild');
   // Concatenate sources with a banner per file (helps stack traces).
@@ -2841,7 +2881,16 @@ app.delete('/api/me/recurring/:id', requireAuth, async (req, res) => {
 // it for hours.)
 app.get('/sw.js', (req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
-  res.sendFile(path.join(__dirname, 'sw.js'));
+  res.setHeader('Content-Type', 'application/javascript');
+  try {
+    const src = fs.readFileSync(path.join(__dirname, 'sw.js'), 'utf8');
+    // The literal in the file is a dev placeholder; the deployed version is
+    // stamped here so it can never be forgotten (audit G-05).
+    res.send(src.replace(/const CACHE_NAME = '[^']*';/, "const CACHE_NAME = 'sdgmart-" + buildId() + "';"));
+  } catch (e) {
+    // Serving a stale-but-working service worker beats serving none.
+    res.sendFile(path.join(__dirname, 'sw.js'));
+  }
 });
 
 // ── Legal pages ──────────────────────────────────────────────────────────

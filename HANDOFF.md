@@ -111,7 +111,7 @@ Done: ✅ Paystack LIVE + **first real payment succeeded end-to-end** (order #37
 - **Payments:** **Paystack** (card + mobile money). Inline v2 popup → server `init`/`verify`/`webhook`. See §6.
 - **Email:** Resend (optional; only used for password reset now — signup verification was removed).
 - **Push:** Web Push (VAPID). `sw.js` handles `push`/`notificationclick`.
-- **PWA:** `manifest.json`, `sw.js`. **Bump `CACHE_NAME` in `sw.js` on every deploy** (currently `sdgmart-v39-...`).
+- **PWA:** `manifest.json`, `sw.js`. `CACHE_NAME` is **stamped automatically at serve time** from the git commit (audit G-05) — do not bump it by hand; the literal in the file is a placeholder.
 
 ### Client globals injected by `/data/products.js`
 `window.PRODUCTS`, `CATEGORIES`, `ESSENTIALS`, `NEIGHBORHOODS`, `TOP_IDS_BY_ORDERS`, `SHOW_FRESHNESS`, `LOCATIONIQ_KEY`, `PAYSTACK_PUBLIC_KEY`, `PROMO_MAP` (set by App.jsx), and helper `window.orderCode(id)` → `SDG-00017` (from `hooks.js`).
@@ -151,7 +151,7 @@ Done: ✅ Paystack LIVE + **first real payment succeeded end-to-end** (order #37
 2. Validate the bundle compiles:
    `node -c server.js && node -c database.js` and an esbuild transform of all `BUNDLE_FILES` (see git history for the one-liner).
 3. Verify in the Claude **preview tool** (`preview_start` name `sdgmart`, runs `node server.js` on the local `.env`). Note: locally Paystack shows `enabled:false` (no keys) and LocationIQ falls back to OSM — that's expected.
-4. **Bump `CACHE_NAME` in `sw.js`.**
+4. ~~Bump `CACHE_NAME` in `sw.js`.~~ **No longer needed (2026-08-29, audit G-05).** The server stamps the deployed build id into `sw.js` as it serves it — from `RENDER_GIT_COMMIT`, else `.git/HEAD`, else the newest file mtime. The literal in the file is a dev placeholder. This step is gone because a release step that depends on remembering eventually runs without it, and this one failed silently.
 5. Commit (author: `solomonowusuoa@gmail.com`, co-author line per house style) and `git push`.
 6. Render auto-deploys (~2 min). Hard-refresh (Ctrl+Shift+R) to clear the service worker.
 
