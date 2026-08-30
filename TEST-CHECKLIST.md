@@ -345,3 +345,32 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 - ☐ On **staging only**: `node scripts/migrate.js down supabase-schema-constraints-2.sql`
 - ☐ It reverses, and `status` shows it pending again
 - ☐ `down supabase-schema.sql` refuses, explaining it is not reversible
+
+---
+
+## STEP 10 — Stock reservations (C-10), only before turning own-stock mode ON
+
+The SQL functions have never executed. Run these on **staging** first — they are
+section 9 of `supabase-schema-stock-holds.sql`.
+
+```sql
+select * from stock_available(array[1]);                     -- note `available`
+select hold_stock('[{"id":1,"qty":2}]'::jsonb, 'chk', 15);   -- {"ok": true}
+select * from stock_available(array[1]);                     -- available is 2 lower, on_shelf unchanged
+select release_stock_hold('chk');                            -- 1
+select * from stock_available(array[1]);                     -- back to on_shelf
+select hold_stock('[{"id":1,"qty":999999}]'::jsonb, 'x', 15);-- {"ok": false, shortfalls...}
+```
+- ☐ A hold lowers `available` but never `on_shelf`
+- ☐ Releasing restores it
+- ☐ Over-holding is refused rather than going negative
+- ☐ `commit_stock_hold` lowers `on_shelf` and clears the hold
+- ☐ `restock_items` puts it back
+
+Then, still on staging, with own-stock mode ON:
+- ☐ Two browsers, one unit left → the first to reach payment gets it, the second
+      is told which item ran out and is **not** charged
+- ☐ Abandon a Paystack popup → stock is sellable again within 15 minutes
+- ☐ Place a cash order, cancel it → the stock comes back
+- ☐ **Turn own-stock mode back OFF → ordering a `stock: 0` product works again.**
+      This is the supplier model the live shop runs on. If it breaks, stop.
