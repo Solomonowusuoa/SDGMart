@@ -101,7 +101,79 @@ const App = () => {
     }, 800);
     return () => clearTimeout(t);
   }, [cart, currentUser]);
+  // Only the setter is needed: HomePage and CategoryPage read window.PRODUCTS
+  // directly during render, so forcing one re-render here is what makes a
+  // refetched catalogue visible (audit F-06).
+  const [, setCatalogVersion] = React.useState(0);
   const [cartOpen, setCartOpen] = React.useState(false);
+  // ── Catalogue refresh + cart re-pricing (audit F-06, C-09) ────────────
+  // Installed as a PWA the app is backgrounded rather than closed, and nothing
+  // refetched on resume — so a session opened yesterday still showed
+  // yesterday's prices and stock. Cart lines make it worse: they carry the
+  // price current when the item was added, persist to localStorage across
+  // sessions, and are re-merged from the server cart on sign-in. The server
+  // always re-prices at checkout, so the customer is charged correctly — but
+  // the number on screen could be days stale, which is its own kind of wrong.
+  const catalogFetchedAtRef = React.useRef(Date.now());
+  const CATALOG_STALE_MS = 60 * 1000;
+
+  // Bring every cart line up to the current catalogue price, and remember what
+  // it was so the cart can say so rather than silently changing a number.
+  const repriceCart = React.useCallback(() => {
+    const byId = new Map((window.PRODUCTS || []).map(p => [p.id, p]));
+    setCart(prev => {
+      let changed = false;
+      const next = prev.map(line => {
+        const p = byId.get(line.id);
+        if (!p) return line;
+        const pct = Number(p.promoPercent || 0);
+        const current = +(Number(p.price) * (1 - pct / 100)).toFixed(2);
+        if (!Number.isFinite(current) || current === Number(line.price)) return line;
+        changed = true;
+        return { ...line, price: current, previousPrice: Number(line.price), priceChanged: true };
+      });
+      return changed ? next : prev;
+    });
+  }, []);
+
+  const refreshCatalog = React.useCallback(async () => {
+    try {
+      const r = await fetch('/api/catalog', { cache: 'no-store' });
+      if (!r.ok) return;
+      const d = await r.json();
+      if (!d || !Array.isArray(d.products) || !d.products.length) return;
+      window.PRODUCTS = d.products;
+      window.SHOW_FRESHNESS = !!d.showFreshness;
+      window.SHOW_STOCK = !!d.showStock;
+      catalogFetchedAtRef.current = Date.now();
+      setCatalogVersion(v => v + 1);   // re-render screens that read window.PRODUCTS
+      repriceCart();
+    } catch (_) { /* offline or a blip — the stale copy still works */ }
+  }, [repriceCart]);
+
+  React.useEffect(() => {
+    // Re-price once on mount: the cart may have been sitting in localStorage
+    // since a previous session, against a catalogue that has since moved.
+    repriceCart();
+    const maybeRefresh = () => {
+      if (Date.now() - catalogFetchedAtRef.current < CATALOG_STALE_MS) return;
+      refreshCatalog();
+    };
+    // Two signals, deliberately checked differently. visibilitychange must
+    // confirm the page is actually visible — it fires on the way out too. A
+    // focus event does not need that second check and must not depend on it:
+    // some embedded and PWA contexts report visibilityState 'hidden' while the
+    // window is plainly in use, and gating on it there means the catalogue
+    // never refreshes at all.
+    const onVisibility = () => { if (document.visibilityState === 'visible') maybeRefresh(); };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', maybeRefresh);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', maybeRefresh);
+    };
+  }, [repriceCart, refreshCatalog]);
+
   const [, setStaffReady] = React.useState(0);   // re-render once /app.staff.js lands
   const [searchQuery, setSearchQuery] = React.useState('');
 

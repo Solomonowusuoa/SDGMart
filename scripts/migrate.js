@@ -80,10 +80,64 @@ const ORDER = [
   'supabase-schema-order-idempotency.sql',
   'supabase-schema-indexes-and-email.sql',
   'supabase-schema-constraints.sql',
+  'supabase-schema-constraints-2.sql',
+  'supabase-schema-updated-at.sql',
+  'supabase-schema-aggregates.sql',
+  'supabase-schema-consent.sql',
+  'supabase-schema-stock-holds.sql',
 ];
 
 const sha = (t) => crypto.createHash('sha256').update(t).digest('hex').slice(0, 16);
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
+
+// ── Rollback (audit finding G-06) ─────────────────────────────────────────
+// Render can roll back to the previous commit, but the SQL files were
+// apply-only. Reverting code that shipped with a migration left the schema
+// ahead of the application with no documented way back — the same coupling
+// that caused the HANDOFF §10 outage, pointing the other way.
+//
+// A migration may end with a rollback section:
+//
+//   -- ══ DOWN ══
+//   drop index if exists whatever_idx;
+//
+// Everything above the marker is the migration; everything below undoes it.
+// `up` never runs the DOWN half. A file with no DOWN section is not
+// reversible by this tool — say so plainly rather than improvising under
+// pressure. The base schema files are deliberately in that category: undoing
+// them means dropping tables, which is a restore-from-backup decision.
+const DOWN_MARKER = /^--\s*(?:═+\s*)?DOWN(?:\s*═+)?\s*$/m;
+function splitMigration(sql) {
+  const m = sql.match(DOWN_MARKER);
+  if (!m) return { up: sql, down: null };
+  return { up: sql.slice(0, m.index), down: sql.slice(m.index + m[0].length) };
+}
+
+// The invariant that matters is that the SQL which was APPLIED has not
+// changed. A DOWN section is added after the fact by design — rollback for a
+// migration you already ran is exactly when you need it — so appending one
+// must not read as tampering. Checksums therefore cover the UP half only.
+//
+// Records written before this change hashed the whole file, which for a file
+// with no DOWN section is the same bytes. Accept any of the historical forms
+// so adding rollback to an applied migration does not light up as CHANGED.
+function checksumForms(f) {
+  const raw = read(f);
+  const up = splitMigration(raw).up;
+  const trimmed = up.trimEnd();
+  const NL = String.fromCharCode(10);
+  const lf = (t) => t.split(String.fromCharCode(13) + NL).join(NL);
+  // The trailing-newline variants matter: a DOWN section is appended after a
+  // blank line, so `up` carries whitespace the original file did not.
+  return new Set([
+    sha(raw), sha(up), sha(trimmed), sha(trimmed + NL),
+    sha(lf(raw)), sha(lf(up)), sha(lf(trimmed)), sha(lf(trimmed) + NL),
+  ]);
+}
+function checksumOk(rec, f) {
+  if (!rec || !rec.checksum) return true;
+  return checksumForms(f).has(rec.checksum);
+}
 
 async function applied() {
   const { data, error } = await sb.from('schema_migrations').select('filename, applied_at, checksum');
@@ -103,14 +157,14 @@ async function status() {
     const rec = done.get(f);
     let mark = '  PENDING ';
     if (!exists) mark = '  MISSING ';
-    else if (rec) mark = rec.checksum && rec.checksum !== sha(read(f)) ? '  CHANGED ' : '  applied ';
+    else if (rec) mark = checksumOk(rec, f) ? '  applied ' : '  CHANGED ';
     console.log(mark + f + (rec ? '   ' + String(rec.applied_at).slice(0, 19) : ''));
   }
   const pending = ORDER.filter((f) => !done.has(f) && fs.existsSync(path.join(ROOT, f)));
   console.log('\n' + pending.length + ' pending' + (pending.length ? ': ' + pending.join(', ') : '') + '\n');
   // CHANGED means a file was edited after being applied. Migrations are meant to
   // be immutable once run — edit forward in a new file instead.
-  const changed = ORDER.filter((f) => done.get(f) && done.get(f).checksum && fs.existsSync(path.join(ROOT, f)) && done.get(f).checksum !== sha(read(f)));
+  const changed = ORDER.filter((f) => done.get(f) && fs.existsSync(path.join(ROOT, f)) && !checksumOk(done.get(f), f));
   if (changed.length) console.log('WARNING: edited after being applied: ' + changed.join(', ') + '\n');
 }
 
@@ -121,14 +175,14 @@ async function up() {
   for (const f of pending) {
     const sql = read(f);
     process.stdout.write('applying ' + f + ' ... ');
-    const { error } = await sb.rpc('exec_sql', { sql });
+    const { error } = await sb.rpc('exec_sql', { sql: splitMigration(sql).up });
     if (error) {
       console.log('FAILED');
       console.error('  ' + error.message);
       console.error('\nStopped. Nothing after this file was applied.');
       process.exit(1);
     }
-    await sb.from('schema_migrations').insert({ filename: f, checksum: sha(sql) });
+    await sb.from('schema_migrations').insert({ filename: f, checksum: sha(splitMigration(sql).up.trimEnd()) });
     console.log('ok');
   }
   console.log('\nDone. ' + pending.length + ' migration(s) applied.');
@@ -140,12 +194,48 @@ async function mark(f) {
     console.error('Known files:\n  ' + ORDER.join('\n  '));
     process.exit(1);
   }
-  await sb.from('schema_migrations').upsert({ filename: f, checksum: sha(read(f)) });
+  await sb.from('schema_migrations').upsert({ filename: f, checksum: sha(splitMigration(read(f)).up.trimEnd()) });
   console.log('Marked as applied (not executed): ' + f);
 }
 
+async function down(f) {
+  if (!f || !ORDER.includes(f)) {
+    console.error('Usage: node scripts/migrate.js down <filename>');
+    console.error('Known files:');
+    for (const k of ORDER) console.error('  ' + k);
+    process.exit(1);
+  }
+  const done = await applied();
+  if (!done.has(f)) {
+    console.error(f + ' is not recorded as applied — nothing to roll back.');
+    process.exit(1);
+  }
+  const { down: sql } = splitMigration(read(f));
+  if (!sql || !sql.trim()) {
+    console.error(f + ' has no DOWN section, so this tool cannot reverse it.');
+    console.error('That is deliberate for the base schema files: undoing them drops');
+    console.error('tables and loses data. Roll back by restoring a backup instead.');
+    process.exit(1);
+  }
+  // Only ever the one file named — rolling back a whole chain unattended is
+  // how a bad afternoon becomes a lost database.
+  process.stdout.write('rolling back ' + f + ' ... ');
+  const { error } = await sb.rpc('exec_sql', { sql });
+  if (error) {
+    console.log('FAILED');
+    console.error('  ' + error.message);
+    console.error('');
+    console.error('The migration is still recorded as applied.');
+    process.exit(1);
+  }
+  await sb.from('schema_migrations').delete().eq('filename', f);
+  console.log('ok');
+  console.log('');
+  console.log(f + ' rolled back and un-recorded. `up` will re-apply it.');
+}
+
 const [cmd, arg] = process.argv.slice(2);
-({ status, up, mark }[cmd] || (() => {
-  console.log('Usage: node scripts/migrate.js status | up | mark <filename>');
+({ status, up, mark, down }[cmd] || (() => {
+  console.log('Usage: node scripts/migrate.js status | up | mark <filename> | down <filename>');
   process.exit(1);
 }))(arg).catch((e) => { console.error(e.message); process.exit(1); });

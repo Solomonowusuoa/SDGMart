@@ -3,7 +3,10 @@
 //   updates during development are picked up on reload.
 // - Listens for `push` events and shows native OS notifications.
 // - On notification click, focuses an existing tab or opens the target URL.
-const CACHE_NAME = 'sdgmart-v92-remaining-highs';
+// Dev placeholder only. The server rewrites this line on every request to
+// /sw.js, stamping the deployed build id (audit G-05) — so this no longer
+// needs bumping by hand before a release. See buildId() in server.js.
+const CACHE_NAME = 'sdgmart-dev';
 const STATIC_ASSETS = [
   '/SDGMart.html',
   '/manifest.json',

@@ -18,7 +18,20 @@ let Sentry = null;
 if (process.env.SENTRY_DSN) {
   try {
     Sentry = require('@sentry/node');
-    Sentry.init({ dsn: process.env.SENTRY_DSN, environment: process.env.NODE_ENV || 'production', tracesSampleRate: 0 });
+    Sentry.init({
+      dsn: process.env.SENTRY_DSN,
+      environment: process.env.NODE_ENV || 'production',
+      tracesSampleRate: 0,
+      // Sentry attaches the request URL itself, so scrubbing our own `extra`
+      // is not enough — strip query strings on the way out too (audit E-08).
+      beforeSend(event) {
+        try {
+          if (event.request && event.request.url) event.request.url = String(event.request.url).split('?')[0];
+          if (event.request && event.request.query_string) delete event.request.query_string;
+        } catch (_) {}
+        return event;
+      },
+    });
     console.log('🛡  Sentry error monitoring enabled');
   } catch (e) { console.warn('Sentry init skipped:', e.message); Sentry = null; }
 }
@@ -83,9 +96,19 @@ async function sendEmail({ to, subject, html, text }) {
     const r = await withTimeout(
       client.emails.send({ from: RESEND_FROM_EMAIL, to, subject, html, text }),
       15000, 'email send');
+    recordMailResult(true);
     return { ok: true, id: r.data && r.data.id };
   } catch (e) {
-    console.warn('email send failed:', e.message);
+    // Every caller used to ignore this. Resend being down, over quota (the
+    // free tier is 100/day) or rejecting an address all looked identical to
+    // the user — and password reset is the only recovery path for an account
+    // without Google sign-in (audit E-09).
+    recordMailResult(false);
+    console.error('EMAIL SEND FAILED to ' + String(to).replace(/(.).*(@.*)/, '$1***$2') + ':', e.message);
+    if (mailDegraded()) {
+      alertAdmins('mail-down', 'Email sending is failing',
+        'Password resets and confirmations are not going out. Check Resend (quota is 100/day on the free tier).');
+    }
     return { error: e.message };
   }
 }
@@ -134,6 +157,44 @@ const ALLOWED_ORIGINS = ['https://sdg-mart.com', 'https://www.sdg-mart.com', 'ht
 app.use(cors({
   origin(origin, cb) { cb(null, !origin || ALLOWED_ORIGINS.includes(origin)); },
 }));
+
+// ── Security headers (audit A-17) ────────────────────────────────────────
+// Nothing set these before, so checkout and admin could be framed and driven
+// by a clickjacking overlay. Hand-rolled rather than pulling in helmet: it is
+// five headers we control exactly, and one less dependency on a 512MB dyno.
+//
+// The resource policy ships Report-Only first, as the audit recommended —
+// the app loads React and Leaflet from unpkg, Paystack's inline checkout,
+// Google Identity, Fonts and GTM, and enforcing a wrong list would break the
+// shop. `frame-ancestors` is the one directive enforced immediately, because
+// it is the actual clickjacking fix and cannot break a first-party page.
+const CSP_DIRECTIVES = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' https://unpkg.com https://js.paystack.co https://accounts.google.com https://www.googletagmanager.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com",
+  "font-src 'self' data: https://fonts.gstatic.com",
+  "img-src 'self' data: blob: https://*.supabase.co https://*.tile.openstreetmap.org https://unpkg.com https://lh3.googleusercontent.com https://www.googletagmanager.com https://www.google.com",
+  "connect-src 'self' https://*.supabase.co https://api.paystack.co https://us1.locationiq.com https://nominatim.openstreetmap.org https://accounts.google.com https://www.google-analytics.com",
+  "frame-src https://js.paystack.co https://accounts.google.com",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join('; ');
+
+app.use((req, res, next) => {
+  res.set('X-Frame-Options', 'DENY');
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.set('Cross-Origin-Opener-Policy', 'same-origin-allow-popups'); // Paystack + Google open popups
+  res.set('Permissions-Policy', 'geolocation=(self), camera=(), microphone=(), payment=()');
+  res.set('Content-Security-Policy', "frame-ancestors 'none'");
+  res.set('Content-Security-Policy-Report-Only', CSP_DIRECTIVES);
+  // Render terminates TLS, so trust the proxy's protocol header.
+  if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
+    res.set('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  }
+  next();
+});
 // Send the legacy Render host to the custom domain so old bookmarks, shared
 // links, and home-screen installs land on sdg-mart.com. GET pages only:
 // /healthz stays (UptimeRobot's keep-awake ping must hit Render directly) and
@@ -184,6 +245,13 @@ function requireAuth(req, res, next) {
 function requireAdmin(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'Sign in required' });
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  // must_change_password was set but never enforced anywhere — it only ever
+  // drove a prompt in the UI, so an admin left on the bootstrap password kept
+  // full access indefinitely (audit A-16). Locking admin routes rather than
+  // login leaves /api/auth/change-password reachable, which is how they fix it.
+  if (req.user.mustChangePassword) {
+    return res.status(403).json({ error: 'Change your password before using admin.', code: 'MUST_CHANGE_PASSWORD' });
+  }
   next();
 }
 function riderOnly(req, res, next) {
@@ -198,6 +266,33 @@ function customerOnly(req, res, next) {
   if (req.user.role === 'rider') return res.status(403).json({ error: 'Not available for riders' });
   next();
 }
+function clientIp(req) {
+  const xff = req.headers['x-forwarded-for'];
+  if (xff) return String(xff).split(',')[0].trim();
+  return req.ip || req.socket.remoteAddress || 'unknown';
+}
+
+// Per-IP throttle for endpoints that accept anonymous writes (audit A-15).
+// Ghanaian mobile networks put many real customers behind one carrier NAT
+// address, so these ceilings are deliberately generous: they are sized to stop
+// a script in a loop, not to police normal use. Anything stricter would lock
+// out a whole neighbourhood on the same gateway.
+function rateLimitIp(name, opts) {
+  return (req, res, next) => {
+    const rl = db.rateCheck(`${name}:${clientIp(req)}`, opts);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(Math.ceil(rl.retryAfterMs / 1000)));
+      return res.status(429).json({ error: 'Too many requests from this connection. Please wait a moment and try again.' });
+    }
+    next();
+  };
+}
+const LIMIT_ORDERS   = { windowMs: 10 * 60 * 1000, max: 30,  blockMs: 10 * 60 * 1000 };
+const LIMIT_PAYMENT  = { windowMs: 10 * 60 * 1000, max: 30,  blockMs: 10 * 60 * 1000 };
+const LIMIT_SIGNUP   = { windowMs: 60 * 60 * 1000, max: 20,  blockMs: 30 * 60 * 1000 };
+const LIMIT_TELEMETRY= { windowMs:  5 * 60 * 1000, max: 200, blockMs:  5 * 60 * 1000 };
+const LIMIT_REQUESTS = { windowMs: 60 * 60 * 1000, max: 20,  blockMs: 30 * 60 * 1000 };
+
 app.use(authMiddleware);
 app.use('/api/me', customerOnly);
 
@@ -348,6 +443,46 @@ function newestSourceMtime(files = BUNDLE_FILES) {
   return newest;
 }
 
+// ── Build id for the service worker (audit G-05) ────────────────────────
+// Every release used to require hand-editing CACHE_NAME in sw.js. Forget it
+// and phones keep serving the PREVIOUS bundle from cache while the server
+// happily serves the new one — with nothing to say so. That is exactly what
+// happened during v81 testing (HANDOFF). A release step that depends on
+// remembering will eventually run without it, and this one fails silently.
+//
+// So the server fills the version in, from three sources in order of how
+// trustworthy they are:
+//   1. RENDER_GIT_COMMIT — set by Render on every deploy. Exact.
+//   2. .git/HEAD, read directly (no subprocess, git need not be installed).
+//   3. Newest mtime across everything we serve. Always available; on a fresh
+//      clone this is checkout time, so it changes each deploy regardless.
+// A redundant cache bust costs one download. A missed one strands every
+// installed phone on stale code, so the fallbacks err towards busting.
+let _buildId = null;
+function buildId() {
+  if (_buildId) return _buildId;
+  const short = (v) => String(v).replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
+
+  const fromEnv = process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || '';
+  if (fromEnv) return (_buildId = short(fromEnv));
+
+  try {
+    const head = fs.readFileSync(path.join(__dirname, '.git', 'HEAD'), 'utf8').trim();
+    const m = head.match(/^ref:\s*(.+)$/);
+    const sha = m
+      ? fs.readFileSync(path.join(__dirname, '.git', m[1]), 'utf8').trim()
+      : head;                                   // detached HEAD holds the sha itself
+    if (sha) return (_buildId = short(sha));
+  } catch (_) { /* no .git — a deployed tarball, say */ }
+
+  const newest = Math.max(
+    newestSourceMtime(BUNDLE_FILES),
+    newestSourceMtime(STAFF_BUNDLE_FILES),
+    newestSourceMtime(['SDGMart.html', 'responsive.css', 'sw.js']),
+  );
+  return (_buildId = 't' + short(Math.round(newest).toString(36)));
+}
+
 function buildAppBundle(files = BUNDLE_FILES) {
   if (!_esbuild) _esbuild = require('esbuild');
   // Concatenate sources with a banner per file (helps stack traces).
@@ -442,7 +577,8 @@ async function getOrderItemCounts() {
 // mutations call invalidateCatalog() so edits still appear immediately.
 const CATALOG_TTL_MS = 60 * 1000;
 let _catalogCache = { js: null, at: 0 };
-function invalidateCatalog() { _catalogCache = { js: null, at: 0 }; }
+let _catalogJsonCache = { data: null, at: 0 };
+function invalidateCatalog() { _catalogCache = { js: null, at: 0 }; _catalogJsonCache = { data: null, at: 0 }; }
 app.get('/data/products.js', async (req, res) => {
   try {
     if (_catalogCache.js && Date.now() - _catalogCache.at < CATALOG_TTL_MS) {
@@ -450,7 +586,7 @@ app.get('/data/products.js', async (req, res) => {
       res.setHeader('Cache-Control', 'no-cache');
       return res.send(_catalogCache.js);
     }
-    const productsList = (await db.products.list()).map(p => ({ ...p, bestseller: !!p.bestseller, img: p.img || null }));
+    const productsList = (await db.products.listForCatalog()).map(p => ({ ...p, bestseller: !!p.bestseller, img: p.img || null }));
     const counts = await getOrderItemCounts();
     const TOP_IDS_BY_ORDERS = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => Number(id));
     const categories = ["Rice & Grains","Cooking Oil","Canned & Sauces","Spices & Seasoning","Dairy & Eggs","Drinks","Snacks & Biscuits","Breakfast & Cereals","Baking & Sugar","Coffee, Tea & Cocoa","Fruits & Vegetables","Staples (Tubers & Fufu)","Meat, Poultry & Seafood","Toiletries & Personal Care"];
@@ -471,6 +607,7 @@ const ESSENTIALS = ${JSON.stringify(essentials)};
 const NEIGHBORHOODS = ${JSON.stringify(neighborhoods)};
 const TOP_IDS_BY_ORDERS = ${JSON.stringify(TOP_IDS_BY_ORDERS)};
 const SHOW_FRESHNESS = ${showFreshness ? 'true' : 'false'};
+const TERMS_VERSION = ${JSON.stringify(TERMS_VERSION)};
 const SHOW_STOCK = ${showStock ? 'true' : 'false'};
 if (typeof window !== 'undefined') {
   window.PRODUCTS = PRODUCTS;
@@ -479,6 +616,7 @@ if (typeof window !== 'undefined') {
   window.NEIGHBORHOODS = NEIGHBORHOODS;
   window.TOP_IDS_BY_ORDERS = TOP_IDS_BY_ORDERS;
   window.SHOW_FRESHNESS = SHOW_FRESHNESS;
+  window.TERMS_VERSION = TERMS_VERSION;
   window.SHOW_STOCK = SHOW_STOCK;
   window.LOCATIONIQ_KEY = ${JSON.stringify(locationiqKey)};
   window.PAYSTACK_PUBLIC_KEY = ${JSON.stringify(PAYSTACK_PUBLIC_KEY)};
@@ -491,6 +629,28 @@ if (typeof window !== 'undefined') {
     console.error('products.js failed:', e);
     res.status(500).send('// error loading products');
   }
+});
+
+// Audit F-06/C-09: /data/products.js is a <script>, so the client cannot
+// re-read it without eval — which the A-17 CSP rightly does not allow. This
+// serves the same shopper catalogue as JSON so a PWA returning from the
+// background can refresh prices and stock. Shares the 5-minute cache and is
+// invalidated by the same admin writes.
+app.get('/api/catalog', async (req, res) => {
+  try {
+    if (_catalogJsonCache.data && Date.now() - _catalogJsonCache.at < CATALOG_TTL_MS) {
+      return res.json(_catalogJsonCache.data);
+    }
+    const products = (await db.products.listForCatalog())
+      .map(p => ({ ...p, bestseller: !!p.bestseller, img: p.img || null }));
+    const payload = {
+      products,
+      showFreshness: !!(await db.appConfig.get('show_freshness')),
+      showStock: !!(await db.appConfig.get('deduct_stock')),
+    };
+    _catalogJsonCache = { data: payload, at: Date.now() };
+    res.json(payload);
+  } catch (e) { fail(res, e, req); }
 });
 
 // ── Products API ─────────────────────────────────────────────────────────
@@ -526,6 +686,8 @@ app.get('/api/products/:id', async (req, res) => {
 app.post('/api/products', requireAdmin, async (req, res) => {
   try {
     const { name, category, price, unit, bestBefore, stock, description, bestseller, lowStockThreshold } = req.body;
+    const vErr = validateProductFields({ price, stock, lowStockThreshold });
+    if (vErr) return res.status(400).json({ error: vErr });
     const created = await db.products.create({ name, category, price: parseFloat(price), unit, bestBefore, stock: parseInt(stock) || 0, description: description || '', bestseller: !!bestseller, lowStockThreshold: lowStockThreshold != null ? parseInt(lowStockThreshold) : undefined });
     invalidateCatalog();
     res.status(201).json({ ...created, bestseller: !!created.bestseller });
@@ -535,6 +697,8 @@ app.post('/api/products', requireAdmin, async (req, res) => {
 app.put('/api/products/:id', requireAdmin, async (req, res) => {
   try {
     const { name, category, price, unit, bestBefore, stock, description, bestseller, lowStockThreshold } = req.body;
+    const vErr = validateProductFields({ price, stock, lowStockThreshold });
+    if (vErr) return res.status(400).json({ error: vErr });
     const updated = await db.products.update(req.params.id, { name, category, price: parseFloat(price), unit, bestBefore, stock: parseInt(stock) || 0, description: description || '', bestseller: !!bestseller, ...(lowStockThreshold != null ? { lowStockThreshold: parseInt(lowStockThreshold) } : {}) });
     invalidateCatalog();
     res.json({ ...updated, bestseller: !!updated.bestseller });
@@ -578,7 +742,30 @@ async function birthdayGiftStatus(user) {
 // stored order always match reality.
 const STANDARD_DELIVERY = 10;
 const FREE_DELIVERY_MIN = 150;
+// Bump this whenever the privacy notice or terms change materially — stored
+// per user so it is answerable which text each customer agreed to (audit H-03).
+const TERMS_VERSION = '2026-08-29';
+
 const FIRST_ORDER_FREE_MIN = 50; // first-order free delivery only when the order is ≥ this (GHS)
+
+// Audit B-14: product writes took parseFloat(price) with no floor and no CHECK
+// behind them. computeOrderPricing already clamps a line to >= 0, so a
+// negative price could not drive a cart total down, but it would still show
+// as a negative price in the catalogue and in every admin figure.
+function validateProductFields({ price, stock, lowStockThreshold }) {
+  const p = parseFloat(price);
+  if (!Number.isFinite(p) || p < 0) return 'Price must be a number of 0 or more.';
+  if (p > 100000) return 'Price looks wrong — over GHS 100,000.';
+  if (stock != null && stock !== '') {
+    const st = parseInt(stock, 10);
+    if (!Number.isFinite(st) || st < 0) return 'Stock cannot be negative.';
+  }
+  if (lowStockThreshold != null && lowStockThreshold !== '') {
+    const t = parseInt(lowStockThreshold, 10);
+    if (!Number.isFinite(t) || t < 0) return 'Low-stock threshold cannot be negative.';
+  }
+  return null;
+}
 // A cart cannot legitimately contain more distinct products than this; the cap
 // exists so one request cannot be turned into an unbounded amount of work.
 const MAX_ORDER_LINES = 100;
@@ -594,6 +781,28 @@ const PROMO_STALE_MS = 10 * 60 * 1000;
 // Admin-flippable stops for the paths that can lose money. Without these the
 // only way to halt an exploit in progress is a code change and a deploy — with
 // no staging to verify it against. Default ON, so an unset key changes nothing.
+// Own-stock mode. Deliberately NOT switchOn(): that fails open so a config
+// read cannot stop the shop trading, which is right for the emergency
+// switches and exactly wrong here — failing open would start subtracting
+// stock on a shop that does not track any (audit C-10).
+async function ownStockMode() {
+  try { return !!(await db.appConfig.get('deduct_stock')); }
+  catch (_) { return false; }
+}
+
+// Turn shortfall rows into something a customer can read.
+async function namesForShortfalls(shortfalls) {
+  const ids = (shortfalls || []).map((s) => s.id).filter((v) => v != null);
+  if (!ids.length) return 'one of your items';
+  try {
+    const found = await db.products.listByIds(ids);
+    const names = found.map((p) => p.name).filter(Boolean);
+    if (!names.length) return 'one of your items';
+    if (names.length === 1) return names[0];
+    return names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+  } catch (_) { return 'one of your items'; }
+}
+
 async function switchOn(key) {
   try {
     const v = await db.appConfig.get(key);
@@ -607,6 +816,38 @@ async function switchOn(key) {
 // So the incidents most worth diagnosing were the ones least likely to be captured
 // (E-04) — and raw Postgres text went to the browser, naming columns and
 // constraints (E-07). This does both jobs in one call.
+// ── Scrubbing credentials out of logs (audit E-08) ──────────────────────
+// The global handler recorded req.originalUrl, query string included, into
+// error_logs AND Sentry. Guest order tracking authenticates with ?t=<token>,
+// so any 500 on that route wrote a live credential into a table the admin
+// panel renders and into a third-party service. Same for the email
+// verification and password-reset links, which carry ?token=.
+// Every parameter this app has ever used to carry a credential. `reset` and
+// `verify` are the email-link tokens, `t`/`track`/`trackToken` the guest
+// tracking pair, `reference` the Paystack ref. Redacting a harmless one costs
+// nothing; missing one writes a live credential into a table the admin panel
+// renders and into a third-party service.
+const SENSITIVE_PARAMS = new Set([
+  't', 'track', 'trackToken', 'token', 'reset', 'verify',
+  'reference', 'ref', 'code', 'key', 'secret', 'password', 'pw', 'auth',
+]);
+function scrubUrl(url) {
+  const raw = String(url || '');
+  const qi = raw.indexOf('?');
+  if (qi === -1) return raw;
+  const path = raw.slice(0, qi);
+  try {
+    const params = new URLSearchParams(raw.slice(qi + 1));
+    const kept = [];
+    for (const [k, v] of params) {
+      kept.push(k + '=' + (SENSITIVE_PARAMS.has(k) ? '[redacted]' : v));
+    }
+    return kept.length ? path + '?' + kept.join('&') : path;
+  } catch (_) {
+    return path + '?[unparseable]';   // never fall back to the raw string
+  }
+}
+
 function fail(res, e, req, where) {
   if (e && e.status) {
     return res.status(e.status).json({ error: e.message, ...(e.unavailable ? { unavailable: e.unavailable } : {}) });
@@ -725,6 +966,14 @@ async function computeOrderPricing(reqUser, body) {
   // One query instead of one per line.
   const found = await db.products.listByIds([...wanted.keys()]);
   const byId = new Map(found.map((p) => [String(p.id), p]));
+  // What can actually be sold right now: on the shelf, minus live holds from
+  // other checkouts (audit C-10). Falls back to the raw shelf count if the
+  // reservation functions are unreachable — no worse than before they existed.
+  let availableById = null;
+  if (deductStock) {
+    try { availableById = await db.stock.available([...wanted.keys()]); }
+    catch (e) { console.error('stock availability lookup failed, using shelf count:', e.message); }
+  }
   const items = [];
   const unavailable = [];
   for (const [id, qty] of wanted) {
@@ -733,9 +982,14 @@ async function computeOrderPricing(reqUser, body) {
     // Availability was enforced only by hiding "Sold out" products in the UI,
     // so a direct POST could order any quantity of something with no stock
     // (B-03). Only meaningful while the deduct_stock toggle is on.
-    if (deductStock && Number(p.stock || 0) < qty) {
-      unavailable.push({ id, name: p.name, reason: Number(p.stock || 0) ? 'partial' : 'out', have: Number(p.stock || 0) });
-      continue;
+    if (deductStock) {
+      const avail = availableById && availableById[p.id]
+        ? Number(availableById[p.id].available)
+        : Number(p.stock || 0);
+      if (avail < qty) {
+        unavailable.push({ id, name: p.name, reason: avail ? 'partial' : 'out', have: avail });
+        continue;
+      }
     }
     const pct = Number(promoMap[p.id] || 0);
     const price = Math.max(0, +(Number(p.price) * (1 - pct / 100)).toFixed(2));
@@ -801,7 +1055,14 @@ async function reserveForCheckout(reqUser, pricing, giftClaimYear) {
 }
 
 async function releaseReservation(ledger) {
-  if (!ledger || !ledger.userId) return;
+  if (!ledger) return;
+  // Stock first, and outside the userId guard below: guests hold stock too,
+  // but have no loyalty or perks to hand back (audit C-10).
+  if (ledger.stockHoldKey) {
+    try { await db.stock.release(ledger.stockHoldKey); }
+    catch (e) { console.error('STOCK HOLD RELEASE FAILED for ' + ledger.stockHoldKey + ':', e.message); }
+  }
+  if (!ledger.userId) return;
   const { userId } = ledger;
   try { if (ledger.loyalty > 0) await db.squads.addLoyalty(userId, ledger.loyalty); }
   catch (e) { console.error('RESERVATION RELEASE FAILED (loyalty) for user ' + userId + ':', e.message); }
@@ -860,22 +1121,32 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
   const now = new Date();
   // Scheduled delivery: customer may choose a future date (within 7 days) + a
   // time slot. Otherwise fall back to same-day / next-day on the 12:00 cutoff.
-  const todayStr = now.toISOString().slice(0, 10);
-  const maxDate = new Date(now); maxDate.setDate(maxDate.getDate() + 7);
-  const maxStr = maxDate.toISOString().slice(0, 10);
+  // Both the date and the cutoff below come from the business timezone. They
+  // used to mix toISOString() (UTC) with getHours() (server-local) and agreed
+  // only because Render runs UTC and Ghana has no DST (audit B-11).
+  const todayStr = db.businessDate(now);
+  const maxStr = db.businessDatePlus(7, now);
   let deliveryDateStr, deliverySlot = null, priority;
   if (reqDate && /^\d{4}-\d{2}-\d{2}$/.test(reqDate) && reqDate > todayStr && reqDate <= maxStr) {
     deliveryDateStr = reqDate;
     deliverySlot = reqSlot ? String(reqSlot).slice(0, 20) : null;
     priority = false;
   } else {
-    const afterCutoff = now.getHours() >= 12;
-    const d = new Date(now);
-    if (afterCutoff) d.setDate(d.getDate() + 1);
-    deliveryDateStr = d.toISOString().slice(0, 10);
+    const afterCutoff = db.businessHour(now) >= 12;
+    deliveryDateStr = afterCutoff ? db.businessDatePlus(1, now) : db.businessDate(now);
     priority = afterCutoff;
   }
-  const loc = location && typeof location.lat === 'number' ? location : null;
+  // Keep the fix quality alongside the coordinate (audit I-02) — a pin from a
+  // coarse network fix should not be treated as though it were surveyed, and
+  // markLastUsed's ~50m match threshold has no way to tell without this.
+  const loc = location && typeof location.lat === 'number'
+    ? {
+        lat: location.lat, lng: location.lng,
+        ...(location.address ? { address: String(location.address).slice(0, 300) } : {}),
+        ...(Number.isFinite(Number(location.accuracy)) ? { accuracy: Math.round(Number(location.accuracy)) } : {}),
+        ...(location.source ? { source: String(location.source).slice(0, 12) } : {}),
+      }
+    : null;
 
   // Authoritative pricing — recomputed on the server from DB prices + promos +
   // the signed-in user's discount/loyalty. Client prices/subtotal/total ignored.
@@ -956,6 +1227,32 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
     }
   }
 
+  // ── Step 1b: stock (audit C-10) ──────────────────────────────────────────
+  // A Paystack order already holds its stock from checkout — that hold is
+  // committed after the order row exists. A cash order commits immediately,
+  // so there is no gap to hold across: take the stock atomically here, before
+  // the customer is told anything, and undo it if the create then fails.
+  const stockHoldKey = extra.paystackRef || null;
+  if (!stockHoldKey && await ownStockMode()) {
+    try {
+      const taken = await db.stock.consume(itemsList);
+      if (!taken.ok) {
+        const names = await namesForShortfalls(taken.shortfalls);
+        for (const undo of compensate.reverse()) { try { await undo(); } catch (_) {} }
+        throw new HttpError(409, 'Someone just took the last of ' + names + '. Nothing has been charged.', { unavailable: taken.shortfalls || [] });
+      }
+      compensate.push(() => db.stock.restock(itemsList));
+    } catch (e) {
+      if (e && e.status) throw e;
+      // Own-stock mode is on but we cannot account for stock. Let the order
+      // through rather than refusing a real customer over bookkeeping, and
+      // make sure somebody knows the count is now wrong.
+      console.error('STOCK CONSUME FAILED, order proceeding unaccounted:', e.message);
+      alertAdmins('stock-consume-failed', '⚠️ Stock not deducted',
+        'Own-stock mode is on but stock could not be deducted for a cash order. Inventory counts will drift until this is fixed.');
+    }
+  }
+
   // ── Step 2: create the order. On failure, undo step 1 completely. ────────
   let created;
   try {
@@ -1009,9 +1306,26 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
   // The order exists and the customer is owed it. None of the bookkeeping below
   // may turn that into a 500, because the client would report failure for a real
   // order and the customer's retry would create a duplicate.
-  try {
-    if (await db.appConfig.get('deduct_stock')) await db.products.decrementStock(itemsList);
-  } catch (e) { console.warn('stock decrement failed for order ' + created.id + ':', e.message); }
+  // Stock (audit C-10). A Paystack order already holds its stock from
+  // checkout, so committing that hold is all that is left. A cash order was
+  // consumed atomically in step 1 before the commit, so there is nothing to do
+  // here. Either way the old best-effort read-modify-write is gone.
+  if (stockHoldKey && await ownStockMode()) {
+    try {
+      const done = await db.stock.commitHold(stockHoldKey);
+      if (!done || !Number(done.lines)) {
+        // The hold lapsed before this arrived — Paystack retries a webhook for
+        // hours, and the hold lives 15 minutes. The order is real and paid, so
+        // deduct anyway; it may drive a line to zero, which is honest.
+        console.warn('stock hold ' + stockHoldKey + ' had expired by commit time — deducting directly');
+        await db.stock.consume(itemsList);
+      }
+    } catch (e) {
+      console.error('STOCK COMMIT FAILED for order ' + created.id + ' (hold ' + stockHoldKey + '):', e.message);
+      alertAdmins('stock-commit-failed', '⚠️ Stock not deducted for an order',
+        'Order #' + created.id + ' was placed and paid, but its stock could not be deducted. Correct the count by hand.');
+    }
+  }
   if (userId && loc) {
     try { await db.addresses.markLastUsed(userId, loc, neighborhood); }
     catch (e) { console.warn('markLastUsed failed for order ' + created.id + ':', e.message); }
@@ -1055,7 +1369,7 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
 app.get('/api/admin/revenue', requireAdmin, async (req, res) => {
   try {
     const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || ''))
-      ? req.query.date : new Date().toISOString().slice(0, 10);
+      ? req.query.date : db.businessDate();
     const [dayOrders, riders] = await Promise.all([db.orders.forDay(date), db.riders.list()]);
     const riderName = new Map(riders.map((r) => [String(r.id), r.name]));
 
@@ -1215,8 +1529,58 @@ app.delete('/api/admin/payments/orphans/:reference', requireAdmin, async (req, r
 // as they would if the customer checked out by hand). Runs once/day from
 // runDailyJobs (see below) — there's no real cron on this host.
 function serverOrderCode(id) { return 'SDG-' + String(id).replace(/\D/g, '').padStart(5, '0'); }
+// ── Bulk-PII access log (audit H-04) ────────────────────────────────────
+// There is one shared admin account, no roles, no 2FA and — until this — no
+// record of who read what. Endpoints that return personal data for many
+// customers at once now leave a trace. This is not a substitute for 2FA on
+// the admin account, which remains the real answer given it can read every
+// customer record; it is the minimum that makes an incident investigable.
+async function logPiiAccess(req, what, count) {
+  try {
+    await db.errorLog.record({
+      message: 'PII ACCESS: ' + what + ' — ' + count + ' record(s) read by user '
+        + (req.user ? req.user.id : '?') + ' from ' + clientIp(req),
+      path: 'audit', method: 'READ', status: 200,
+      userId: req.user ? req.user.id : null,
+    });
+  } catch (_) { /* the read itself must not fail because the log did */ }
+}
+
+// ── Stuck-order watchdog (audit C-08) ───────────────────────────────────
+// Assignment ran only as a side effect of a rider going online or polling,
+// and returns immediately before noon. An order placed at 09:00 on a day when
+// no rider signs in stayed queued forever: nothing alerted on age, nothing
+// escalated, and the customer's tracking page showed the initial state
+// indefinitely. This runs assignment from the daily job instead, then alerts
+// on whatever is still sitting there.
+const ORDER_SLA_HOURS = Number(process.env.ORDER_SLA_HOURS || 4);
+async function checkStuckOrders() {
+  // Try to place them first — an order that can be assigned should be, not
+  // reported.
+  try { await db.orders.assignQueuedForToday(); }
+  catch (e) { console.warn('watchdog: assignQueuedForToday failed:', e.message); }
+
+  const cutoff = new Date(Date.now() - ORDER_SLA_HOURS * 3600 * 1000).toISOString();
+  const { data, error } = await db.sb.from('orders')
+    .select('id, created_at, status')
+    .in('status', ['queued', 'assigned'])
+    .lt('created_at', cutoff)
+    .order('created_at')
+    .limit(50);
+  if (error) throw error;
+  const stuck = data || [];
+  if (!stuck.length) return { stuck: 0 };
+
+  const oldestHours = Math.round((Date.now() - new Date(stuck[0].created_at).getTime()) / 36e5);
+  await alertAdmins('orders-stuck',
+    '⚠️ ' + stuck.length + ' order(s) not moving',
+    stuck.length + ' order(s) past ' + ORDER_SLA_HOURS + 'h. Oldest: #' + stuck[0].id + ', ' + oldestHours + 'h old. Assign a rider.',
+    '/?admin=1');
+  return { stuck: stuck.length, oldestId: stuck[0].id, oldestHours };
+}
+
 async function runRecurringOrders() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = db.businessDate();
   let due = [];
   try {
     const { data, error } = await db.sb.from('recurring_orders')
@@ -1233,9 +1597,18 @@ async function runRecurringOrders() {
   try { products = await db.products.list(); } catch (e) { console.warn('runRecurringOrders: products.list failed:', e.message); return; }
   const byId = new Map(products.map((p) => [p.id, p]));
 
+  // One query for every customer in the batch instead of one per due row
+  // (audit D-09). This job already loads the whole catalogue once for the
+  // same reason.
+  let usersById = new Map();
+  try {
+    const people = await db.users.listByIds(due.map((r) => r.userId));
+    usersById = new Map(people.map((u) => [String(u.id), u]));
+  } catch (e) { console.warn('runRecurringOrders: users.listByIds failed:', e.message); return; }
+
   for (const r of due) {
     try {
-      const user = await db.users.get(r.userId);
+      const user = usersById.get(String(r.userId));
       if (!user) { // account deleted — stop retrying this row forever
         await db.recurring.setActive(r.id, r.userId, false).catch(() => {});
         continue;
@@ -1254,9 +1627,8 @@ async function runRecurringOrders() {
 
       // Advance the schedule regardless of outcome — a bad run must not
       // retry forever and spam the customer daily.
-      const next = new Date();
-      next.setDate(next.getDate() + Math.max(1, Number(r.cadenceDays) || 14));
-      await db.sb.from('recurring_orders').update({ next_run_at: next.toISOString().slice(0, 10) }).eq('id', r.id);
+      const nextRun = db.businessDatePlus(Math.max(1, Number(r.cadenceDays) || 14));
+      await db.sb.from('recurring_orders').update({ next_run_at: nextRun }).eq('id', r.id);
 
       if (!validItems.length) {
         await pushToUser(user.id, {
@@ -1291,7 +1663,7 @@ async function runRecurringOrders() {
   }
 }
 
-app.post('/api/orders', async (req, res) => {
+app.post('/api/orders', rateLimitIp('orders', LIMIT_ORDERS), async (req, res) => {
   try {
     const result = await createOrderFromBody(req.user, req.body, { paid: false });
     res.status(201).json(result);
@@ -1331,7 +1703,7 @@ app.get('/api/paystack/config', (req, res) => {
 // 1) Initialize a transaction. Server sets the amount + reference (locked in
 //    Paystack) and stashes the order draft so the order is only created after
 //    payment is confirmed.
-app.post('/api/paystack/init', async (req, res) => {
+app.post('/api/paystack/init', rateLimitIp('payinit', LIMIT_PAYMENT), async (req, res) => {
   if (!PAYSTACK_SECRET_KEY) return res.status(503).json({ error: 'Online payment is not configured' });
   if (!(await switchOn('online_payment_enabled'))) return res.status(503).json({ error: 'Online payment is temporarily unavailable — please choose Cash on Delivery.' });
   if (!(await switchOn('ordering_enabled'))) return res.status(503).json({ error: 'We have paused new orders for a short while. Please try again soon.' });
@@ -1389,6 +1761,33 @@ app.post('/api/paystack/init', async (req, res) => {
     } catch (e) {
       return res.status(409).json({ error: e.message || 'Could not hold your credit — please try again' });
     }
+    // Hold the stock too, for as long as the payment window (audit C-10).
+    // This is the "hold at checkout, not at cart" line: the customer is on the
+    // payment step, not browsing. The hold is keyed on the Paystack reference,
+    // so every path that already knows how to abandon or complete this payment
+    // knows how to release or commit the stock.
+    if (await ownStockMode()) {
+      try {
+        const held = await db.stock.hold(pricing.items, reference, db.stock.TTL_MIN);
+        if (!held.ok) {
+          await releaseReservation(reserved);   // hand the credit straight back
+          const names = await namesForShortfalls(held.shortfalls);
+          return res.status(409).json({
+            error: 'Someone just took the last of ' + names + '. Your cart has not been charged.',
+            unavailable: held.shortfalls || [],
+          });
+        }
+        reserved.stockHoldKey = reference;
+      } catch (e) {
+        // Own-stock mode is on but the reservation functions are unreachable.
+        // Do not silently sell stock we cannot account for.
+        await releaseReservation(reserved);
+        console.error('STOCK HOLD FAILED at checkout:', e.message);
+        alertAdmins('stock-hold-failed', '⚠️ Stock reservations are failing',
+          'Own-stock mode is on but holds could not be taken. Checkout is refusing online payment. Run supabase-schema-stock-holds.sql or turn own-stock mode off.');
+        return res.status(503).json({ error: 'We could not confirm stock just now. Please try again in a moment.' });
+      }
+    }
     const lockedDraft = { ...draft, _reserved: reserved, _locked: { pricing, giftYear } };
     try {
       await db.pendingPayments.create(reference, req.user ? req.user.id : null, lockedDraft, pricing.total);
@@ -1437,6 +1836,10 @@ app.post('/api/paystack/verify', async (req, res) => {
         + ' but order ' + result.id + ' totals GHS ' + Number(result.total || 0).toFixed(2);
       console.error(msg);
       await db.errorLog.record({ message: msg, path: '/api/paystack/verify', method: 'POST', status: 500 });
+      // Money actually changed hands for a different amount than the order
+      // says. Never let this sit only in a log (audit G-08).
+      alertAdmins('payment-mismatch', '⚠️ Payment amount mismatch',
+        'A charge does not match its order total. Check Admin → Errors now.', '/?admin=1');
       if (Sentry) { try { Sentry.captureException(new Error(msg)); } catch (_) {} }
       notifyAdmins({ title: '⚠️ Payment mismatch', body: msg.slice(0, 120), url: '/admin', tag: 'admin-mismatch-' + reference }).catch(() => {});
     }
@@ -1491,6 +1894,10 @@ app.post('/api/paystack/webhook', async (req, res) => {
       message: 'paystack webhook failed (Paystack will retry): ' + e.message,
       stack: e.stack || '', path: '/api/paystack/webhook', method: 'POST', status: 500,
     });
+    // Paystack retries, so one of these is not an emergency — a run of them
+    // means paid orders are not landing (audit G-08).
+    alertAdmins('webhook-error', '⚠️ Paystack webhook failing',
+      'Payments may not be turning into orders. Check Admin → Reconcile and Errors.', '/?admin=1');
     if (Sentry) { try { Sentry.captureException(e); } catch (_) {} }
     res.sendStatus(500);
   }
@@ -1520,38 +1927,53 @@ function publicUser(u) {
   const { passwordHash, password_hash, password, ...rest } = u;
   return rest;
 }
-function clientIp(req) {
-  const xff = req.headers['x-forwarded-for'];
-  if (xff) return String(xff).split(',')[0].trim();
-  return req.ip || req.socket.remoteAddress || 'unknown';
-}
 
-app.post('/api/auth/signup', async (req, res) => {
-  const { name, email, phone, password, refCode } = req.body || {};
+app.post('/api/auth/signup', rateLimitIp('signup', LIMIT_SIGNUP), async (req, res) => {
+  const { name, email, phone, password, refCode, acceptedTerms } = req.body || {};
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password are required' });
+  // Enforced server-side, not only in the form: the record of consent is
+  // worthless if a direct POST can skip it (audit H-03).
+  if (!acceptedTerms) return res.status(400).json({ error: 'You must accept the Privacy Notice and Terms to create an account.' });
   const pwErr = db.validatePasswordStrength(password);
   if (pwErr) return res.status(400).json({ error: pwErr });
   try {
     // Reject duplicate email up front for a clean error
     const existing = await db.users.findByEmail(email);
     if (existing) return res.status(409).json({ error: 'An account with that email already exists' });
-    const u = await db.users.create({ name, email, phone, password, refCode, role: 'customer' });
+    // The server's own TERMS_VERSION, never the client's claim about what it
+    // displayed — otherwise the record says whatever the caller wanted.
+    const u = await db.users.create({ name, email, phone, password, refCode, role: 'customer', termsVersion: TERMS_VERSION });
     // Email verification is disabled — accounts are usable immediately. Mark
     // verified so no banner/gate ever appears.
-    try { await db.users.markEmailVerified(u.id); } catch (_) {}
-    u.emailVerified = true;
+    // This used to swallow the failure and tell the client emailVerified:true
+    // regardless, so the account and the response disagreed from the first
+    // second (audit E-10). Report what the database actually holds.
+    let verified = false;
+    try { await db.users.markEmailVerified(u.id); verified = true; }
+    catch (e) { console.error('signup: markEmailVerified failed for user ' + u.id + ':', e.message); }
+    u.emailVerified = verified;
     const token = await db.sessions.create(u.id);
     res.status(201).json({ user: publicUser(u), token, message: 'Account created — welcome to SDGMart!' });
   } catch (e) { fail(res, e, req, '/api/auth/signup'); }
 });
 
 const LOGIN_LIMIT = { windowMs: 5 * 60 * 1000, max: 5, blockMs: 15 * 60 * 1000 };
+const LOGIN_IP_LIMIT = { windowMs: 15 * 60 * 1000, max: 50, blockMs: 15 * 60 * 1000 };
 
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
   const ip = clientIp(req);
   const key = `login:${ip}:${String(email).toLowerCase()}`;
+  // The per-account bucket alone gave spraying — one common password against
+  // thousands of accounts — a fresh allowance for every address tried, so it
+  // was never throttled at all (audit A-13). The IP bucket is what catches
+  // that; it is set well above what a household on one NAT address needs.
+  const ipRl = db.rateCheck(`login-ip:${ip}`, LOGIN_IP_LIMIT);
+  if (!ipRl.allowed) {
+    res.set('Retry-After', String(Math.ceil(ipRl.retryAfterMs / 1000)));
+    return res.status(429).json({ error: `Too many sign-in attempts from this connection. Try again in ${Math.ceil(ipRl.retryAfterMs / 60000)} minute(s).` });
+  }
   const rl = db.rateCheck(key, LOGIN_LIMIT);
   if (!rl.allowed) {
     res.set('Retry-After', String(Math.ceil(rl.retryAfterMs / 1000)));
@@ -1625,16 +2047,24 @@ app.post('/api/auth/resend-verification', requireAuth, customerOnly, async (req,
 });
 
 // ── Password reset ───────────────────────────────────────────────────────
+// Every exit from forgot-password returns THIS, byte for byte. mailDegraded
+// is a property of the mail system, identical for an address that exists and
+// one that does not — the moment one branch returns something another does
+// not, the route is an account-enumeration oracle again (audit A-11, E-09).
+function forgotPasswordBody() {
+  return mailDegraded() ? { ok: true, mailDegraded: true } : { ok: true };
+}
+
 app.post('/api/auth/forgot-password', async (req, res) => {
   const { email } = req.body || {};
   if (!email) return res.status(400).json({ error: 'Email required' });
   // Rate-limit per email
   const rl = db.rateCheck(`reset:${String(email).toLowerCase()}`, { windowMs: 60 * 60 * 1000, max: 5, blockMs: 60 * 60 * 1000 });
-  if (!rl.allowed) return res.json({ ok: true }); // Silent rate-limit (don't leak)
+  if (!rl.allowed) return res.json(forgotPasswordBody()); // Silent rate-limit (don't leak)
   try {
     const u = await db.users.findByEmail(email);
     // Respond OK even when the email doesn't exist (don't leak which addresses are registered)
-    if (!u) return res.json({ ok: true });
+    if (!u) return res.json(forgotPasswordBody());
     const token = await db.makeEmailToken(u.id, 'reset');
     const link = `${req.protocol}://${req.get('host')}/?reset=${token}`;
     const emailResult = await sendEmail({
@@ -1648,12 +2078,23 @@ app.post('/api/auth/forgot-password', async (req, res) => {
       text: `Reset your SDGMart password: ${link}`,
     });
     if (emailResult.skipped) console.log(`🔑 (no email config) reset for ${u.email}: ${link}`);
+    if (emailResult.error) {
+      try {
+        await db.errorLog.record({
+          message: 'password reset email FAILED (user cannot recover their account): ' + emailResult.error,
+          path: '/api/auth/forgot-password', method: 'POST', status: 502, userId: u.id,
+        });
+      } catch (_) {}
+    }
     // Returning the link when RESEND_API_KEY is unset made forgot-password an
     // unauthenticated password-reset oracle for any address, including admin.
     if (emailResult.skipped && process.env.NODE_ENV !== 'production') console.log('[dev] password reset link:', link);
     // Identical to the not-found and rate-limited branches above: three
     // distinguishable responses were themselves an account-enumeration oracle.
-    res.json({ ok: true });
+    // mailDegraded() is deliberately a property of the mail system, not of
+    // this address — it reads the same for an address that does not exist, so
+    // it tells an honest story without reopening A-11.
+    res.json(forgotPasswordBody());
   } catch (e) { fail(res, e, req, '/api/auth/forgot-password'); }
 });
 
@@ -1677,7 +2118,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
 app.post('/api/auth/change-password', requireAuth, customerOnly, async (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
   if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Both passwords required' });
-  if (!db.verifyPassword(currentPassword, req.user.passwordHash)) return res.status(401).json({ error: 'Current password is incorrect' });
+  if (!(await db.verifyPassword(currentPassword, req.user.passwordHash))) return res.status(401).json({ error: 'Current password is incorrect' });
   const pwErr = db.validatePasswordStrength(newPassword, { isAdminChange: req.user.role === 'admin' });
   if (pwErr) return res.status(400).json({ error: pwErr });
   try {
@@ -1728,7 +2169,7 @@ app.post('/api/me/delete-account', requireAuth, async (req, res) => {
   try {
     const hasPassword = !!req.user.passwordHash;
     if (hasPassword) {
-      if (!password || !db.verifyPassword(password, req.user.passwordHash)) {
+      if (!password || !(await db.verifyPassword(password, req.user.passwordHash))) {
         return res.status(401).json({ error: 'Password is incorrect' });
       }
     } else if (String(confirm || '').trim().toUpperCase() !== 'DELETE') {
@@ -1781,6 +2222,46 @@ async function notifyAdmins(payload) {
   } catch (e) { console.warn('notifyAdmins failed:', e.message); }
 }
 
+// ── Operational alerting (audit G-08, E-09, C-08) ───────────────────────
+// notifyAdmins fired on a new order, an order issue, feedback and a product
+// request — every routine success, and nothing at all on failure. These are
+// the failures that cost money or silently strand a customer.
+//
+// Deduplicated: an outage produces the same alert continuously, and a phone
+// buzzing every thirty seconds gets muted, which is worse than no alert.
+const ALERT_COOLDOWN_MS = 30 * 60 * 1000;
+const _alertSentAt = new Map();
+async function alertAdmins(key, title, body, url) {
+  const now = Date.now();
+  if (now - (_alertSentAt.get(key) || 0) < ALERT_COOLDOWN_MS) return false;
+  _alertSentAt.set(key, now);
+  console.error('ADMIN ALERT [' + key + '] ' + title + ' — ' + body);
+  try {
+    await db.errorLog.record({
+      message: 'ALERT ' + key + ': ' + title + ' — ' + body,
+      path: 'alert', method: 'ALERT', status: 500,
+    });
+  } catch (_) {}
+  try { await notifyAdmins({ title, body, url: url || '/?admin=1' }); } catch (_) {}
+  return true;
+}
+
+// Whether transactional email is currently working. Tracked globally, never
+// per address: the point of E-09 is to tell people the mail system is down
+// without telling an attacker which addresses exist (A-11).
+const _mail = { consecutiveFailures: 0, lastFailureAt: 0 };
+const MAIL_DEGRADED_AFTER = 2;
+const MAIL_DEGRADED_WINDOW_MS = 15 * 60 * 1000;
+function recordMailResult(ok) {
+  if (ok) { _mail.consecutiveFailures = 0; return; }
+  _mail.consecutiveFailures += 1;
+  _mail.lastFailureAt = Date.now();
+}
+function mailDegraded() {
+  return _mail.consecutiveFailures >= MAIL_DEGRADED_AFTER
+    && Date.now() - _mail.lastFailureAt < MAIL_DEGRADED_WINDOW_MS;
+}
+
 // Lightweight daily job runner. There is no cron on this host, so it runs
 // opportunistically on /healthz pings (UptimeRobot hits it every 5 min) and is
 // guarded by an app_config date-marker so the work happens at most once a day.
@@ -1790,7 +2271,7 @@ async function runDailyJobs() {
   // config read, so two concurrent /healthz hits both got past it.
   if (_dailyJobRunning) return;
   _dailyJobRunning = true;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = db.businessDate();
   try {
     // Claim the day in the database, not in memory. The in-process flag only
     // guards one process; this is what actually decides the winner when
@@ -1829,6 +2310,27 @@ async function runDailyJobs() {
       await db.sb.from('users').update({ birthday_notified_year: year }).eq('id', u.id);
     }
     await runRecurringOrders();
+    // Expired stock holds are already ignored by every availability query;
+    // this only reclaims the rows (audit C-10).
+    try {
+      if (await ownStockMode()) {
+        const n = await db.stock.expireHolds();
+        if (n) console.log('expired stock holds cleared: ' + n);
+      }
+    } catch (e) { console.warn('stock hold sweep failed:', e.message); }
+    // Assignment used to happen only when a rider polled (audit C-08).
+    try { const r = await checkStuckOrders(); if (r.stuck) console.warn('watchdog: ' + r.stuck + ' order(s) past SLA'); }
+    catch (e) { console.warn('stuck-order watchdog failed:', e.message); }
+    // Was fired from the public GET /api/leaderboard on every request, to do
+    // work that matters once a month (audit D-09). It is idempotent via an
+    // app_config marker, so running it here changes nothing but the cost.
+    try { await db.leaderboard.awardLastMonthWinner(); }
+    catch (e) { console.warn('leaderboard award failed:', e.message); }
+    // Prune the tables nothing else ever deletes from (audit B-12). Last,
+    // and in its own catch, so a sweep failure cannot cost anyone their
+    // recurring order or their birthday push.
+    try { await db.retention.sweep(); }
+    catch (e) { console.warn('retention sweep failed:', e.message); }
   } catch (e) { console.warn('runDailyJobs failed:', e.message); }
   finally { _dailyJobRunning = false; }
 }
@@ -1913,9 +2415,17 @@ app.post('/api/rider/orders/:id/status', riderOnly, async (req, res) => {
 });
 
 // Customer: list my own orders
+// Audit D-07: this returned every order the customer had ever placed, to
+// render one screen. Bounded now — but generously, and NOT at the 20 the
+// finding suggested: MyOrdersPage has no paging UI, so a low default would
+// silently hide a customer's history rather than page it. 100 is past any
+// realistic Tamale shopper while still capping the query.
+const ME_ORDERS_DEFAULT = 100;
 app.get('/api/me/orders', requireAuth, async (req, res) => {
   try {
-    const { data, error } = await db.sb.from('orders').select('*').eq('user_id', req.user.id).order('created_at', { ascending: false });
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || ME_ORDERS_DEFAULT, 1), 500);
+    const { data, error } = await db.sb.from('orders').select('*').eq('user_id', req.user.id)
+      .order('created_at', { ascending: false }).limit(limit);
     if (error) throw error;
     // Attach each order's shareable tracking token (deterministic HMAC) so the
     // customer can copy/share a track-on-any-device link (e.g. give a Family
@@ -1978,7 +2488,7 @@ app.get('/api/orders/:id/tracking', async (req, res) => {
 });
 
 // ── Search analytics ─────────────────────────────────────────────────────
-app.post('/api/search/log', async (req, res) => {
+app.post('/api/search/log', rateLimitIp('searchlog', LIMIT_TELEMETRY), async (req, res) => {
   const { query, resultCount } = req.body || {};
   try { await db.searchLog.record(query, req.user ? req.user.id : null, resultCount); res.json({ ok: true }); }
   catch (_) { res.json({ ok: true }); }
@@ -2057,6 +2567,15 @@ app.post('/api/me/reviews', requireAuth, async (req, res) => {
       if (!o || String(o.userId) !== String(req.user.id)) return res.status(403).json({ error: 'Not your order' });
       return res.json(await db.reviews.createForOrder({ userId: req.user.id, orderId, rating, message }));
     }
+    // Legacy per-product path. It used to write with no check at all that the
+    // reviewer had bought anything (audit A-20). The UI no longer sends
+    // productId, so this survives only for old clients — and now it proves
+    // ownership of the order and that the product was actually in it.
+    if (!orderId) return res.status(400).json({ error: 'orderId is required' });
+    const o = await db.orders.get(orderId);
+    if (!o || String(o.userId) !== String(req.user.id)) return res.status(403).json({ error: 'Not your order' });
+    const inOrder = (o.items || []).some((it) => String(it.id != null ? it.id : it.productId) === String(productId));
+    if (!inOrder) return res.status(403).json({ error: 'That product was not in this order' });
     res.json(await db.reviews.create({ userId: req.user.id, productId, orderId, rating, message }));
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -2142,21 +2661,32 @@ app.get('/api/admin/leaderboard', requireAdmin, async (req, res) => {
   catch (e) { fail(res, e, req); }
 });
 // Public version (first names only) for the squad page gamification
+// Public and uncached, and it fired awardLastMonthWinner on every single
+// request — an app_config read plus a referrals scan per visitor, to do work
+// that matters once a month. The award moved into runDailyJobs; the board
+// itself is cached for a minute, which is far finer than it changes (audit D-09).
+const LEADERBOARD_TTL_MS = 60 * 1000;
+let _leaderboardCache = { at: 0, data: null };
 app.get('/api/leaderboard', async (req, res) => {
   try {
-    // Opportunistically award last month's winner (idempotent, cron-less).
-    db.leaderboard.awardLastMonthWinner().catch(() => {});
+    if (_leaderboardCache.data && Date.now() - _leaderboardCache.at < LEADERBOARD_TTL_MS) {
+      return res.json(_leaderboardCache.data);
+    }
     const list = await db.leaderboard.topReferrers(10);
-    res.json(list.map(u => ({
+    const out = list.map(u => ({
       name: (u.name || 'A friend').split(' ')[0],
       referralCount: u.referralCount,
-    })));
+    }));
+    _leaderboardCache = { at: Date.now(), data: out };
+    res.json(out);
   } catch (e) { fail(res, e, req); }
 });
 
 // ── Retention (admin) — returning vs new customers per month + lapsed list ──
 const LAPSED_AFTER_DAYS = 30;
 app.get('/api/admin/retention', requireAdmin, async (req, res) => {
+  // Returns name, email and phone for up to 500 customers in one response.
+  logPiiAccess(req, 'GET /api/admin/retention', 'up to 500');
   try {
     const { data: orderRows, error } = await db.sb.from('orders')
       .select('user_id, created_at')
@@ -2227,7 +2757,7 @@ app.post('/api/admin/retention/notify', requireAdmin, async (req, res) => {
 });
 
 // Client-side crash reporter (from the React error boundary)
-app.post('/api/client-error', async (req, res) => {
+app.post('/api/client-error', rateLimitIp('clienterr', LIMIT_TELEMETRY), async (req, res) => {
   try {
     const { message, stack, path: p } = req.body || {};
     await db.errorLog.record({ message: 'CLIENT: ' + (message || 'unknown'), stack: stack || '', path: p || '', method: 'CLIENT', status: 0, userId: req.user ? req.user.id : null });
@@ -2300,7 +2830,7 @@ app.post('/api/admin/promotions/:id/publish', requireAdmin, async (req, res) => 
 });
 
 // ── Product requests ─────────────────────────────────────────────────────
-app.post('/api/product-requests', async (req, res) => {
+app.post('/api/product-requests', rateLimitIp('prodreq', LIMIT_REQUESTS), async (req, res) => {
   const { name, whatsappNumber, callNumber, contactWhatsapp, contactCall, productName, notes } = req.body || {};
   if (!productName || !name) return res.status(400).json({ error: 'Your name and the item are required' });
   if (!whatsappNumber && !callNumber) return res.status(400).json({ error: 'Please give us at least one number to reach you' });
@@ -2332,10 +2862,12 @@ app.post('/api/admin/upload-image', requireAdmin, async (req, res) => {
   try {
     const m = dataUrl.match(/^data:(.+?);base64,(.+)$/);
     if (!m) return res.status(400).json({ error: 'invalid data url' });
-    const mime = m[1];
     const buf = Buffer.from(m[2], 'base64');
     if (buf.length > 1.5 * 1024 * 1024) return res.status(413).json({ error: 'image too large (max ~1.5MB)' });
-    const url = await db.uploadProductPhoto(buf, mime);
+    // The declared MIME is deliberately ignored — uploadProductPhoto reads the
+    // real format from the bytes and rejects anything that is not an image.
+    if (!db.sniffImageType(buf)) return res.status(400).json({ error: 'Only JPEG, PNG and WebP images can be uploaded.' });
+    const url = await db.uploadProductPhoto(buf);
     res.json({ url });
   } catch (e) { fail(res, e, req); }
 });
@@ -2408,7 +2940,26 @@ app.post('/api/admin/settings', requireAdmin, async (req, res) => {
       }
     }
     if (showFreshness != null) await db.appConfig.set('show_freshness', !!showFreshness);
-    if (deductStock != null) await db.appConfig.set('deduct_stock', !!deductStock);
+    // Own-stock mode (audit C-10). Turning this on makes the shop start
+    // deducting inventory, which is only safe once the reservation functions
+    // exist — without them the app would claim to track stock and silently
+    // not. Refuse rather than half-enable it.
+    if (deductStock != null) {
+      if (deductStock && !(await db.appConfig.get('deduct_stock'))) {
+        if (!(await db.stock.ready())) {
+          return res.status(409).json({
+            error: 'Own-stock mode needs the stock reservation migration. Run supabase-schema-stock-holds.sql, then try again.',
+            code: 'STOCK_MIGRATION_MISSING',
+          });
+        }
+        await db.errorLog.record({
+          message: 'OWN-STOCK MODE TURNED ON by user ' + (req.user ? req.user.id : '?')
+            + ' — the shop now deducts inventory and refuses orders it cannot fill.',
+          path: 'audit', method: 'SETTINGS', status: 200, userId: req.user ? req.user.id : null,
+        }).catch(() => {});
+      }
+      await db.appConfig.set('deduct_stock', !!deductStock);
+    }
     if (storeName != null) await db.appConfig.set('store_name', String(storeName).slice(0, 60));
     if (Array.isArray(deliverySlots)) {
       const clean = deliverySlots.map(s => String(s).slice(0, 20).trim()).filter(Boolean).slice(0, 12);
@@ -2436,11 +2987,9 @@ app.get('/api/birthday/gifts', requireAuth, customerOnly, async (req, res) => {
   try {
     const { cfg, eligible } = await birthdayGiftStatus(req.user);
     if (!eligible) return res.json({ eligible: false, products: [] });
-    const products = [];
-    for (const id of cfg.productIds) {
-      const p = await db.products.get(id);
-      if (p && (p.stock == null || p.stock > 0)) products.push(p);
-    }
+    // One query for the whole gift list rather than one per id (audit D-09).
+    const found = await db.products.listByIds(cfg.productIds);
+    const products = found.filter((p) => p && (p.stock == null || p.stock > 0));
     res.json({ eligible: products.length > 0, products });
   } catch (e) { fail(res, e, req); }
 });
@@ -2471,7 +3020,16 @@ app.delete('/api/me/recurring/:id', requireAuth, async (req, res) => {
 // it for hours.)
 app.get('/sw.js', (req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
-  res.sendFile(path.join(__dirname, 'sw.js'));
+  res.setHeader('Content-Type', 'application/javascript');
+  try {
+    const src = fs.readFileSync(path.join(__dirname, 'sw.js'), 'utf8');
+    // The literal in the file is a dev placeholder; the deployed version is
+    // stamped here so it can never be forgotten (audit G-05).
+    res.send(src.replace(/const CACHE_NAME = '[^']*';/, "const CACHE_NAME = 'sdgmart-" + buildId() + "';"));
+  } catch (e) {
+    // Serving a stale-but-working service worker beats serving none.
+    res.sendFile(path.join(__dirname, 'sw.js'));
+  }
 });
 
 // ── Legal pages ──────────────────────────────────────────────────────────
@@ -2518,11 +3076,12 @@ app.get('*', (req, res, next) => {
 // returns a clean 500. Optionally forwards to Sentry if SENTRY_DSN is set.
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err && err.stack ? err.stack : err);
-  if (Sentry) { try { Sentry.captureException(err, { extra: { path: req.originalUrl, method: req.method, userId: req.user ? req.user.id : null } }); } catch (_) {} }
+  const safePath = scrubUrl(req.originalUrl);
+  if (Sentry) { try { Sentry.captureException(err, { extra: { path: safePath, method: req.method, userId: req.user ? req.user.id : null } }); } catch (_) {} }
   db.errorLog.record({
     message: err && err.message ? err.message : String(err),
     stack: err && err.stack ? err.stack : '',
-    path: req.originalUrl, method: req.method, status: 500,
+    path: safePath, method: req.method, status: 500,
     userId: req.user ? req.user.id : null,
   });
   if (!res.headersSent) res.status(500).json({ error: 'Something went wrong on our end.' });
@@ -2567,7 +3126,7 @@ async function start() {
   }
   app.listen(PORT, () => {
     console.log(`\n🏪 SDGMart running at http://localhost:${PORT}`);
-    console.log(`   Admin login: ${db.ADMIN_EMAIL} (default password: ${db.ADMIN_DEFAULT_PW})`);
+    console.log(`   Admin login: ${db.ADMIN_EMAIL}`);
   });
 }
 

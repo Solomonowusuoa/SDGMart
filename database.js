@@ -45,6 +45,13 @@ const REQUIRED_SCHEMA = [
   ['orders',   'delivery_slot',       'supabase-schema-tweaks.sql',          true],
   ['orders',   'client_request_id',   'supabase-schema-order-idempotency.sql', false],
   ['users',    'referred_by',         'supabase-schema-referrals.sql',       true],
+  // The A-18 concurrency fix claims this column before paying a referrer. If
+  // it were missing the CAS would throw into a catch and credit would silently
+  // never be paid, so the drift check has to see it too.
+  ['users',    'referral_credited',   'supabase-schema-referrals.sql',       true],
+  // Consent capture (H-03). Optional: an older deployment still serves fine,
+  // it just cannot record what a new customer agreed to.
+  ['users',    'terms_accepted_at',   'supabase-schema-consent.sql',         false],
   ['users',    'first_order_done',    'supabase-schema-additions.sql',       true],
   ['users',    'birthday_gift_claimed_year', 'supabase-schema-tweaks.sql',   true],
   ['carts',    'items',               'supabase-schema-cart.sql',            true],
@@ -80,8 +87,16 @@ async function checkSchema() {
 }
 
 // ── Admin bootstrap ──────────────────────────────────────────────────────
+// Audit A-16: the bootstrap password used to be a constant in this file and
+// was printed to the Render log on every boot, so any restore, fresh project
+// or DR rebuild stood up a live admin account whose password sat in the
+// repository. It now comes from the environment; when that is unset a random
+// one is generated and shown exactly once, as the account is created.
 const ADMIN_EMAIL = 'solomonowusuoa@gmail.com';
-const ADMIN_DEFAULT_PW = 'sdgadmin2026';
+const ADMIN_BOOTSTRAP_PW = process.env.ADMIN_BOOTSTRAP_PASSWORD || null;
+// Kept only so an admin still sitting on the old repo default is detected and
+// forced to change it. Never used to create an account.
+const LEGACY_ADMIN_PW = 'sdgadmin2026';
 
 // ── Password rules ───────────────────────────────────────────────────────
 function validatePasswordStrength(password, { isAdminChange = false } = {}) {
@@ -89,23 +104,67 @@ function validatePasswordStrength(password, { isAdminChange = false } = {}) {
   if (pw.length < 8) return 'Password must be at least 8 characters.';
   if (!/[A-Za-z]/.test(pw)) return 'Password must contain a letter.';
   if (!/\d/.test(pw)) return 'Password must contain a number.';
-  if (isAdminChange && pw === ADMIN_DEFAULT_PW) return 'Pick a password different from the default.';
+  if (isAdminChange && (pw === LEGACY_ADMIN_PW || (ADMIN_BOOTSTRAP_PW && pw === ADMIN_BOOTSTRAP_PW))) return 'Pick a password different from the default.';
   return null;
 }
 
-// ── Password hashing (scrypt — same as before) ───────────────────────────
-function hashPassword(plain) {
+// ── Password hashing (scrypt on the threadpool — audit A-14) ─────────────
+// scryptSync blocks Node's single event loop for the whole derivation, so a
+// stream of signups or logins stalled every other request, checkout included.
+// The callback form hands the work to libuv's threadpool instead.
+const SCRYPT_KEYLEN = 64;
+function scryptAsync(plain, salt) {
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(plain, salt, SCRYPT_KEYLEN, (err, dk) => (err ? reject(err) : resolve(dk)));
+  });
+}
+async function hashPassword(plain) {
   const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(plain, salt, 64).toString('hex');
+  const hash = (await scryptAsync(plain, salt)).toString('hex');
   return `${salt}:${hash}`;
 }
-function verifyPassword(plain, stored) {
+async function verifyPassword(plain, stored) {
   if (!stored || typeof stored !== 'string' || !stored.includes(':')) return false;
   const [salt, hash] = stored.split(':');
   try {
-    const test = crypto.scryptSync(plain, salt, 64).toString('hex');
-    return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(test, 'hex'));
+    const expected = Buffer.from(hash, 'hex');
+    const test = await scryptAsync(plain, salt);
+    if (expected.length !== test.length) return false;
+    return crypto.timingSafeEqual(expected, test);
   } catch (_) { return false; }
+}
+// Unknown-email logins used to return before any derivation ran, so the
+// response time alone said whether an address was registered — the timing
+// half of the enumeration channel A-11 closed. Burning one derivation
+// against a fixed hash makes both paths cost the same.
+const DUMMY_PASSWORD_HASH = '0'.repeat(32) + ':' + '0'.repeat(SCRYPT_KEYLEN * 2);
+async function burnPasswordTiming(plain) {
+  try { await verifyPassword(String(plain || ''), DUMMY_PASSWORD_HASH); } catch (_) {}
+}
+
+// ── Business timezone (audit B-11) ───────────────────────────────────────
+// Delivery dates used toISOString() (UTC) while the noon cutoff used
+// getHours() (server-local). They agreed only because Render happens to run
+// UTC and Ghana has no daylight saving — an accident nothing in code, config
+// or docs recorded, so setting TZ or moving region would have silently shifted
+// the cutoff and dated orders to the wrong day. Both now come from one
+// explicit zone. Stored instants were always correct (timestamptz throughout);
+// only the derivation of "today" and "past noon" was ambiguous.
+const BUSINESS_TZ = process.env.BUSINESS_TZ || 'Africa/Accra';
+const _dateFmt = new Intl.DateTimeFormat('en-CA', {
+  timeZone: BUSINESS_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+});
+const _hourFmt = new Intl.DateTimeFormat('en-GB', {
+  timeZone: BUSINESS_TZ, hour: '2-digit', hour12: false,
+});
+// YYYY-MM-DD in the business timezone. en-CA formats exactly that way.
+function businessDate(d = new Date()) { return _dateFmt.format(d); }
+// 0-23 in the business timezone.
+function businessHour(d = new Date()) { return parseInt(_hourFmt.format(d), 10); }
+// Shift by whole days and re-derive — safe across any future DST change.
+function businessDatePlus(days, d = new Date()) {
+  const shifted = new Date(d.getTime() + days * 86400000);
+  return businessDate(shifted);
 }
 
 // ── camelCase ↔ snake_case helpers ───────────────────────────────────────
@@ -126,9 +185,25 @@ function rowIn(obj) {
 function rowsOut(rows) { return Array.isArray(rows) ? rows.map(rowOut) : rows; }
 
 // ── In-memory rate limiter (transient, intentionally not persisted) ──────
+// Single-process only: buckets clear on every deploy and a second instance
+// would keep its own. Acceptable while Render runs one dyno — see D-11.
 const rateBuckets = new Map();
+const RATE_SWEEP_MS = 5 * 60 * 1000;
+const RATE_IDLE_MS = 60 * 60 * 1000;
+let rateSweptAt = 0;
+// Keys embed caller-supplied values (emails, IPs), so without a sweep the Map
+// is an unbounded leak an attacker can grow at will (audit A-13).
+function rateSweep(now) {
+  if (now - rateSweptAt < RATE_SWEEP_MS) return;
+  rateSweptAt = now;
+  for (const [k, v] of rateBuckets) {
+    const idle = !v.hits.length || now - v.hits[v.hits.length - 1] > RATE_IDLE_MS;
+    if (v.blockedUntil < now && idle) rateBuckets.delete(k);
+  }
+}
 function rateCheck(key, { windowMs = 5 * 60 * 1000, max = 5, blockMs = 15 * 60 * 1000 } = {}) {
   const now = Date.now();
+  rateSweep(now);
   let b = rateBuckets.get(key);
   if (!b) { b = { hits: [], blockedUntil: 0 }; rateBuckets.set(key, b); }
   if (b.blockedUntil > now) return { allowed: false, retryAfterMs: b.blockedUntil - now };
@@ -139,10 +214,31 @@ function rateCheck(key, { windowMs = 5 * 60 * 1000, max = 5, blockMs = 15 * 60 *
 }
 function rateClear(key) { rateBuckets.delete(key); }
 
+// Audit D-07: these took no limit at all, and the admin panel renders them in
+// full in the browser, so the cost landed twice. A bound high enough that no
+// real screen notices, low enough that one bad table cannot take the page down.
+const LIST_LIMIT_DEFAULT = 200;
+const LIST_LIMIT_MAX = 1000;
+const listLimit = (n) => Math.min(Math.max(parseInt(n, 10) || LIST_LIMIT_DEFAULT, 1), LIST_LIMIT_MAX);
+
 // ── Products ─────────────────────────────────────────────────────────────
+// Audit D-10: /data/products.js is loaded on every page view and serialised
+// every column of every product into it. description and low_stock_threshold
+// are read only by AdminPage — which refetches the full rows from
+// /api/products on mount — and created_at is read by nothing at all. The
+// shopper catalogue projects the rest explicitly. best_before stays: unlike
+// the finding assumed, HomePage, CategoryPage and ProductPage all render it.
+const CATALOG_COLUMNS = 'id, name, category, price, unit, best_before, stock, bestseller, img';
+
 const products = {
   async list() {
     const { data, error } = await sb.from('products').select('*').order('id');
+    if (error) throw error;
+    return rowsOut(data);
+  },
+  // The shopper-facing catalogue. Admin keeps using list().
+  async listForCatalog() {
+    const { data, error } = await sb.from('products').select(CATALOG_COLUMNS).order('id');
     if (error) throw error;
     return rowsOut(data);
   },
@@ -179,19 +275,11 @@ const products = {
     if (error) throw error;
     return rowsOut(data).filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
   },
-  // Reduce stock for each ordered line item (used only when the deduct_stock
-  // admin setting is ON). Best-effort read-modify-write; never throws.
-  async decrementStock(items) {
-    for (const it of (items || [])) {
-      if (!it || it.id == null || it.birthdayGift) continue;
-      try {
-        const { data } = await sb.from('products').select('stock').eq('id', it.id).maybeSingle();
-        if (!data) continue;
-        const next = Math.max(0, Number(data.stock || 0) - Number(it.qty || 1));
-        await sb.from('products').update({ stock: next }).eq('id', it.id);
-      } catch (_) { /* keep going */ }
-    }
-  },
+  // decrementStock was removed (audit C-10). It read stock, subtracted, and
+  // wrote it back, so two concurrent orders both read the same number and both
+  // wrote the same decrement — one sale vanished. It also ran after the commit
+  // in a swallowed catch, and nothing ever added stock back. Replaced by
+  // db.stock.consume / commitHold / restock, which are atomic in Postgres.
 };
 
 // ── Users ────────────────────────────────────────────────────────────────
@@ -209,14 +297,22 @@ const users = {
     if (error) throw error;
     return rowOut(data);
   },
+  // Audit D-09: several callers looped `await users.get(id)` over a list.
+  async listByIds(ids) {
+    const clean = [...new Set((ids || []).map(String))].filter(Boolean);
+    if (!clean.length) return [];
+    const { data, error } = await sb.from('users').select('*').in('id', clean);
+    if (error) throw error;
+    return rowsOut(data);
+  },
   async findByRefCode(code) {
     if (!code) return null;
     const { data, error } = await sb.from('users').select('*').eq('ref_code', code.toUpperCase()).maybeSingle();
     if (error) throw error;
     return rowOut(data);
   },
-  async create({ name, email, phone, password, refCode, role = 'customer' }) {
-    const passwordHash = password ? hashPassword(password) : null;
+  async create({ name, email, phone, password, refCode, role = 'customer', termsVersion = null }) {
+    const passwordHash = password ? await hashPassword(password) : null;
     // Look up the referrer (if any) — inherit their squadCode AND credit them
     let squadCode = null;
     let ownsSquad = false;
@@ -242,6 +338,9 @@ const users = {
       ref_code: myRefCode, squad_code: squadCode, owns_squad: ownsSquad,
       // Record who referred them — credited only AFTER their first purchase.
       referred_by: referrer ? referrer.id : null,
+      // What each customer agreed to, and when (audit H-03). Null for the
+      // bootstrap admin and for accounts created before this shipped.
+      ...(termsVersion ? { terms_version: termsVersion, terms_accepted_at: new Date().toISOString() } : {}),
     };
     let { data, error } = await sb.from('users').insert(insert).select().single();
     // A ref_code collision must not cost someone their signup. Retry with a
@@ -250,17 +349,30 @@ const users = {
       insert.ref_code = crypto.randomBytes(6).toString('hex').toUpperCase();
       ({ data, error } = await sb.from('users').insert(insert).select().single());
     }
+    // Deploy-order safety net. If the code reaches production before
+    // supabase-schema-consent.sql has run, these two columns do not exist and
+    // EVERY signup would fail — which is precisely the coupling that cost a
+    // production day in HANDOFF §10, in the other direction. Retry without
+    // them and shout, rather than turning customers away.
+    if (error && /terms_version|terms_accepted_at/i.test(error.message || '')) {
+      console.error('SIGNUP: consent columns are missing — run supabase-schema-consent.sql. '
+        + 'Creating the account WITHOUT a consent record for now.');
+      delete insert.terms_version;
+      delete insert.terms_accepted_at;
+      ({ data, error } = await sb.from('users').insert(insert).select().single());
+    }
     if (error) throw error;
     return rowOut(data);
   },
   async verifyCredentials(email, password) {
     const u = await users.findByEmail(email);
-    if (!u || !u.passwordHash) return null;
-    if (!verifyPassword(password, u.passwordHash)) return null;
+    // Spend the same scrypt time whether or not the address exists (A-14).
+    if (!u || !u.passwordHash) { await burnPasswordTiming(password); return null; }
+    if (!(await verifyPassword(password, u.passwordHash))) return null;
     return u;
   },
   async changePassword(id, newPassword) {
-    const passwordHash = hashPassword(newPassword);
+    const passwordHash = await hashPassword(newPassword);
     const { data, error } = await sb.from('users').update({ password_hash: passwordHash, must_change_password: false }).eq('id', id).select().single();
     if (error) throw error;
     return rowOut(data);
@@ -495,6 +607,112 @@ const squads = {
   },
 };
 
+// ── Stock reservations (audit C-10) ─────────────────────────────────────
+// A thin wrapper over the SQL functions in supabase-schema-stock-holds.sql.
+// The logic lives in Postgres because it has to be atomic: the old JS version
+// read stock, subtracted, and wrote it back, so two concurrent orders both
+// read the same number and both wrote the same decrement — one sale simply
+// vanished. No amount of care in Node fixes that.
+//
+// products.stock is what is PHYSICALLY on the shelf. Availability is that
+// minus unexpired holds, so an abandoned checkout returns its stock the
+// moment the hold lapses, with nothing to clean up.
+//
+// Every one of these is a no-op unless the deduct_stock admin toggle is on —
+// the callers check, not these.
+const STOCK_HOLD_TTL_MIN = Number(process.env.STOCK_HOLD_TTL_MIN || 15);
+
+// Only the lines that consume real stock. A birthday gift is a giveaway and
+// was already excluded from the old decrement.
+function stockLines(items) {
+  const byId = new Map();
+  for (const it of (items || [])) {
+    if (!it || it.id == null || it.birthdayGift) continue;
+    const qty = Math.max(0, parseInt(it.qty, 10) || 0);
+    if (!qty) continue;
+    byId.set(String(it.id), (byId.get(String(it.id)) || 0) + qty);
+  }
+  return [...byId.entries()].map(([id, qty]) => ({ id: Number(id), qty }));
+}
+
+const stock = {
+  TTL_MIN: STOCK_HOLD_TTL_MIN,
+  lines: stockLines,
+
+  // True once supabase-schema-stock-holds.sql has run. The admin toggle uses
+  // this to refuse to turn own-stock mode on against a database that cannot
+  // track stock — which would silently do nothing at all.
+  async ready() {
+    try {
+      const { error } = await sb.rpc('stock_available', { p_ids: [] });
+      return !error;
+    } catch (_) { return false; }
+  },
+
+  // { [productId]: { onShelf, held, available } }
+  async available(ids) {
+    const clean = [...new Set((ids || []).map(Number))].filter(Number.isFinite);
+    if (!clean.length) return {};
+    const { data, error } = await sb.rpc('stock_available', { p_ids: clean });
+    if (error) throw error;
+    const out = {};
+    for (const r of (data || [])) {
+      out[r.product_id] = { onShelf: r.on_shelf, held: r.held, available: r.available };
+    }
+    return out;
+  },
+
+  // All or nothing. Resolves { ok: false, shortfalls: [...] } when it cannot
+  // be satisfied — a refusal, not an exception.
+  async hold(items, holdKey, ttlMinutes = STOCK_HOLD_TTL_MIN) {
+    const lines = stockLines(items);
+    if (!lines.length) return { ok: true, skipped: true };
+    const { data, error } = await sb.rpc('hold_stock', {
+      p_items: lines, p_hold_key: String(holdKey), p_ttl_minutes: ttlMinutes,
+    });
+    if (error) throw error;
+    return data || { ok: false, shortfalls: [] };
+  },
+
+  async release(holdKey) {
+    if (!holdKey) return 0;
+    const { data, error } = await sb.rpc('release_stock_hold', { p_hold_key: String(holdKey) });
+    if (error) throw error;
+    return Number(data || 0);
+  },
+
+  // The hold becomes a real reduction of what is on the shelf.
+  async commitHold(holdKey) {
+    const { data, error } = await sb.rpc('commit_stock_hold', { p_hold_key: String(holdKey) });
+    if (error) throw error;
+    return data || { ok: false };
+  },
+
+  // Cash on delivery commits immediately, so there is no gap to hold across.
+  async consume(items) {
+    const lines = stockLines(items);
+    if (!lines.length) return { ok: true, skipped: true };
+    const { data, error } = await sb.rpc('consume_stock', { p_items: lines });
+    if (error) throw error;
+    return data || { ok: false, shortfalls: [] };
+  },
+
+  // Cancel, payment failure, order deletion — the path that did not exist.
+  async restock(items) {
+    const lines = stockLines(items);
+    if (!lines.length) return { ok: true, skipped: true };
+    const { data, error } = await sb.rpc('restock_items', { p_items: lines });
+    if (error) throw error;
+    return data || { ok: false };
+  },
+
+  async expireHolds() {
+    const { data, error } = await sb.rpc('expire_stock_holds', {});
+    if (error) throw error;
+    return Number(data || 0);
+  },
+};
+
 // ── Sessions ─────────────────────────────────────────────────────────────
 const SESSION_TTL_DAYS = 7;
 const sessions = {
@@ -572,14 +790,19 @@ const riders = {
   async verifyCredentials(email, password) {
     const r = await riders.findByEmail(email);
     if (!r) return null;
-    if (!verifyPassword(password, r.passwordHash)) return null;
+    if (!(await verifyPassword(password, r.passwordHash))) return null;
     return r;
   },
 };
 
 async function createRider({ name, email, phone, password }) {
+  // Audit B-14: this route never ran the strength check, so rider accounts —
+  // which reach customer-facing order data — could have one-character
+  // passwords. Same rules as every other account.
+  const pwErr = validatePasswordStrength(password);
+  if (pwErr) throw new Error(pwErr);
   const { data, error } = await sb.from('riders').insert({
-    name, email: String(email).toLowerCase().trim(), phone, password_hash: hashPassword(password),
+    name, email: String(email).toLowerCase().trim(), phone, password_hash: await hashPassword(password),
   }).select().single();
   if (error) throw error;
   return rowOut(data);
@@ -737,8 +960,21 @@ const orders = {
       : { rider_id: null, status: 'queued' };
     return await orders.update(orderId, patch);
   },
+  // Audit H-04: this returned select('*'), so a rider saw every column of
+  // every assigned order — including momo_number, the full price breakdown and
+  // the customer's user_id. A rider needs to find the address, carry the
+  // right items, call the customer and collect the right amount. This is that
+  // list and nothing else; it is what RiderPage actually reads.
   async forRider(riderId) {
-    const { data, error } = await sb.from('orders').select('*').eq('rider_id', riderId).in('status', ['assigned','in_transit']).order('created_at');
+    // `paid` is not optional here despite being payment data: it drives the
+    // rider's "collect nothing" vs "collect GHS X cash" badge, and dropping it
+    // would have every prepaid order read as cash-on-delivery. Withheld:
+    // user_id, momo_number, and the subtotal/discount/loyalty breakdown —
+    // none of which a rider needs to complete a delivery.
+    const RIDER_FIELDS = 'id, customer_name, customer_phone, recipient_name, recipient_phone, '
+      + 'address, neighborhood, location, items, total, paid, payment_method, status, '
+      + 'delivery_date, delivery_slot, priority, surprise_extra, created_at';
+    const { data, error } = await sb.from('orders').select(RIDER_FIELDS).eq('rider_id', riderId).in('status', ['assigned','in_transit']).order('created_at');
     if (error) throw error;
     const list = rowsOut(data);
     // Nearest-neighbor sort starting from the rider's current location
@@ -788,8 +1024,8 @@ const orders = {
   },
   async assignQueuedForToday() {
     const now = new Date();
-    if (now.getHours() < 12) return [];
-    const today = now.toISOString().slice(0, 10);
+    if (businessHour(now) < 12) return [];
+    const today = businessDate(now);
     const { data, error } = await sb.from('orders').select('*')
       .eq('status', 'queued').is('rider_id', null).not('location', 'is', null)
       .or(`delivery_date.is.null,delivery_date.lte.${today}`);
@@ -852,47 +1088,82 @@ const searchLog = {
       result_count: resultCount,
     });
   },
-  async topQueries({ days = 30, limit = 20 } = {}) {
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-    const { data, error } = await sb.from('search_queries').select('query').gte('created_at', since);
+  // Audit D-08: these selected every row in the window and counted in Node.
+  // search_queries is unauthenticated-write, so it is the table most likely to
+  // reach millions of rows first — and the aggregate downloaded it. Postgres
+  // does the group-by now, returning a handful of rows.
+  //
+  // The rpc falls back to the old path when the function is absent, so this
+  // deploys safely ahead of supabase-schema-aggregates.sql.
+  async _aggregate(rpcName, { days, limit, unmatchedOnly }) {
+    try {
+      const { data, error } = await sb.rpc(rpcName, { days, lim: limit });
+      if (!error && Array.isArray(data)) {
+        return data.map((r) => ({ query: r.query, count: Number(r.count) }));
+      }
+      if (error) console.warn('searchLog: ' + rpcName + ' unavailable, counting in Node (run supabase-schema-aggregates.sql):', error.message);
+    } catch (e) {
+      console.warn('searchLog: ' + rpcName + ' failed, counting in Node:', e.message);
+    }
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    let q = sb.from('search_queries').select('query').gte('created_at', since).limit(50000);
+    if (unmatchedOnly) q = q.eq('result_count', 0);
+    const { data, error } = await q;
     if (error) throw error;
     const counts = new Map();
-    for (const r of data) {
-      const q = String(r.query || '').toLowerCase();
-      counts.set(q, (counts.get(q) || 0) + 1);
+    for (const r of data || []) {
+      const key = String(r.query || '').trim().toLowerCase();
+      if (!key) continue;
+      counts.set(key, (counts.get(key) || 0) + 1);
     }
     return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1])
+      .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
       .slice(0, limit)
       .map(([query, count]) => ({ query, count }));
   },
+  async topQueries({ days = 30, limit = 20 } = {}) {
+    return searchLog._aggregate('search_top_queries', { days, limit, unmatchedOnly: false });
+  },
   async unmatchedQueries({ days = 30, limit = 20 } = {}) {
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-    const { data, error } = await sb.from('search_queries').select('query, result_count').gte('created_at', since).eq('result_count', 0);
-    if (error) throw error;
-    const counts = new Map();
-    for (const r of data) {
-      const q = String(r.query || '').toLowerCase();
-      counts.set(q, (counts.get(q) || 0) + 1);
-    }
-    return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, limit)
-      .map(([query, count]) => ({ query, count }));
+    return searchLog._aggregate('search_unmatched_queries', { days, limit, unmatchedOnly: true });
   },
 };
 
 // ── Recurring orders ─────────────────────────────────────────────────────
+const MIN_CADENCE_DAYS = 1;
+const MAX_CADENCE_DAYS = 90;
+const MAX_SCHEDULE_AHEAD_DAYS = 365;
+const MAX_ACTIVE_RECURRING = 10;
 const recurring = {
   async listForUser(userId) {
     const { data, error } = await sb.from('recurring_orders').select('*').eq('user_id', userId).order('next_run_at');
     if (error) throw error;
     return rowsOut(data);
   },
+  // Audit B-10: next_run_at went in unvalidated, so a past date made the row
+  // due on the very next sweep — and with no cap on rows per user, a few
+  // hundred back-dated rows became a few hundred real cash orders in one
+  // runDailyJobs pass. Cadence and horizon are now bounded, and a user can
+  // only hold so many active schedules.
   async create({ userId, items, cadenceDays, nextRunAt, deliveryInfo }) {
+    // Reject a non-numeric cadence rather than clamping it: `parseInt('abc') || 0`
+    // then clamped upward would have quietly become 1 — a daily order.
+    const rawCadence = parseInt(cadenceDays, 10);
+    if (!Number.isFinite(rawCadence)) throw new Error('cadenceDays must be a number of days.');
+    const cadence = Math.min(Math.max(rawCadence, MIN_CADENCE_DAYS), MAX_CADENCE_DAYS);
+    const run = String(nextRunAt || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(run)) throw new Error('nextRunAt must be a YYYY-MM-DD date.');
+    // Never in the past (that is the immediate-fire bug) and never further out
+    // than a year, which is well past any real reorder.
+    const today = businessDate();
+    if (run < today) throw new Error('nextRunAt cannot be in the past.');
+    if (run > businessDatePlus(MAX_SCHEDULE_AHEAD_DAYS)) throw new Error('nextRunAt is too far ahead.');
+    const { count } = await sb.from('recurring_orders')
+      .select('id', { count: 'exact', head: true }).eq('user_id', userId).eq('active', true);
+    if (Number(count || 0) >= MAX_ACTIVE_RECURRING) throw new Error('You already have ' + MAX_ACTIVE_RECURRING + ' active auto-reorders. Pause or delete one first.');
     const { data, error } = await sb.from('recurring_orders').insert({
-      user_id: userId, items, cadence_days: cadenceDays,
-      next_run_at: nextRunAt, delivery_info: deliveryInfo || null,
+      user_id: userId, items: Array.isArray(items) ? items.slice(0, 100) : items, cadence_days: cadence,
+      next_run_at: run, delivery_info: deliveryInfo || null,
     }).select().single();
     if (error) throw error;
     return rowOut(data);
@@ -923,8 +1194,8 @@ const productRequests = {
     if (error) throw error;
     return rowOut(data);
   },
-  async listAll({ status = null } = {}) {
-    let q = sb.from('product_requests').select('*').order('created_at', { ascending: false });
+  async listAll({ status = null, limit } = {}) {
+    let q = sb.from('product_requests').select('*').order('created_at', { ascending: false }).limit(listLimit(limit));
     if (status) q = q.eq('status', status);
     const { data, error } = await q;
     if (error) throw error;
@@ -985,21 +1256,31 @@ async function getVapidKeys() {
 async function bootstrap() {
   let admin = await users.findByEmail(ADMIN_EMAIL);
   if (!admin) {
+    const pw = ADMIN_BOOTSTRAP_PW || crypto.randomBytes(12).toString('base64url');
     admin = await users.create({
       name: 'SDGMart Admin', email: ADMIN_EMAIL, phone: null,
-      password: ADMIN_DEFAULT_PW, refCode: null, role: 'admin',
+      password: pw, refCode: null, role: 'admin',
     });
     await sb.from('users').update({ email_verified: true, must_change_password: true }).eq('id', admin.id);
-    console.log('🛠  Created admin account ' + ADMIN_EMAIL + ' (default pw: ' + ADMIN_DEFAULT_PW + ' — change immediately)');
-  } else if (admin.passwordHash && verifyPassword(ADMIN_DEFAULT_PW, admin.passwordHash) && !admin.mustChangePassword) {
+    console.log('🛠  Created admin account ' + ADMIN_EMAIL);
+    if (ADMIN_BOOTSTRAP_PW) {
+      console.log('    Password taken from ADMIN_BOOTSTRAP_PASSWORD. It must be changed at first sign-in.');
+    } else {
+      console.log('    One-time password (shown here only, never logged again): ' + pw);
+      console.log('    Sign in with it and change it immediately — admin routes stay locked until you do.');
+    }
+  } else if (admin.passwordHash && !admin.mustChangePassword && await verifyPassword(LEGACY_ADMIN_PW, admin.passwordHash)) {
     await sb.from('users').update({ must_change_password: true }).eq('id', admin.id);
+    console.warn('⚠️  Admin is still on the old repo default password — admin routes are locked until it is changed.');
   }
 }
 
 // ── Saved addresses ──────────────────────────────────────────────────────
 const addresses = {
-  async list(userId) {
-    const { data, error } = await sb.from('addresses').select('*').eq('user_id', userId).order('is_default', { ascending: false }).order('created_at');
+  async list(userId, { limit = 100 } = {}) {
+    const { data, error } = await sb.from('addresses').select('*').eq('user_id', userId)
+      .order('is_default', { ascending: false }).order('created_at')
+      .limit(Math.min(Math.max(parseInt(limit, 10) || 100, 1), 500));
     if (error) throw error;
     return rowsOut(data);
   },
@@ -1010,9 +1291,15 @@ const addresses = {
       if (!count) isDefault = true;
     }
     if (isDefault) await sb.from('addresses').update({ is_default: false }).eq('user_id', userId);
-    const { data, error } = await sb.from('addresses').insert({
-      user_id: userId, label, neighborhood, address, location: location || null, is_default: !!isDefault,
-    }).select().single();
+    const insert = { user_id: userId, label, neighborhood, address, location: location || null, is_default: !!isDefault };
+    let { data, error } = await sb.from('addresses').insert(insert).select().single();
+    // With the partial unique index in place (audit B-13) a concurrent save
+    // that also cleared and claimed the default loses here instead of leaving
+    // two defaults behind. Re-clear and retry once; the row still gets saved.
+    if (error && isDefault && /unique|duplicate/i.test(error.message || '')) {
+      await sb.from('addresses').update({ is_default: false }).eq('user_id', userId);
+      ({ data, error } = await sb.from('addresses').insert(insert).select().single());
+    }
     if (error) throw error;
     return rowOut(data);
   },
@@ -1026,7 +1313,11 @@ const addresses = {
       if (Object.prototype.hasOwnProperty.call(patch || {}, k)) safe[k] = patch[k];
     }
     if (safe.isDefault) await sb.from('addresses').update({ is_default: false }).eq('user_id', userId);
-    const { data, error } = await sb.from('addresses').update(rowIn(safe)).eq('id', id).eq('user_id', userId).select().single();
+    let { data, error } = await sb.from('addresses').update(rowIn(safe)).eq('id', id).eq('user_id', userId).select().single();
+    if (error && safe.isDefault && /unique|duplicate/i.test(error.message || '')) {
+      await sb.from('addresses').update({ is_default: false }).eq('user_id', userId);
+      ({ data, error } = await sb.from('addresses').update(rowIn(safe)).eq('id', id).eq('user_id', userId).select().single());
+    }
     if (error) throw error;
     return rowOut(data);
   },
@@ -1098,13 +1389,23 @@ const reviews = {
   },
   // Order-level review ("how was your order?") — product_id NULL marks it.
   // Requires supabase-schema-order-reviews.sql (product_id made nullable).
+  // reviews_one_per_order (audit B-13) now makes a second review of the same
+  // order a unique violation rather than a silent duplicate. Turn that into
+  // something the customer can read instead of a 500.
   async createForOrder({ userId, orderId, rating, message }) {
     const { data, error } = await sb.from('reviews').insert({
       user_id: userId, product_id: null, order_id: orderId,
       rating: Math.max(1, Math.min(5, parseInt(rating))),
       message: (message || '').slice(0, 800),
     }).select().single();
-    if (error) throw error;
+    if (error) {
+      if (/unique|duplicate/i.test(error.message || '')) {
+        const e = new Error('You have already rated this order.');
+        e.status = 409;
+        throw e;
+      }
+      throw error;
+    }
     return rowOut(data);
   },
   // Returns recent delivered ORDERS the user hasn't reviewed yet (one prompt
@@ -1138,9 +1439,9 @@ const issueReports = {
     if (error) throw error;
     return rowOut(data);
   },
-  async listAll() {
+  async listAll({ limit } = {}) {
     const { data, error } = await sb.from('issue_reports')
-      .select('*, users(name, email)').order('created_at', { ascending: false });
+      .select('*, users(name, email)').order('created_at', { ascending: false }).limit(listLimit(limit));
     if (error) throw error;
     return (data || []).map((r) => {
       const { users: u, ...rest } = r;
@@ -1164,8 +1465,8 @@ const promotions = {
     if (error) throw error;
     return rowsOut(data);
   },
-  async listAll() {
-    const { data, error } = await sb.from('promotions').select('*').order('created_at', { ascending: false });
+  async listAll({ limit } = {}) {
+    const { data, error } = await sb.from('promotions').select('*').order('created_at', { ascending: false }).limit(listLimit(limit));
     if (error) throw error;
     return rowsOut(data);
   },
@@ -1223,13 +1524,19 @@ const stats = {
 const metrics = {
   async overview({ days = 30 } = {}) {
     const since = new Date(Date.now() - days * 86400000);
-    const { data: allOrders } = await sb.from('orders').select('*').gte('created_at', since.toISOString());
+    // Only the four columns this function actually reads — it was pulling every
+    // column of every order in the window, addresses and phone numbers included
+    // (audit D-08/D-10). `items` is the heavy one and is genuinely needed for
+    // the top-products breakdown.
+    const { data: allOrders } = await sb.from('orders')
+      .select('status, created_at, total, items').gte('created_at', since.toISOString());
     const orders = rowsOut(allOrders || []);
     const nonCancelled = orders.filter(o => o.status !== 'cancelled');
     const delivered = orders.filter(o => o.status === 'delivered');
 
-    // Per-day buckets (oldest → newest)
-    const dayKey = (d) => new Date(d).toISOString().slice(0, 10);
+    // Per-day buckets (oldest → newest), bucketed by the business day so the
+    // dashboard's "today" matches the shop's, not the server's (audit B-11).
+    const dayKey = (d) => businessDate(new Date(d));
     const buckets = {};
     for (let i = days - 1; i >= 0; i--) {
       const k = dayKey(Date.now() - i * 86400000);
@@ -1359,7 +1666,85 @@ const referrals = {
         expect: { loyalty_balance: money(cur.loyaltyBalance) },
         value: true,
       }));
-    } catch (e) { console.warn('referral credit failed (run schema-referrals.sql?):', e.message); }
+    } catch (e) {
+      // This is money owed to a real person. It used to warn and vanish
+      // (audit E-10); now it is recorded where someone will see it.
+      console.error('REFERRAL CREDIT FAILED for referee ' + refereeUser.id + ' → referrer ' + refereeUser.referredBy + ':', e.message);
+      try {
+        await errorLog.record({
+          message: 'REFERRAL CREDIT FAILED: referee ' + refereeUser.id + ' -> referrer ' + refereeUser.referredBy + ' (GHS 5 not paid): ' + e.message,
+          path: 'referrals.creditFirstPurchase', method: 'JOB', status: 500, userId: refereeUser.id,
+        });
+      } catch (_) {}
+    }
+  },
+};
+
+// ── Retention (audit B-12) ───────────────────────────────────────────────
+// Sessions were deleted only when an expired one happened to be read, and
+// email_tokens, pending_payments, search_queries and error_logs had no
+// retention at all — so on a 500MB tier the junk tables were the ones growing
+// fastest. This runs once a day from runDailyJobs.
+//
+// Windows are set by what the data is actually for, not by a uniform number:
+// a session past its expiry is dead weight the same day, while error logs are
+// the only forensic trail there is and are worth three months.
+//
+// pending_payments is deliberately NOT swept aggressively here. The abandoned-
+// reservation job already releases held loyalty at 24h after checking Paystack;
+// this only removes rows so old that no recovery is plausible, and it leaves
+// anything still carrying a reservation alone so the money path stays the one
+// place that decides.
+const RETENTION = {
+  sessions: { days: 0 },        // expired is expired
+  emailTokens: { days: 0 },
+  pendingPayments: { days: 30 },
+  searchQueries: { days: 90 },
+  errorLogs: { days: 90 },
+};
+
+const retention = {
+  async sweep() {
+    const ago = (d) => new Date(Date.now() - d * 86400000).toISOString();
+    const now = new Date().toISOString();
+    const out = {};
+    const run = async (name, fn) => {
+      try { out[name] = await fn(); }
+      catch (e) { out[name] = 'failed: ' + e.message; console.warn('retention sweep (' + name + ') failed:', e.message); }
+    };
+
+    await run('sessions', async () => {
+      const { data } = await sb.from('sessions').delete().lt('expires_at', now).select('token');
+      return (data || []).length;
+    });
+    await run('emailTokens', async () => {
+      const { data } = await sb.from('email_tokens').delete().lt('expires_at', now).select('token');
+      return (data || []).length;
+    });
+    await run('pendingPayments', async () => {
+      // Only rows with nothing reserved against them — anything still holding
+      // a customer's loyalty is the money path's to release, not ours.
+      const { data: old } = await sb.from('pending_payments').select('reference, draft')
+        .lt('created_at', ago(RETENTION.pendingPayments.days)).limit(500);
+      const safe = (old || []).filter((r) => !(r.draft && r.draft._reserved)).map((r) => r.reference);
+      if (!safe.length) return 0;
+      await sb.from('pending_payments').delete().in('reference', safe);
+      return safe.length;
+    });
+    await run('searchQueries', async () => {
+      const { data } = await sb.from('search_queries').delete()
+        .lt('created_at', ago(RETENTION.searchQueries.days)).select('id');
+      return (data || []).length;
+    });
+    await run('errorLogs', async () => {
+      const { data } = await sb.from('error_logs').delete()
+        .lt('created_at', ago(RETENTION.errorLogs.days)).select('id');
+      return (data || []).length;
+    });
+
+    const summary = Object.entries(out).map(([k, v]) => k + '=' + v).join(' ');
+    console.log('retention sweep: ' + summary);
+    return out;
   },
 };
 
@@ -1373,12 +1758,14 @@ const leaderboard = {
       const counts = {};
       (data || []).forEach(r => { counts[r.referrer_id] = (counts[r.referrer_id] || 0) + 1; });
       const ranked = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, limit);
-      const out = [];
-      for (const [rid, count] of ranked) {
-        const u = await users.get(rid);
-        out.push({ id: rid, name: (u && u.name) || 'A friend', referralCount: count, loyaltyBalance: u ? u.loyaltyBalance : 0 });
-      }
-      return out;
+      // One query for the whole page of referrers rather than one each — this
+      // is reached from a public, uncached endpoint (audit D-09).
+      const people = await users.listByIds(ranked.map(([rid]) => rid));
+      const byId = new Map(people.map((u) => [String(u.id), u]));
+      return ranked.map(([rid, count]) => {
+        const u = byId.get(String(rid));
+        return { id: rid, name: (u && u.name) || 'A friend', referralCount: count, loyaltyBalance: u ? u.loyaltyBalance : 0 };
+      });
     } catch (e) { console.warn('leaderboard failed:', e.message); return []; }
   },
   // Award last month's top referrer GHS 15 (once). Cron-less: runs on demand,
@@ -1417,7 +1804,13 @@ const errorLog = {
         status: status || null,
         user_id: userId || null,
       });
-    } catch (_) { /* never let logging throw */ }
+    } catch (e) {
+      // Logging must never throw, but failing invisibly meant the error log
+      // could be dead for weeks with nothing to show it (audit E-10). The
+      // console is the one sink that cannot itself be down.
+      console.error('ERROR LOG WRITE FAILED — the error below was never recorded:', e.message);
+      console.error('   ', String(message || '').slice(0, 300));
+    }
   },
   async list(limit = 100) {
     const { data, error } = await sb.from('error_logs').select('*').order('created_at', { ascending: false }).limit(limit);
@@ -1436,12 +1829,32 @@ async function ensurePhotoBucket() {
     await sb.storage.createBucket('product-photos', { public: true });
   } catch (_) {}
 }
-async function uploadProductPhoto(buffer, mimeType = 'image/jpeg') {
+// Audit A-19: the MIME used to come straight from the client's data URL and
+// set both the stored contentType and the file extension, so
+// `data:text/html;base64,...` was stored as .html and served as HTML from a
+// public bucket. The declared type is now ignored entirely — the format is
+// read from the bytes, and anything that is not a real JPEG/PNG/WebP is
+// rejected before it reaches storage.
+const IMAGE_SIGNATURES = [
+  { mime: 'image/jpeg', ext: 'jpg',  match: (b) => b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  { mime: 'image/png',  ext: 'png',  match: (b) => b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
+  { mime: 'image/webp', ext: 'webp', match: (b) => b.length > 12 && b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP' },
+];
+function sniffImageType(buffer) {
+  if (!Buffer.isBuffer(buffer)) return null;
+  for (const sig of IMAGE_SIGNATURES) {
+    try { if (sig.match(buffer)) return sig; } catch (_) {}
+  }
+  return null;
+}
+
+async function uploadProductPhoto(buffer) {
+  const sig = sniffImageType(buffer);
+  if (!sig) throw new Error('Only JPEG, PNG and WebP images can be uploaded.');
   await ensurePhotoBucket();
-  const ext = (mimeType.split('/')[1] || 'jpg').replace('+xml', '');
-  const path = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
+  const path = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${sig.ext}`;
   const { error } = await sb.storage.from('product-photos').upload(path, buffer, {
-    contentType: mimeType, cacheControl: '31536000',
+    contentType: sig.mime, cacheControl: '31536000',
   });
   if (error) throw error;
   const { data } = sb.storage.from('product-photos').getPublicUrl(path);
@@ -1470,6 +1883,21 @@ async function cancelOrder(orderId, userId, reason) {
   // loyalty on an order and then cancelled simply lost the credit, and the
   // first-delivery-free perk stayed burned on an order that never happened.
   if (o.userId) { try { await reverseOrderRewards(o); } catch (e) { console.warn('reverseOrderRewards failed for order ' + orderId + ':', e.message); } }
+  // Put the goods back on the shelf. Without this a cancelled order left its
+  // stock permanently subtracted, and the shop eventually reported "sold out"
+  // for items that were never sold (audit C-10). Only when own-stock mode is
+  // on — otherwise nothing was subtracted in the first place.
+  try {
+    if (await appConfig.get('deduct_stock')) await stock.restock(o.items);
+  } catch (e) {
+    console.error('RESTOCK FAILED for cancelled order ' + orderId + ':', e.message);
+    try {
+      await errorLog.record({
+        message: 'RESTOCK FAILED for cancelled order ' + orderId + ' — inventory count is now too low: ' + e.message,
+        path: 'cancelOrder', method: 'CANCEL', status: 500, userId: o.userId || null,
+      });
+    } catch (_) {}
+  }
   return { ok: true };
 }
 
@@ -1582,11 +2010,12 @@ module.exports = {
   metrics, leaderboard, referrals, errorLog, pendingPayments, checkSchema, dataRequests,
   pushSubs, searchLog, recurring, appConfig, carts,
   rowOut, rowsOut,
-  hashPassword, verifyPassword, validatePasswordStrength,
-  rateCheck, rateClear,
+  hashPassword, verifyPassword, burnPasswordTiming, validatePasswordStrength,
+  rateCheck, rateClear, retention, stock,
+  businessDate, businessHour, businessDatePlus, BUSINESS_TZ,
   makeEmailToken, consumeEmailToken,
   createRider, attachOrderLocation,
-  uploadProductPhoto, cancelOrder,
+  uploadProductPhoto, sniffImageType, cancelOrder,
   getVapidKeys, bootstrap,
-  ADMIN_EMAIL, ADMIN_DEFAULT_PW,
+  ADMIN_EMAIL,
 };

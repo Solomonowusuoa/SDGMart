@@ -1,11 +1,12 @@
 {
   "name": "sdgmart",
   "version": "1.0.0",
-  "description": "SDGMart — Tamale's smart grocery service",
+  "description": "SDGMart \u2014 Tamale's smart grocery service",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "test": "node tests/stock.test.js && node tests/order-flow.test.js"
   },
   "engines": {
     "node": ">=20"

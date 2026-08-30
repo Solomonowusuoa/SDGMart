@@ -20,3 +20,12 @@ create unique index if not exists orders_client_request_id_uniq
 -- Verify:
 --   select column_name from information_schema.columns
 --   where table_name = 'orders' and column_name = 'client_request_id';
+
+
+-- ══ DOWN ══
+-- Reverses this migration. Duplicate-order protection goes OFF; the server
+-- warns at startup and keeps running. The column is dropped, so any recorded
+-- request ids are lost — that is fine, they are only meaningful for the few
+-- minutes a retry window is open.
+drop index if exists orders_client_request_id_uniq;
+alter table orders drop column if exists client_request_id;

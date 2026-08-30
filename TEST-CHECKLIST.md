@@ -222,3 +222,155 @@ Recorded so they are not mistaken for test failures.
   at checkout would be worse. Logged as a warning.
 - **Rewards now appear at delivery, not checkout.** Intended (it is the C-01 fix), but customers
   may ask. Worth a line on the success screen: *"You'll earn GHS X when this is delivered."*
+
+---
+
+# Part 2 — the medium-fix batches (branch `fix/audit-mediums-batch-1`)
+
+Added 2026-08-29. Everything below was verified against a **stubbed database**
+or a recording fake, plus a real browser for the client work. None of it has
+run against a real database, a real payment, or a real customer.
+
+Migrations first, staging first: `node scripts/migrate.js status`.
+`supabase-schema-constraints-2.sql` **can fail by design** if duplicate
+order-level reviews already exist — its INSPECT query is in the file.
+
+## STEP 6 — Access and rate limiting
+
+### ☐ Password spraying is throttled (A-13)
+- ☐ 50+ sign-in attempts from one connection, each with a *different* email → 429
+- ☐ A normal customer getting their own password wrong 3 times is unaffected
+- ☐ Watch for false positives: many real customers share one carrier NAT address.
+      If legitimate users see 429, raise `LOGIN_IP_LIMIT` rather than removing it.
+
+### ☐ Signup and checkout stay responsive under load (A-14)
+- ☐ Several signups at once → the shop still browses normally (scrypt is off the event loop now)
+- ☐ Sign-in still works for every existing account *(password hashes are unchanged in format)*
+
+### ☐ Anonymous write limits do not bite real customers (A-15)
+- ☐ Place a real order → no 429
+- ☐ Two people in the same household ordering within minutes → both succeed
+
+### ☐ Admin password enforcement (A-16)
+- ☐ `select email, must_change_password from users where role='admin'` BEFORE deploying
+- ☐ If true: sign in, change the password, admin routes unlock
+- ☐ Bootstrap password no longer appears in the Render log at startup
+
+### ☐ Security headers (A-17)
+```bash
+curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transport'
+```
+- ☐ `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'`
+- ☐ **Then open the site and check the browser console for CSP *report-only* violations.**
+      That list is what to fix before the full policy can be enforced. Paystack,
+      Google sign-in, Leaflet maps and Analytics are the ones to watch.
+- ☐ Paystack checkout still opens · Google sign-in still works · the map still loads tiles
+
+### ☐ Product photo upload (A-19)
+- ☐ A normal JPEG/PNG/WebP still uploads
+- ☐ Renaming a `.txt` to `.jpg` and uploading it is rejected
+
+## STEP 7 — Money and scheduling
+
+### ☐ Delivery dating uses Accra time, not the server's (B-11)
+- ☐ Order at 11:30 Accra → same-day · order at 12:30 Accra → next-day
+- ☐ Admin dashboard "today" matches the shop's day, not UTC
+
+### ☐ Recurring orders are bounded (B-10)
+- ☐ Try to schedule one for yesterday → rejected
+- ☐ Cadence 0 stores as 1, cadence 9999 stores as 90, "abc" is rejected
+- ☐ Existing recurring orders still run
+
+### ☐ One review per order (B-13)
+- ☐ Rate a delivered order → works
+- ☐ Rate the same order again → "You have already rated this order."
+
+### ☐ Rider payload no longer carries extra PII (H-04)
+- ☐ **A prepaid order still shows "✓ PAID ONLINE — collect nothing" to the rider.**
+      This is the one that would cost real money if wrong — riders demanding cash
+      for orders already paid. Check it on a real Paystack order.
+- ☐ A cash order still shows "COLLECT GHS X CASH"
+- ☐ Rider can still call the customer and find the address
+
+## STEP 8 — Customer-facing
+
+### ☐ Cart prices are current (C-09)
+- ☐ Add an item, change its price in Admin, reopen the cart → the new price shows
+- ☐ Checkout charges the same number the cart displayed
+
+### ☐ Catalogue refreshes on resume (F-06)
+- ☐ Install the PWA, background it for a few minutes, reopen → prices and stock are current
+- ☐ Change a price in Admin while a phone has the app backgrounded → it appears on resume
+
+### ☐ Payment options fail honestly (F-05)
+- ☐ Block `/api/paystack/config` in DevTools → checkout says it couldn't check,
+      offers "Try again", and cash on delivery still works
+- ☐ Unblock, tap "Try again" → the Pay Now option appears
+
+### ☐ Keyboard focus is visible (F-07)
+- ☐ Tab through the shop → every focused control has a visible orange ring
+- ☐ Clicking with a mouse leaves no ring behind
+
+### ☐ Admin tables on a phone (F-08)
+- ☐ Open Admin → Orders on an actual phone → the table scrolls sideways to the last column
+- ☐ Same for Inventory and All Riders
+
+### ☐ Signup consent (H-03)
+- ☐ The checkbox is there, unchecked, with working Privacy and Terms links
+- ☐ Submitting without it is refused
+- ☐ After signup: `select terms_version, terms_accepted_at from users order by created_at desc limit 1`
+
+### ☐ Map pin quality (I-02)
+- ☐ Indoors (network fix) → the "accurate to about N m — drag the pin" warning appears
+- ☐ Outdoors (GPS) → shows a small accuracy figure, no warning
+- ☐ `select location from orders order by id desc limit 1` → includes `accuracy` and `source`
+
+## STEP 9 — Things that only show up in production
+
+### ☐ Alerts actually arrive (G-08)
+- ☐ **Tap "Enable admin alerts" on the phone you carry, once.** Nothing below works without it.
+- ☐ Mark an order queued and leave it past `ORDER_SLA_HOURS` → an alert arrives
+- ☐ Alerts do not repeat more than once per 30 minutes per kind
+
+### ☐ Nothing sensitive in the logs (E-08)
+- ☐ Force a 500 on a guest tracking link → Admin → Errors shows `?t=[redacted]`, not the token
+- ☐ Same for a password-reset link (`?reset=[redacted]`)
+
+### ☐ Retention sweep (B-12)
+- ☐ After the first daily run, the console shows `retention sweep: sessions=… errorLogs=…`
+- ☐ `select count(*) from sessions where expires_at < now()` → 0
+- ☐ A pending payment still holding a reservation was NOT deleted
+
+### ☐ Rollback works (G-06)
+- ☐ On **staging only**: `node scripts/migrate.js down supabase-schema-constraints-2.sql`
+- ☐ It reverses, and `status` shows it pending again
+- ☐ `down supabase-schema.sql` refuses, explaining it is not reversible
+
+---
+
+## STEP 10 — Stock reservations (C-10), only before turning own-stock mode ON
+
+The SQL functions have never executed. Run these on **staging** first — they are
+section 9 of `supabase-schema-stock-holds.sql`.
+
+```sql
+select * from stock_available(array[1]);                     -- note `available`
+select hold_stock('[{"id":1,"qty":2}]'::jsonb, 'chk', 15);   -- {"ok": true}
+select * from stock_available(array[1]);                     -- available is 2 lower, on_shelf unchanged
+select release_stock_hold('chk');                            -- 1
+select * from stock_available(array[1]);                     -- back to on_shelf
+select hold_stock('[{"id":1,"qty":999999}]'::jsonb, 'x', 15);-- {"ok": false, shortfalls...}
+```
+- ☐ A hold lowers `available` but never `on_shelf`
+- ☐ Releasing restores it
+- ☐ Over-holding is refused rather than going negative
+- ☐ `commit_stock_hold` lowers `on_shelf` and clears the hold
+- ☐ `restock_items` puts it back
+
+Then, still on staging, with own-stock mode ON:
+- ☐ Two browsers, one unit left → the first to reach payment gets it, the second
+      is told which item ran out and is **not** charged
+- ☐ Abandon a Paystack popup → stock is sellable again within 15 minutes
+- ☐ Place a cash order, cancel it → the stock comes back
+- ☐ **Turn own-stock mode back OFF → ordering a `stock: 0` product works again.**
+      This is the supplier model the live shop runs on. If it breaks, stop.

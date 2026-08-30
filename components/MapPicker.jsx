@@ -81,7 +81,7 @@ const MapPicker = ({ value, onChange, height = 240, allowGeolocate = true, defau
     if (markerRef.current) markerRef.current.setLatLng([lat, lng]);
     else if (mapRef.current && window.L) {
       markerRef.current = window.L.marker([lat, lng], { draggable: true }).addTo(mapRef.current);
-      markerRef.current.on('dragend', e => { const ll = e.target.getLatLng(); setLocation(ll.lat, ll.lng); });
+      markerRef.current.on('dragend', e => { const ll = e.target.getLatLng(); setLocation(ll.lat, ll.lng, { source: 'manual' }); });
     }
     if (mapRef.current) mapRef.current.setView([lat, lng], 17);
     onChange && onChange({ lat, lng, address: r.display_name });
@@ -98,20 +98,27 @@ const MapPicker = ({ value, onChange, height = 240, allowGeolocate = true, defau
     }
   };
 
-  const setLocation = async (lat, lng) => {
+  // metres, from the device; null when the pin was placed by hand or by search.
+  const [accuracy, setAccuracy] = React.useState(null);
+  const [source, setSource] = React.useState(null); // 'gps' | 'network' | 'manual' | 'search'
+  const setLocation = async (lat, lng, meta) => {
+    const acc = meta && meta.accuracy != null ? Math.round(meta.accuracy) : null;
+    const src = (meta && meta.source) || 'manual';
+    setAccuracy(acc);
+    setSource(src);
     if (markerRef.current) markerRef.current.setLatLng([lat, lng]);
     else if (mapRef.current && window.L) {
       markerRef.current = window.L.marker([lat, lng], { draggable: true }).addTo(mapRef.current);
       markerRef.current.on('dragend', e => {
         const ll = e.target.getLatLng();
-        setLocation(ll.lat, ll.lng);
+        setLocation(ll.lat, ll.lng, { source: 'manual' });
       });
     }
     if (mapRef.current) mapRef.current.setView([lat, lng], Math.max(mapRef.current.getZoom(), 15));
     setResolving(true);
     const address = await reverseGeocode(lat, lng);
     setResolving(false);
-    onChange && onChange({ lat, lng, address });
+    onChange && onChange({ lat, lng, address, accuracy: acc, source: src });
   };
 
   // Lazy-load Leaflet (CSS + JS) the first time a map is actually shown.
@@ -144,12 +151,12 @@ const MapPicker = ({ value, onChange, height = 240, allowGeolocate = true, defau
       if (mapRef.current) return;
       mapRef.current = window.L.map(containerRef.current).setView([center.lat, center.lng], value ? 16 : 13);
       sdgMapTileLayer(window.L).addTo(mapRef.current);
-      mapRef.current.on('click', e => setLocation(e.latlng.lat, e.latlng.lng));
+      mapRef.current.on('click', e => setLocation(e.latlng.lat, e.latlng.lng, { source: 'manual' }));
       if (value) {
         markerRef.current = window.L.marker([value.lat, value.lng], { draggable: true }).addTo(mapRef.current);
         markerRef.current.on('dragend', e => {
           const ll = e.target.getLatLng();
-          setLocation(ll.lat, ll.lng);
+          setLocation(ll.lat, ll.lng, { source: 'search' });
         });
       }
     };
@@ -165,7 +172,10 @@ const MapPicker = ({ value, onChange, height = 240, allowGeolocate = true, defau
     }
     setResolving(true);
 
-    const onOk = (pos) => { setResolving(false); setLocation(pos.coords.latitude, pos.coords.longitude); };
+    const onOk = (src) => (pos) => {
+      setResolving(false);
+      setLocation(pos.coords.latitude, pos.coords.longitude, { accuracy: pos.coords.accuracy, source: src });
+    };
     // Actionable messages: each tells the customer how to fix it, and that they
     // can always fall back to the search box or dragging the pin.
     const DENIED = "Location is blocked. Tap the 🔒 (or ⓘ) icon next to the web address, allow Location, then try again — or search a landmark above / drag the pin.";
@@ -175,11 +185,11 @@ const MapPicker = ({ value, onChange, height = 240, allowGeolocate = true, defau
     // times out or is unavailable (common indoors), immediately retry with the
     // faster network/Wi-Fi method so the customer still gets a pin to drag.
     navigator.geolocation.getCurrentPosition(
-      onOk,
+      onOk('gps'),
       (err1) => {
         if (err1.code === 1) { setResolving(false); setGeoErr(DENIED); return; } // permission — retry won't help
         navigator.geolocation.getCurrentPosition(
-          onOk,
+          onOk('network'),
           (err2) => { setResolving(false); setGeoErr(err2.code === 1 ? DENIED : OFF); },
           { enableHighAccuracy: false, timeout: 10000, maximumAge: 120000 }
         );
@@ -233,6 +243,17 @@ const MapPicker = ({ value, onChange, height = 240, allowGeolocate = true, defau
         <span style={{ fontSize: 11, color: 'var(--warm-gray)' }}>or click/drag the pin on the map</span>
       </div>
       {geoErr && <div style={{ fontSize: 11, color: 'var(--accent-red)', marginBottom: 6 }}>{geoErr}</div>}
+      {!geoErr && accuracy != null && accuracy > 100 && (
+        <div style={{ fontSize: 11, color: '#7A5A00', background: '#FFF4E0', padding: '6px 9px', marginBottom: 6, lineHeight: 1.45 }}>
+          This pin is only accurate to about {accuracy >= 1000 ? (accuracy / 1000).toFixed(1) + ' km' : accuracy + ' m'} — your phone
+          used the network rather than GPS. <strong>Drag the pin</strong> to your exact gate so the rider isn't left guessing.
+        </div>
+      )}
+      {!geoErr && accuracy != null && accuracy <= 100 && source === 'gps' && (
+        <div style={{ fontSize: 11, color: 'var(--rd-muted)', marginBottom: 6 }}>
+          Pin accurate to about {accuracy} m. Drag it if it isn't quite right.
+        </div>
+      )}
       <div ref={containerRef} style={{ height, width: '100%', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--cream-dark)' }} />
       {value && (
         <div style={{ marginTop: 8, fontSize: 12, color: 'var(--warm-gray)' }}>
