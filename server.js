@@ -781,6 +781,28 @@ const PROMO_STALE_MS = 10 * 60 * 1000;
 // Admin-flippable stops for the paths that can lose money. Without these the
 // only way to halt an exploit in progress is a code change and a deploy — with
 // no staging to verify it against. Default ON, so an unset key changes nothing.
+// Own-stock mode. Deliberately NOT switchOn(): that fails open so a config
+// read cannot stop the shop trading, which is right for the emergency
+// switches and exactly wrong here — failing open would start subtracting
+// stock on a shop that does not track any (audit C-10).
+async function ownStockMode() {
+  try { return !!(await db.appConfig.get('deduct_stock')); }
+  catch (_) { return false; }
+}
+
+// Turn shortfall rows into something a customer can read.
+async function namesForShortfalls(shortfalls) {
+  const ids = (shortfalls || []).map((s) => s.id).filter((v) => v != null);
+  if (!ids.length) return 'one of your items';
+  try {
+    const found = await db.products.listByIds(ids);
+    const names = found.map((p) => p.name).filter(Boolean);
+    if (!names.length) return 'one of your items';
+    if (names.length === 1) return names[0];
+    return names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+  } catch (_) { return 'one of your items'; }
+}
+
 async function switchOn(key) {
   try {
     const v = await db.appConfig.get(key);
@@ -944,6 +966,14 @@ async function computeOrderPricing(reqUser, body) {
   // One query instead of one per line.
   const found = await db.products.listByIds([...wanted.keys()]);
   const byId = new Map(found.map((p) => [String(p.id), p]));
+  // What can actually be sold right now: on the shelf, minus live holds from
+  // other checkouts (audit C-10). Falls back to the raw shelf count if the
+  // reservation functions are unreachable — no worse than before they existed.
+  let availableById = null;
+  if (deductStock) {
+    try { availableById = await db.stock.available([...wanted.keys()]); }
+    catch (e) { console.error('stock availability lookup failed, using shelf count:', e.message); }
+  }
   const items = [];
   const unavailable = [];
   for (const [id, qty] of wanted) {
@@ -952,9 +982,14 @@ async function computeOrderPricing(reqUser, body) {
     // Availability was enforced only by hiding "Sold out" products in the UI,
     // so a direct POST could order any quantity of something with no stock
     // (B-03). Only meaningful while the deduct_stock toggle is on.
-    if (deductStock && Number(p.stock || 0) < qty) {
-      unavailable.push({ id, name: p.name, reason: Number(p.stock || 0) ? 'partial' : 'out', have: Number(p.stock || 0) });
-      continue;
+    if (deductStock) {
+      const avail = availableById && availableById[p.id]
+        ? Number(availableById[p.id].available)
+        : Number(p.stock || 0);
+      if (avail < qty) {
+        unavailable.push({ id, name: p.name, reason: avail ? 'partial' : 'out', have: avail });
+        continue;
+      }
     }
     const pct = Number(promoMap[p.id] || 0);
     const price = Math.max(0, +(Number(p.price) * (1 - pct / 100)).toFixed(2));
@@ -1020,7 +1055,14 @@ async function reserveForCheckout(reqUser, pricing, giftClaimYear) {
 }
 
 async function releaseReservation(ledger) {
-  if (!ledger || !ledger.userId) return;
+  if (!ledger) return;
+  // Stock first, and outside the userId guard below: guests hold stock too,
+  // but have no loyalty or perks to hand back (audit C-10).
+  if (ledger.stockHoldKey) {
+    try { await db.stock.release(ledger.stockHoldKey); }
+    catch (e) { console.error('STOCK HOLD RELEASE FAILED for ' + ledger.stockHoldKey + ':', e.message); }
+  }
+  if (!ledger.userId) return;
   const { userId } = ledger;
   try { if (ledger.loyalty > 0) await db.squads.addLoyalty(userId, ledger.loyalty); }
   catch (e) { console.error('RESERVATION RELEASE FAILED (loyalty) for user ' + userId + ':', e.message); }
@@ -1185,6 +1227,32 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
     }
   }
 
+  // ── Step 1b: stock (audit C-10) ──────────────────────────────────────────
+  // A Paystack order already holds its stock from checkout — that hold is
+  // committed after the order row exists. A cash order commits immediately,
+  // so there is no gap to hold across: take the stock atomically here, before
+  // the customer is told anything, and undo it if the create then fails.
+  const stockHoldKey = extra.paystackRef || null;
+  if (!stockHoldKey && await ownStockMode()) {
+    try {
+      const taken = await db.stock.consume(itemsList);
+      if (!taken.ok) {
+        const names = await namesForShortfalls(taken.shortfalls);
+        for (const undo of compensate.reverse()) { try { await undo(); } catch (_) {} }
+        throw new HttpError(409, 'Someone just took the last of ' + names + '. Nothing has been charged.', { unavailable: taken.shortfalls || [] });
+      }
+      compensate.push(() => db.stock.restock(itemsList));
+    } catch (e) {
+      if (e && e.status) throw e;
+      // Own-stock mode is on but we cannot account for stock. Let the order
+      // through rather than refusing a real customer over bookkeeping, and
+      // make sure somebody knows the count is now wrong.
+      console.error('STOCK CONSUME FAILED, order proceeding unaccounted:', e.message);
+      alertAdmins('stock-consume-failed', '⚠️ Stock not deducted',
+        'Own-stock mode is on but stock could not be deducted for a cash order. Inventory counts will drift until this is fixed.');
+    }
+  }
+
   // ── Step 2: create the order. On failure, undo step 1 completely. ────────
   let created;
   try {
@@ -1238,9 +1306,26 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
   // The order exists and the customer is owed it. None of the bookkeeping below
   // may turn that into a 500, because the client would report failure for a real
   // order and the customer's retry would create a duplicate.
-  try {
-    if (await db.appConfig.get('deduct_stock')) await db.products.decrementStock(itemsList);
-  } catch (e) { console.warn('stock decrement failed for order ' + created.id + ':', e.message); }
+  // Stock (audit C-10). A Paystack order already holds its stock from
+  // checkout, so committing that hold is all that is left. A cash order was
+  // consumed atomically in step 1 before the commit, so there is nothing to do
+  // here. Either way the old best-effort read-modify-write is gone.
+  if (stockHoldKey && await ownStockMode()) {
+    try {
+      const done = await db.stock.commitHold(stockHoldKey);
+      if (!done || !Number(done.lines)) {
+        // The hold lapsed before this arrived — Paystack retries a webhook for
+        // hours, and the hold lives 15 minutes. The order is real and paid, so
+        // deduct anyway; it may drive a line to zero, which is honest.
+        console.warn('stock hold ' + stockHoldKey + ' had expired by commit time — deducting directly');
+        await db.stock.consume(itemsList);
+      }
+    } catch (e) {
+      console.error('STOCK COMMIT FAILED for order ' + created.id + ' (hold ' + stockHoldKey + '):', e.message);
+      alertAdmins('stock-commit-failed', '⚠️ Stock not deducted for an order',
+        'Order #' + created.id + ' was placed and paid, but its stock could not be deducted. Correct the count by hand.');
+    }
+  }
   if (userId && loc) {
     try { await db.addresses.markLastUsed(userId, loc, neighborhood); }
     catch (e) { console.warn('markLastUsed failed for order ' + created.id + ':', e.message); }
@@ -1675,6 +1760,33 @@ app.post('/api/paystack/init', rateLimitIp('payinit', LIMIT_PAYMENT), async (req
       reserved = await reserveForCheckout(req.user, pricing, giftYear);
     } catch (e) {
       return res.status(409).json({ error: e.message || 'Could not hold your credit — please try again' });
+    }
+    // Hold the stock too, for as long as the payment window (audit C-10).
+    // This is the "hold at checkout, not at cart" line: the customer is on the
+    // payment step, not browsing. The hold is keyed on the Paystack reference,
+    // so every path that already knows how to abandon or complete this payment
+    // knows how to release or commit the stock.
+    if (await ownStockMode()) {
+      try {
+        const held = await db.stock.hold(pricing.items, reference, db.stock.TTL_MIN);
+        if (!held.ok) {
+          await releaseReservation(reserved);   // hand the credit straight back
+          const names = await namesForShortfalls(held.shortfalls);
+          return res.status(409).json({
+            error: 'Someone just took the last of ' + names + '. Your cart has not been charged.',
+            unavailable: held.shortfalls || [],
+          });
+        }
+        reserved.stockHoldKey = reference;
+      } catch (e) {
+        // Own-stock mode is on but the reservation functions are unreachable.
+        // Do not silently sell stock we cannot account for.
+        await releaseReservation(reserved);
+        console.error('STOCK HOLD FAILED at checkout:', e.message);
+        alertAdmins('stock-hold-failed', '⚠️ Stock reservations are failing',
+          'Own-stock mode is on but holds could not be taken. Checkout is refusing online payment. Run supabase-schema-stock-holds.sql or turn own-stock mode off.');
+        return res.status(503).json({ error: 'We could not confirm stock just now. Please try again in a moment.' });
+      }
     }
     const lockedDraft = { ...draft, _reserved: reserved, _locked: { pricing, giftYear } };
     try {
@@ -2198,6 +2310,14 @@ async function runDailyJobs() {
       await db.sb.from('users').update({ birthday_notified_year: year }).eq('id', u.id);
     }
     await runRecurringOrders();
+    // Expired stock holds are already ignored by every availability query;
+    // this only reclaims the rows (audit C-10).
+    try {
+      if (await ownStockMode()) {
+        const n = await db.stock.expireHolds();
+        if (n) console.log('expired stock holds cleared: ' + n);
+      }
+    } catch (e) { console.warn('stock hold sweep failed:', e.message); }
     // Assignment used to happen only when a rider polled (audit C-08).
     try { const r = await checkStuckOrders(); if (r.stuck) console.warn('watchdog: ' + r.stuck + ' order(s) past SLA'); }
     catch (e) { console.warn('stuck-order watchdog failed:', e.message); }
@@ -2820,7 +2940,26 @@ app.post('/api/admin/settings', requireAdmin, async (req, res) => {
       }
     }
     if (showFreshness != null) await db.appConfig.set('show_freshness', !!showFreshness);
-    if (deductStock != null) await db.appConfig.set('deduct_stock', !!deductStock);
+    // Own-stock mode (audit C-10). Turning this on makes the shop start
+    // deducting inventory, which is only safe once the reservation functions
+    // exist — without them the app would claim to track stock and silently
+    // not. Refuse rather than half-enable it.
+    if (deductStock != null) {
+      if (deductStock && !(await db.appConfig.get('deduct_stock'))) {
+        if (!(await db.stock.ready())) {
+          return res.status(409).json({
+            error: 'Own-stock mode needs the stock reservation migration. Run supabase-schema-stock-holds.sql, then try again.',
+            code: 'STOCK_MIGRATION_MISSING',
+          });
+        }
+        await db.errorLog.record({
+          message: 'OWN-STOCK MODE TURNED ON by user ' + (req.user ? req.user.id : '?')
+            + ' — the shop now deducts inventory and refuses orders it cannot fill.',
+          path: 'audit', method: 'SETTINGS', status: 200, userId: req.user ? req.user.id : null,
+        }).catch(() => {});
+      }
+      await db.appConfig.set('deduct_stock', !!deductStock);
+    }
     if (storeName != null) await db.appConfig.set('store_name', String(storeName).slice(0, 60));
     if (Array.isArray(deliverySlots)) {
       const clean = deliverySlots.map(s => String(s).slice(0, 20).trim()).filter(Boolean).slice(0, 12);

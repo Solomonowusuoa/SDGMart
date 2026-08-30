@@ -275,19 +275,11 @@ const products = {
     if (error) throw error;
     return rowsOut(data).filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
   },
-  // Reduce stock for each ordered line item (used only when the deduct_stock
-  // admin setting is ON). Best-effort read-modify-write; never throws.
-  async decrementStock(items) {
-    for (const it of (items || [])) {
-      if (!it || it.id == null || it.birthdayGift) continue;
-      try {
-        const { data } = await sb.from('products').select('stock').eq('id', it.id).maybeSingle();
-        if (!data) continue;
-        const next = Math.max(0, Number(data.stock || 0) - Number(it.qty || 1));
-        await sb.from('products').update({ stock: next }).eq('id', it.id);
-      } catch (_) { /* keep going */ }
-    }
-  },
+  // decrementStock was removed (audit C-10). It read stock, subtracted, and
+  // wrote it back, so two concurrent orders both read the same number and both
+  // wrote the same decrement — one sale vanished. It also ran after the commit
+  // in a swallowed catch, and nothing ever added stock back. Replaced by
+  // db.stock.consume / commitHold / restock, which are atomic in Postgres.
 };
 
 // ── Users ────────────────────────────────────────────────────────────────
@@ -600,6 +592,112 @@ const squads = {
       ? { patch: { first_order_done: false }, expect: { first_order_done: true }, value: true }
       : null));
     return r.ok;
+  },
+};
+
+// ── Stock reservations (audit C-10) ─────────────────────────────────────
+// A thin wrapper over the SQL functions in supabase-schema-stock-holds.sql.
+// The logic lives in Postgres because it has to be atomic: the old JS version
+// read stock, subtracted, and wrote it back, so two concurrent orders both
+// read the same number and both wrote the same decrement — one sale simply
+// vanished. No amount of care in Node fixes that.
+//
+// products.stock is what is PHYSICALLY on the shelf. Availability is that
+// minus unexpired holds, so an abandoned checkout returns its stock the
+// moment the hold lapses, with nothing to clean up.
+//
+// Every one of these is a no-op unless the deduct_stock admin toggle is on —
+// the callers check, not these.
+const STOCK_HOLD_TTL_MIN = Number(process.env.STOCK_HOLD_TTL_MIN || 15);
+
+// Only the lines that consume real stock. A birthday gift is a giveaway and
+// was already excluded from the old decrement.
+function stockLines(items) {
+  const byId = new Map();
+  for (const it of (items || [])) {
+    if (!it || it.id == null || it.birthdayGift) continue;
+    const qty = Math.max(0, parseInt(it.qty, 10) || 0);
+    if (!qty) continue;
+    byId.set(String(it.id), (byId.get(String(it.id)) || 0) + qty);
+  }
+  return [...byId.entries()].map(([id, qty]) => ({ id: Number(id), qty }));
+}
+
+const stock = {
+  TTL_MIN: STOCK_HOLD_TTL_MIN,
+  lines: stockLines,
+
+  // True once supabase-schema-stock-holds.sql has run. The admin toggle uses
+  // this to refuse to turn own-stock mode on against a database that cannot
+  // track stock — which would silently do nothing at all.
+  async ready() {
+    try {
+      const { error } = await sb.rpc('stock_available', { p_ids: [] });
+      return !error;
+    } catch (_) { return false; }
+  },
+
+  // { [productId]: { onShelf, held, available } }
+  async available(ids) {
+    const clean = [...new Set((ids || []).map(Number))].filter(Number.isFinite);
+    if (!clean.length) return {};
+    const { data, error } = await sb.rpc('stock_available', { p_ids: clean });
+    if (error) throw error;
+    const out = {};
+    for (const r of (data || [])) {
+      out[r.product_id] = { onShelf: r.on_shelf, held: r.held, available: r.available };
+    }
+    return out;
+  },
+
+  // All or nothing. Resolves { ok: false, shortfalls: [...] } when it cannot
+  // be satisfied — a refusal, not an exception.
+  async hold(items, holdKey, ttlMinutes = STOCK_HOLD_TTL_MIN) {
+    const lines = stockLines(items);
+    if (!lines.length) return { ok: true, skipped: true };
+    const { data, error } = await sb.rpc('hold_stock', {
+      p_items: lines, p_hold_key: String(holdKey), p_ttl_minutes: ttlMinutes,
+    });
+    if (error) throw error;
+    return data || { ok: false, shortfalls: [] };
+  },
+
+  async release(holdKey) {
+    if (!holdKey) return 0;
+    const { data, error } = await sb.rpc('release_stock_hold', { p_hold_key: String(holdKey) });
+    if (error) throw error;
+    return Number(data || 0);
+  },
+
+  // The hold becomes a real reduction of what is on the shelf.
+  async commitHold(holdKey) {
+    const { data, error } = await sb.rpc('commit_stock_hold', { p_hold_key: String(holdKey) });
+    if (error) throw error;
+    return data || { ok: false };
+  },
+
+  // Cash on delivery commits immediately, so there is no gap to hold across.
+  async consume(items) {
+    const lines = stockLines(items);
+    if (!lines.length) return { ok: true, skipped: true };
+    const { data, error } = await sb.rpc('consume_stock', { p_items: lines });
+    if (error) throw error;
+    return data || { ok: false, shortfalls: [] };
+  },
+
+  // Cancel, payment failure, order deletion — the path that did not exist.
+  async restock(items) {
+    const lines = stockLines(items);
+    if (!lines.length) return { ok: true, skipped: true };
+    const { data, error } = await sb.rpc('restock_items', { p_items: lines });
+    if (error) throw error;
+    return data || { ok: false };
+  },
+
+  async expireHolds() {
+    const { data, error } = await sb.rpc('expire_stock_holds', {});
+    if (error) throw error;
+    return Number(data || 0);
   },
 };
 
@@ -1773,6 +1871,21 @@ async function cancelOrder(orderId, userId, reason) {
   // loyalty on an order and then cancelled simply lost the credit, and the
   // first-delivery-free perk stayed burned on an order that never happened.
   if (o.userId) { try { await reverseOrderRewards(o); } catch (e) { console.warn('reverseOrderRewards failed for order ' + orderId + ':', e.message); } }
+  // Put the goods back on the shelf. Without this a cancelled order left its
+  // stock permanently subtracted, and the shop eventually reported "sold out"
+  // for items that were never sold (audit C-10). Only when own-stock mode is
+  // on — otherwise nothing was subtracted in the first place.
+  try {
+    if (await appConfig.get('deduct_stock')) await stock.restock(o.items);
+  } catch (e) {
+    console.error('RESTOCK FAILED for cancelled order ' + orderId + ':', e.message);
+    try {
+      await errorLog.record({
+        message: 'RESTOCK FAILED for cancelled order ' + orderId + ' — inventory count is now too low: ' + e.message,
+        path: 'cancelOrder', method: 'CANCEL', status: 500, userId: o.userId || null,
+      });
+    } catch (_) {}
+  }
   return { ok: true };
 }
 
@@ -1886,7 +1999,7 @@ module.exports = {
   pushSubs, searchLog, recurring, appConfig, carts,
   rowOut, rowsOut,
   hashPassword, verifyPassword, burnPasswordTiming, validatePasswordStrength,
-  rateCheck, rateClear, retention,
+  rateCheck, rateClear, retention, stock,
   businessDate, businessHour, businessDatePlus, BUSINESS_TZ,
   makeEmailToken, consumeEmailToken,
   createRider, attachOrderLocation,
