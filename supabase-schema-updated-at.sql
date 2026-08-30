@@ -95,6 +95,13 @@ create index if not exists order_events_order_id_idx on order_events(order_id, c
 
 
 -- ══ DOWN ══
+-- COMMENTED OUT DELIBERATELY. These files get pasted into the Supabase SQL
+-- editor whole, and the editor has no idea this marker means "stop". An
+-- executable rollback here would create everything above and then drop it
+-- again, reporting success both times — which is exactly what happened once.
+-- `node scripts/migrate.js down <file>` strips these comment markers and runs
+-- what is inside. To roll back by hand, copy the statements out.
+/*
 drop trigger if exists orders_set_updated_at    on orders;
 drop trigger if exists users_set_updated_at     on users;
 drop trigger if exists riders_set_updated_at    on riders;
@@ -107,3 +114,4 @@ alter table users     drop column if exists updated_at;
 alter table riders    drop column if exists updated_at;
 alter table products  drop column if exists updated_at;
 alter table addresses drop column if exists updated_at;
+*/

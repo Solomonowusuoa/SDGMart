@@ -33,6 +33,14 @@ create index if not exists users_terms_accepted_at_idx
 
 
 -- ══ DOWN ══
+-- COMMENTED OUT DELIBERATELY. These files get pasted into the Supabase SQL
+-- editor whole, and the editor has no idea this marker means "stop". An
+-- executable rollback here would create everything above and then drop it
+-- again, reporting success both times — which is exactly what happened once.
+-- `node scripts/migrate.js down <file>` strips these comment markers and runs
+-- what is inside. To roll back by hand, copy the statements out.
+/*
 drop index if exists users_terms_accepted_at_idx;
 alter table users drop column if exists terms_version;
 alter table users drop column if exists terms_accepted_at;
+*/

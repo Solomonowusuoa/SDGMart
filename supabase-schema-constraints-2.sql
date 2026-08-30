@@ -73,6 +73,14 @@ alter table recurring_orders add  constraint recurring_next_run_sane
 
 
 -- ══ DOWN ══
+-- COMMENTED OUT DELIBERATELY. These files get pasted into the Supabase SQL
+-- editor whole, and the editor has no idea this marker means "stop". An
+-- executable rollback here would create everything above and then drop it
+-- again, reporting success both times — which is exactly what happened once.
+-- `node scripts/migrate.js down <file>` strips these comment markers and runs
+-- what is inside. To roll back by hand, copy the statements out.
+/*
 drop index if exists reviews_one_per_order;
 alter table recurring_orders drop constraint if exists recurring_cadence_sane;
 alter table recurring_orders drop constraint if exists recurring_next_run_sane;
+*/

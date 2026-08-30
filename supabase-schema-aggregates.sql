@@ -60,7 +60,15 @@ $$;
 
 
 -- ══ DOWN ══
+-- COMMENTED OUT DELIBERATELY. These files get pasted into the Supabase SQL
+-- editor whole, and the editor has no idea this marker means "stop". An
+-- executable rollback here would create everything above and then drop it
+-- again, reporting success both times — which is exactly what happened once.
+-- `node scripts/migrate.js down <file>` strips these comment markers and runs
+-- what is inside. To roll back by hand, copy the statements out.
+/*
 drop function if exists search_top_queries(int, int);
 drop function if exists search_unmatched_queries(int, int);
 drop index if exists search_queries_created_at_idx;
 drop index if exists search_queries_unmatched_idx;
+*/

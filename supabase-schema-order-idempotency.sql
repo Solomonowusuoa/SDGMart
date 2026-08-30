@@ -23,9 +23,17 @@ create unique index if not exists orders_client_request_id_uniq
 
 
 -- ══ DOWN ══
+-- COMMENTED OUT DELIBERATELY. These files get pasted into the Supabase SQL
+-- editor whole, and the editor has no idea this marker means "stop". An
+-- executable rollback here would create everything above and then drop it
+-- again, reporting success both times — which is exactly what happened once.
+-- `node scripts/migrate.js down <file>` strips these comment markers and runs
+-- what is inside. To roll back by hand, copy the statements out.
+/*
 -- Reverses this migration. Duplicate-order protection goes OFF; the server
 -- warns at startup and keeps running. The column is dropped, so any recorded
 -- request ids are lost — that is fine, they are only meaningful for the few
 -- minutes a retry window is open.
 drop index if exists orders_client_request_id_uniq;
 alter table orders drop column if exists client_request_id;
+*/

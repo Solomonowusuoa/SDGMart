@@ -67,6 +67,13 @@ create unique index if not exists riders_email_lower_uniq on riders (lower(email
 
 
 -- ══ DOWN ══
+-- COMMENTED OUT DELIBERATELY. These files get pasted into the Supabase SQL
+-- editor whole, and the editor has no idea this marker means "stop". An
+-- executable rollback here would create everything above and then drop it
+-- again, reporting success both times — which is exactly what happened once.
+-- `node scripts/migrate.js down <file>` strips these comment markers and runs
+-- what is inside. To roll back by hand, copy the statements out.
+/*
 -- Drops the indexes this migration added. Order queries get slow again.
 --
 -- NOTE: the two `update ... set email = lower(trim(email))` statements are NOT
@@ -79,3 +86,4 @@ drop index if exists orders_rider_status_idx;
 drop index if exists issue_reports_created_at_idx;
 drop index if exists users_email_lower_uniq;
 drop index if exists riders_email_lower_uniq;
+*/

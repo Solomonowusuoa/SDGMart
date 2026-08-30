@@ -110,7 +110,14 @@ const DOWN_MARKER = /^--\s*(?:═+\s*)?DOWN(?:\s*═+)?\s*$/m;
 function splitMigration(sql) {
   const m = sql.match(DOWN_MARKER);
   if (!m) return { up: sql, down: null };
-  return { up: sql.slice(0, m.index), down: sql.slice(m.index + m[0].length) };
+  let down = sql.slice(m.index + m[0].length);
+  // The rollback is wrapped in a block comment so that pasting the whole file
+  // into the Supabase SQL editor cannot undo the migration it just applied —
+  // the editor does not know the marker means "stop". Unwrap it here.
+  const open = down.indexOf('/*');
+  const close = down.lastIndexOf('*/');
+  if (open !== -1 && close > open) down = down.slice(open + 2, close);
+  return { up: sql.slice(0, m.index), down };
 }
 
 // The invariant that matters is that the SQL which was APPLIED has not
