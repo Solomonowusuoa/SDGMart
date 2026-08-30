@@ -349,6 +349,18 @@ const users = {
       insert.ref_code = crypto.randomBytes(6).toString('hex').toUpperCase();
       ({ data, error } = await sb.from('users').insert(insert).select().single());
     }
+    // Deploy-order safety net. If the code reaches production before
+    // supabase-schema-consent.sql has run, these two columns do not exist and
+    // EVERY signup would fail — which is precisely the coupling that cost a
+    // production day in HANDOFF §10, in the other direction. Retry without
+    // them and shout, rather than turning customers away.
+    if (error && /terms_version|terms_accepted_at/i.test(error.message || '')) {
+      console.error('SIGNUP: consent columns are missing — run supabase-schema-consent.sql. '
+        + 'Creating the account WITHOUT a consent record for now.');
+      delete insert.terms_version;
+      delete insert.terms_accepted_at;
+      ({ data, error } = await sb.from('users').insert(insert).select().single());
+    }
     if (error) throw error;
     return rowOut(data);
   },
