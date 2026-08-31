@@ -147,16 +147,28 @@ async function call(method, p, body, token) {
         'status ' + r.status + ' · ' + String(r.json && r.json.error || r.text).slice(0, 70) +
         (r.status < 400 ? '  *** ACCEPTED — should have been refused ***' : ''));
     }
-    const clamps = [
-      ['cadence 0 stores as 1', { items, cadenceDays: 0, nextRunAt: today }, 1],
-      ['cadence 9999 stores as 90', { items, cadenceDays: 9999, nextRunAt: today }, 90],
-    ];
-    for (const [label, body, expect] of clamps) {
-      const r = await call('POST', '/api/me/recurring', body, token);
-      if (r.json && r.json.id) madeRecurring.push(r.json.id);
-      rec('B-10', label, r.status < 400 && r.json && Number(r.json.cadenceDays) === expect,
-        'status ' + r.status + ' · cadenceDays = ' + (r.json && r.json.cadenceDays) + ' (expected ' + expect + ')');
-    }
+    // TEST-CHECKLIST originally expected `cadence 0` to CLAMP to 1. It does not:
+    // the route's `!cadenceDays` guard rejects 0 before the clamp is reached, and
+    // that is the better behaviour — quietly turning an explicit 0 into a DAILY
+    // auto-order is exactly the bug B-10 exists to prevent. The expectation was
+    // wrong, not the code; asserting the rejection here instead.
+    const zero = await call('POST', '/api/me/recurring', { items, cadenceDays: 0, nextRunAt: today }, token);
+    if (zero.json && zero.json.id) madeRecurring.push(zero.json.id);
+    rec('B-10', 'cadence 0 is refused rather than silently becoming a daily order',
+      zero.status === 400, 'status ' + zero.status + ' · ' + String(zero.json && zero.json.error).slice(0, 60));
+
+    const nine = await call('POST', '/api/me/recurring', { items, cadenceDays: 9999, nextRunAt: today }, token);
+    if (nine.json && nine.json.id) madeRecurring.push(nine.json.id);
+    rec('B-10', 'cadence 9999 clamps to 90', nine.status < 400 && nine.json && Number(nine.json.cadenceDays) === 90,
+      'status ' + nine.status + ' · cadenceDays = ' + (nine.json && nine.json.cadenceDays) + ' (expected 90)');
+
+    // The validation refusals above must NOT be filed as server faults. Before
+    // the status-400 fix each of them logged a 500 in error_logs and a Sentry
+    // event, so a customer's typo looked like an outage.
+    const since = new Date(Date.now() - 3 * 60000).toISOString();
+    const logged = await sb.from('error_logs').select('id').eq('path', '/api/me/recurring').gte('created_at', since);
+    rec('B-10', 'refused input is not filed as a 500 in error_logs',
+      (logged.data || []).length === 0, 'new /api/me/recurring error_logs rows: ' + (logged.data || []).length);
   } finally {
     // ── Cleanup — remove everything this run created ──────────────────────
     console.log('\nCleanup');

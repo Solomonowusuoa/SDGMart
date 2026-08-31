@@ -177,6 +177,13 @@ crashes. Three costs:
 Fixed by tagging them `status = 400`, the same pattern already used for the duplicate-review 409.
 `fail()` then returns the real message and logs nothing.
 
+**✅ Verified live after deploy `87d0bd4`.** All four now answer **400** with the real reason
+(*"nextRunAt cannot be in the past."*, *"cadenceDays must be a number of days."*, etc.) instead of
+500 *"Something went wrong on our end."*, and the re-run filed **zero** new `error_logs` rows. The
+four stale 500s from the pre-fix run (ids 92–95) were deleted, so the Errors dashboard no longer
+shows a fault that never was. A regression guard for this is now part of the script, which reads
+**19 checks, 19 passed**.
+
 ### One expectation in this document was wrong, not the code
 
 `cadence 0 stores as 1` **fails as written** — the route's `!cadenceDays` guard rejects `0` with a
