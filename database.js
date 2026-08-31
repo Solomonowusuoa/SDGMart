@@ -1227,9 +1227,16 @@ const appConfig = {
   async claim(key, value) {
     // Ensure the row exists without disturbing an existing value.
     await sb.from('app_config').upsert({ key, value: '__unclaimed__' }, { onConflict: 'key', ignoreDuplicates: true });
+    // `value` is a jsonb column, so the FILTER value has to be valid JSON — a
+    // bare 2026-08-31 makes PostgREST read 2026 as a number and then fail on
+    // "-08" ("invalid input syntax for type json"). That threw on every call,
+    // which silently killed runDailyJobs entirely: recurring orders, birthday
+    // pushes, the stuck-order watchdog, the leaderboard award and the retention
+    // sweep all stopped. The update body is serialised by supabase-js and was
+    // always fine; only the filter needs encoding here.
     const { data, error } = await sb.from('app_config')
       .update({ value, updated_at: new Date().toISOString() })
-      .eq('key', key).neq('value', value).select('key');
+      .eq('key', key).neq('value', JSON.stringify(value)).select('key');
     if (error) throw error;
     return !!(data && data.length);
   },

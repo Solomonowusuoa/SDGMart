@@ -28,6 +28,61 @@ Separately, all **20 migrations were verified applied** by probing the live data
 objects they create — `node scripts/checks/verify-migrations.js` — 20/20 present, including all
 five unique indexes and all seven stock-hold functions. Both scripts are read-only.
 
+## 🐞 RUN LOG — 2026-08-31, step 2b (safe tier) — **found a live bug**
+
+**21 checks, 20 passed, 1 failed** (`node scripts/checks/step2b-safe-checks.js`). The failure is a
+*symptom* of the bug below, and should clear once the fix is deployed.
+
+### `runDailyJobs()` has been dead since the v95 deploy
+
+`db.appConfig.claim()` threw on **every** call:
+
+```
+invalid input syntax for type json — Token "-08" is invalid.
+```
+
+`app_config.value` is a **jsonb** column. `claim()` filtered with `.neq('value', value)` where
+`value` is a bare date like `2026-08-31`. PostgREST has to cast that filter to jsonb, reads `2026`
+as a number, then fails on `-08`. The *update body* was always fine — only the **filter** needed
+JSON-encoding. Fixed in `database.js` by passing `JSON.stringify(value)` to `.neq`.
+
+**`claim()` is the first thing `runDailyJobs()` does**, so when it threw, everything behind it
+stopped — silently, because the outer handler only does `console.warn`:
+
+| Job | Consequence of it not running |
+|---|---|
+| Retention sweep (B-12) | **42 expired sessions still in the table**, oldest 2026-06-01 — this is the failing check |
+| Stuck-order watchdog (G-08) | **SLA alerts never fire** — the thing you were asked to enable admin push for |
+| Recurring orders | Auto-reorders never place *(0 active rows today, so nothing was actually missed)* |
+| Birthday gifts | Birthday pushes never fire |
+| Leaderboard award | Monthly referral winner never paid |
+| Abandoned-reservation + stock-hold sweeps | Holds never expire |
+
+**Evidence of the timeline:** `daily_job_last_run` is stuck at `2026-08-29`, written
+`00:05Z` — *before* the v95 deploy later that day. Nothing since, across at least two `/healthz`
+hits I made today. The 42 expired sessions all expired on or before 2026-08-28, consistent with
+the sweep having never run under the new code.
+
+**Verified fixed** against the live database with a throwaway key: first claim `true`, same-day
+re-claim `false`, next-day `true`, and **exactly one winner among 10 concurrent claims** — so the
+A-08 concurrency guarantee still holds. Regression check added to the safe-tier script.
+
+⚠️ **Not yet deployed.** Production still runs the broken code.
+
+> **Follow-up worth considering:** this was invisible for two days because
+> `runDailyJobs`'s outer catch logs to `console.warn` and nothing else. Recording it to
+> `error_logs` would have surfaced it in Admin → Errors on day one.
+
+**Also cleared in this run:** D-01 index usage · A-16 admin flag · E-08 stored-log redaction ·
+H-03 consent columns · B-11 Accra delivery dating.
+
+**On D-01, read the plan carefully:** `orders` holds 23 rows. Below a few hundred, Postgres
+*correctly* prefers a Seq Scan — a planner choosing the index there would be the bug. All three
+hot-path queries use an Index Scan with `enable_seqscan = off`, which is what proves the indexes
+exist and are usable. Re-check once the table is big enough for the natural plan to flip.
+
+---
+
 **Deliberately not run, and why:**
 | Check | Why it was held back |
 |---|---|
@@ -239,7 +294,12 @@ curl -sI -H 'Accept-Encoding: gzip' https://sdg-mart.com/app.bundle.js | grep -i
 ```sql
 explain analyze select * from orders order by created_at desc limit 50;
 ```
-- ☐ Plan shows an **Index Scan**, not a Seq Scan + Sort
+- ☑ Plan shows an **Index Scan**, not a Seq Scan + Sort — **verified live 2026-08-31**, with a
+      caveat that matters: `orders` holds **23 rows**, and at that size Postgres correctly prefers
+      a Seq Scan for the unfiltered `order by created_at` query. Forcing `enable_seqscan = off`
+      shows it picks `orders_created_at_idx`, so the index is present and usable. The two filtered
+      queries (`user_id + created_at`, `rider_id + status`) already use Index Scans naturally.
+      **Re-check once the table is large enough for the natural plan to flip.**
 
 ---
 
@@ -303,8 +363,9 @@ order-level reviews already exist — its INSPECT query is in the file.
 - ☐ Two people in the same household ordering within minutes → both succeed
 
 ### ☐ Admin password enforcement (A-16)
-- ☐ `select email, must_change_password from users where role='admin'` BEFORE deploying
-- ☐ If true: sign in, change the password, admin routes unlock
+- ☑ `select email, must_change_password from users where role='admin'` BEFORE deploying —
+      **checked 2026-08-31**: one admin row, `must_change_password = false`. No lockout risk.
+- ☐ If true: sign in, change the password, admin routes unlock *(n/a — the flag is false)*
 - ☐ Bootstrap password no longer appears in the Render log at startup
 
 ### ☐ Security headers (A-17)
@@ -329,7 +390,13 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 ## STEP 7 — Money and scheduling
 
 ### ☐ Delivery dating uses Accra time, not the server's (B-11)
-- ☐ Order at 11:30 Accra → same-day · order at 12:30 Accra → next-day
+- ☑ Order at 11:30 Accra → same-day · order at 12:30 Accra → next-day — **verified 2026-08-31**
+      at the function level (`businessDate`/`businessHour`/`businessDatePlus` driven with a fake
+      clock, so the cutoff can be tested at any hour): 11:30→same day, 12:30→next day,
+      23:30→next day, 00:30→same day, and correct across a month and a year boundary.
+      `BUSINESS_TZ = Africa/Accra` while this machine is UTC, and the date still derives from
+      Accra. *(The end-to-end half — a real order placed either side of noon — still needs an
+      order and is held for the test-key phase.)*
 - ☐ Admin dashboard "today" matches the shop's day, not UTC
 
 ### ☐ Recurring orders are bounded (B-10)
@@ -395,11 +462,18 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 ### ☐ Nothing sensitive in the logs (E-08)
 - ☐ Force a 500 on a guest tracking link → Admin → Errors shows `?t=[redacted]`, not the token
 - ☐ Same for a password-reset link (`?reset=[redacted]`)
+- ☑ **Standing check, verified 2026-08-31**: no row in `error_logs` currently stores an
+      unredacted `?t=` / `?reset=` / `?token=` value. Zero leaks in what is actually stored.
+      *(The two boxes above force the path deliberately and are still worth doing.)*
 
 ### ☐ Retention sweep (B-12)
 - ☐ After the first daily run, the console shows `retention sweep: sessions=… errorLogs=…`
-- ☐ `select count(*) from sessions where expires_at < now()` → 0
-- ☐ A pending payment still holding a reservation was NOT deleted
+- ✗ `select count(*) from sessions where expires_at < now()` → **42, not 0** (2026-08-31).
+      **Root cause found and fixed**: the sweep never ran, because `appConfig.claim()` threw on
+      every call and killed all of `runDailyJobs()`. See the step-2b run log at the top of this
+      file. Re-check after the fix deploys — this should go to 0 on the next daily run.
+- ☑ A pending payment still holding a reservation was NOT deleted — 5 `pending_payments` rows
+      intact (nothing swept them, since the sweep never ran; re-confirm after the fix deploys)
 
 ### ☐ Rollback works (G-06)
 - ☐ On **staging only**: `node scripts/migrate.js down supabase-schema-constraints-2.sql`
