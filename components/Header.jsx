@@ -24,7 +24,12 @@ const SearchField = ({ style, searchQuery, onSearch, setSearchQuery, setPage }) 
         inputMode="search" enterKeyHint="search"
         autoComplete="off" autoCorrect="off" autoCapitalize="none" spellCheck={false}
         placeholder="Search groceries…" aria-label="Search groceries"
-        style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontFamily: 'var(--f-ui)', fontSize: 13.5, color: 'var(--ink)' }} />
+        // No inline `outline: none` here. An inline style beats any selector, so it
+        // silently cancelled the `header input:focus-visible` rule below and left the
+        // search box as the one control on the page a keyboard user could not see
+        // themselves land on (audit F-07). Browsers only draw the default ring on
+        // :focus-visible anyway, and that is exactly the case we want ringed.
+        style={{ flex: 1, minWidth: 0, border: 'none', background: 'transparent', fontFamily: 'var(--f-ui)', fontSize: 13.5, color: 'var(--ink)' }} />
       {searchQuery && (
         <button type="button" onClick={() => { setSearchQuery(''); if (inputRef.current) inputRef.current.focus(); }} aria-label="Clear search"
           style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--rd-faint)', fontSize: 15, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>

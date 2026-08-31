@@ -83,6 +83,59 @@ exist and are usable. Re-check once the table is big enough for the natural plan
 
 ---
 
+## ✅ RUN LOG — 2026-08-31, step 2c (browser tier) — **found a second bug**
+
+Driven against live `sdg-mart.com` as a guest. No order placed, no account created; the one test
+cart was cleared afterwards.
+
+| Check | Result |
+|---|---|
+| **H-03** consent checkbox | Present, **unchecked by default**, label reads correctly; Privacy Notice → `/privacy` 200 and Terms → `/terms` 200, both real pages, both `target=_blank` so the form is not lost |
+| **F-07** focus rings | `solid 2px rgb(201, 89, 31)` on wordmark, nav and category buttons. Mouse click leaves **no** ring (`:focus-visible` = false) — correct |
+| **F-07** search input | ✗ **Bug found — no focus indicator at all.** Fixed, see below |
+| **F-05** payment options fail honestly | Both halves pass. Blocked → *"We couldn't check whether online payment is available just now. Cash on delivery still works."* + **Try again**, Pay Now hidden, cash still selectable. Unblocked + Try again → error clears, *"Pay Now — Card or Mobile Money"* returns |
+| **A-17** CSP report-only violations | Exactly **one** distinct violation across home, login, shop, cart and checkout — see below |
+| **STEP 5** browse / search / cart | Catalogue renders, search for "rice" returns results, add-to-cart updates the badge to "Cart, 1 item", and **the cart survives a full reload**. Search submit also blurs the input (`activeElement` → BODY), so the v81 mobile-keyboard fix still holds |
+
+### Bug 2 — the search box had no focus ring (F-07)
+
+`components/Header.jsx` set `outline: 'none'` **inline** on the search input. An inline style beats
+any selector, so it silently cancelled the `header input:focus-visible` rule sitting right below it
+in the same file. Everything else on the page ringed correctly; the search box was the one control
+a keyboard user could not see themselves land on.
+
+Proved in the live page before touching code: with the inline style removed, the computed outline
+goes `none 3px rgb(17,17,17)` → `solid 2px rgb(201, 89, 31)`. Fixed by dropping the inline
+`outline`, which lets the existing rule apply. Browsers only draw the ring on `:focus-visible`
+anyway, which is exactly the case we want ringed. `esbuild` compiles the file clean.
+
+### The one remaining CSP violation — now fixed
+
+```
+Loading the stylesheet 'https://accounts.google.com/gsi/style' violates
+"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com"
+```
+
+Google Sign-In pulls its own stylesheet. `accounts.google.com` was already allowed in `script-src`,
+`connect-src` and `frame-src` — just not `style-src`. **Paystack, Leaflet and Analytics produced no
+violations at all.** Added to `style-src`; this was the last blocker to enforcing the policy rather
+than only reporting it. *(Not yet re-verified live — needs the next deploy.)*
+
+---
+
+## ✅ DEPLOY VERIFICATION — 2026-08-31 19:13Z
+
+The daily-jobs fix (`90f0add`) is **live and working**. Deployed build stamp
+`sdgmart-90f0add7249b` matches HEAD. After one `/healthz` hit:
+
+- `daily_job_last_run` moved **`2026-08-29` → `2026-08-31`**, updated `19:13:05Z` — the first
+  successful daily-job run in two days
+- `sessions` went **45 → 3**; expired sessions **42 → 0**. The retention sweep ran for the first
+  time ever in production
+- Safe-tier suite re-run: **21 checks, 21 passed, 0 failed** — the B-12 failure has cleared
+
+---
+
 **Deliberately not run, and why:**
 | Check | Why it was held back |
 |---|---|
@@ -309,7 +362,10 @@ Things that were working and must still work.
 
 - ☐ Sign up, sign in, sign out
 - ☐ Google sign-in *(needs `GOOGLE_CLIENT_ID` and the staging origin allowed)*
-- ☐ Browse, search, add to cart, cart persists across reload
+- ☑ Browse, search, add to cart, cart persists across reload — **verified live 2026-08-31**
+      as a guest: 14 categories and the full catalogue render, "rice" returns results, Add
+      updates the badge to "Cart, 1 item", and the cart survives a full page reload. Search
+      submit also blurs the input, so the v81 mobile-keyboard fix still holds.
 - ☐ Guest checkout end to end, tracking code works
 - ☐ Saved addresses: add, edit, set default
 - ☐ Admin: create product, upload photo, assign rider
@@ -378,9 +434,12 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
       `Permissions-Policy: geolocation=(self), camera=(), microphone=(), payment=()`,
       `Strict-Transport-Security: max-age=15552000; includeSubDomains`, and the
       `Content-Security-Policy-Report-Only` policy
-- ☐ **Then open the site and check the browser console for CSP *report-only* violations.**
-      That list is what to fix before the full policy can be enforced. Paystack,
-      Google sign-in, Leaflet maps and Analytics are the ones to watch.
+- ☑ **Then open the site and check the browser console for CSP *report-only* violations.**
+      **Done 2026-08-31 across home, login, shop, cart and checkout. Exactly one distinct
+      violation:** `accounts.google.com/gsi/style` blocked by `style-src` — Google Sign-In pulls
+      its own stylesheet, and that host was allowed everywhere except `style-src`. **Paystack,
+      Leaflet and Analytics produced none.** Added to `style-src`; re-verify on the next deploy,
+      then the policy can move from report-only to enforced.
 - ☐ Paystack checkout still opens · Google sign-in still works · the map still loads tiles
 
 ### ☐ Product photo upload (A-19)
@@ -426,22 +485,31 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 - ☐ Change a price in Admin while a phone has the app backgrounded → it appears on resume
 
 ### ☐ Payment options fail honestly (F-05)
-- ☐ Block `/api/paystack/config` in DevTools → checkout says it couldn't check,
-      offers "Try again", and cash on delivery still works
-- ☐ Unblock, tap "Try again" → the Pay Now option appears
+- ☑ Block `/api/paystack/config` → checkout says it couldn't check, offers "Try again", and cash
+      on delivery still works — **verified live 2026-08-31**. Exact copy: *"We couldn't check
+      whether online payment is available just now. Cash on delivery still works."* Pay Now was
+      correctly hidden, Cash on Delivery still selectable.
+- ☑ Unblock, tap "Try again" → the Pay Now option appears — verified: the warning cleared and
+      *"Pay Now — Card or Mobile Money"* returned, with cash still offered alongside
 
 ### ☐ Keyboard focus is visible (F-07)
-- ☐ Tab through the shop → every focused control has a visible orange ring
-- ☐ Clicking with a mouse leaves no ring behind
+- ☑ Tab through the shop → every focused control has a visible orange ring —
+      **verified live 2026-08-31**: `solid 2px rgb(201, 89, 31)` on the wordmark, Home,
+      Categories and the nav buttons. **One exception found and fixed**: the search input
+      carried an inline `outline: 'none'` that beat the `header input:focus-visible` rule.
+      See the step-2c run log.
+- ☑ Clicking with a mouse leaves no ring behind — verified: after a mouse click,
+      `:focus-visible` is false and `outline-style` is `none`
 
 ### ☐ Admin tables on a phone (F-08)
 - ☐ Open Admin → Orders on an actual phone → the table scrolls sideways to the last column
 - ☐ Same for Inventory and All Riders
 
 ### ☐ Signup consent (H-03)
-- ☐ The checkbox is there, unchecked, with working Privacy and Terms links
-      *(the v95 deploy check confirmed the checkbox and both links render; the unchecked
-      default still wants a real eyeball)*
+- ☑ The checkbox is there, unchecked, with working Privacy and Terms links — **verified live
+      2026-08-31** on the real signup form: checkbox present and `checked === false` by default,
+      label reads *"I've read and accept the Privacy Notice and Terms…"*, both links resolve
+      (`/privacy` and `/terms`, 200, real pages) and open in a new tab so the form is not lost
 - ☑ Submitting without it is refused — **verified live 2026-08-31**: a direct POST to
       `/api/auth/signup` omitting `acceptedTerms` returns 400 "You must accept the Privacy
       Notice and Terms to create an account.", and **no user row was created** (users still 9)
@@ -467,13 +535,14 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
       *(The two boxes above force the path deliberately and are still worth doing.)*
 
 ### ☐ Retention sweep (B-12)
-- ☐ After the first daily run, the console shows `retention sweep: sessions=… errorLogs=…`
-- ✗ `select count(*) from sessions where expires_at < now()` → **42, not 0** (2026-08-31).
-      **Root cause found and fixed**: the sweep never ran, because `appConfig.claim()` threw on
-      every call and killed all of `runDailyJobs()`. See the step-2b run log at the top of this
-      file. Re-check after the fix deploys — this should go to 0 on the next daily run.
-- ☑ A pending payment still holding a reservation was NOT deleted — 5 `pending_payments` rows
-      intact (nothing swept them, since the sweep never ran; re-confirm after the fix deploys)
+- ☑ After the first daily run, the sweep runs — **confirmed in production 2026-08-31 19:13Z**,
+      the first successful run ever (see the deploy-verification block above)
+- ☑ `select count(*) from sessions where expires_at < now()` → **0**. Was **42** before the fix;
+      the sweep had never run, because `appConfig.claim()` threw on every call and killed all of
+      `runDailyJobs()`. Fixed in `90f0add`; `sessions` went 45 → 3 on the first real run.
+- ☑ A pending payment still holding a reservation was NOT deleted — `pending_payments` went
+      5 → 2 (three unreserved rows older than the 30-day policy were pruned, which is the
+      intended behaviour); the reserved rows were left alone
 
 ### ☐ Rollback works (G-06)
 - ☐ On **staging only**: `node scripts/migrate.js down supabase-schema-constraints-2.sql`

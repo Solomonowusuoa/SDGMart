@@ -171,7 +171,12 @@ app.use(cors({
 const CSP_DIRECTIVES = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline' https://unpkg.com https://js.paystack.co https://accounts.google.com https://www.googletagmanager.com",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com",
+  // accounts.google.com is here for the Google Sign-In button, which pulls its
+  // own stylesheet (/gsi/style). It was already allowed in script-src,
+  // connect-src and frame-src but not style-src, and it was the ONE thing still
+  // reporting a violation on every page load — the last blocker to enforcing
+  // this policy instead of merely reporting it.
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com https://accounts.google.com",
   "font-src 'self' data: https://fonts.gstatic.com",
   "img-src 'self' data: blob: https://*.supabase.co https://*.tile.openstreetmap.org https://unpkg.com https://lh3.googleusercontent.com https://www.googletagmanager.com https://www.google.com",
   "connect-src 'self' https://*.supabase.co https://api.paystack.co https://us1.locationiq.com https://nominatim.openstreetmap.org https://accounts.google.com https://www.google-analytics.com",
