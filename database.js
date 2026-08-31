@@ -1148,19 +1148,26 @@ const recurring = {
   async create({ userId, items, cadenceDays, nextRunAt, deliveryInfo }) {
     // Reject a non-numeric cadence rather than clamping it: `parseInt('abc') || 0`
     // then clamped upward would have quietly become 1 — a daily order.
+    // These are the CALLER's mistakes, not ours. Thrown bare, they reached
+    // `fail()` without a status, so every one of them became a 500: the customer
+    // was told "Something went wrong on our end. Please try again." for a date
+    // they had simply typed wrong, and each attempt filed a 500 in error_logs
+    // and a Sentry event. Tagging them 400 makes `fail()` return the real
+    // message and log nothing (same pattern as the 409 on duplicate reviews).
+    const badRequest = (msg) => { const e = new Error(msg); e.status = 400; return e; };
     const rawCadence = parseInt(cadenceDays, 10);
-    if (!Number.isFinite(rawCadence)) throw new Error('cadenceDays must be a number of days.');
+    if (!Number.isFinite(rawCadence)) throw badRequest('cadenceDays must be a number of days.');
     const cadence = Math.min(Math.max(rawCadence, MIN_CADENCE_DAYS), MAX_CADENCE_DAYS);
     const run = String(nextRunAt || '').slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(run)) throw new Error('nextRunAt must be a YYYY-MM-DD date.');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(run)) throw badRequest('nextRunAt must be a YYYY-MM-DD date.');
     // Never in the past (that is the immediate-fire bug) and never further out
     // than a year, which is well past any real reorder.
     const today = businessDate();
-    if (run < today) throw new Error('nextRunAt cannot be in the past.');
-    if (run > businessDatePlus(MAX_SCHEDULE_AHEAD_DAYS)) throw new Error('nextRunAt is too far ahead.');
+    if (run < today) throw badRequest('nextRunAt cannot be in the past.');
+    if (run > businessDatePlus(MAX_SCHEDULE_AHEAD_DAYS)) throw badRequest('nextRunAt is too far ahead.');
     const { count } = await sb.from('recurring_orders')
       .select('id', { count: 'exact', head: true }).eq('user_id', userId).eq('active', true);
-    if (Number(count || 0) >= MAX_ACTIVE_RECURRING) throw new Error('You already have ' + MAX_ACTIVE_RECURRING + ' active auto-reorders. Pause or delete one first.');
+    if (Number(count || 0) >= MAX_ACTIVE_RECURRING) throw badRequest('You already have ' + MAX_ACTIVE_RECURRING + ' active auto-reorders. Pause or delete one first.');
     const { data, error } = await sb.from('recurring_orders').insert({
       user_id: userId, items: Array.isArray(items) ? items.slice(0, 100) : items, cadence_days: cadence,
       next_run_at: run, delivery_info: deliveryInfo || null,

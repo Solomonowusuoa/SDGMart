@@ -148,6 +148,47 @@ The daily-jobs fix (`90f0add`) is **live and working**. Deployed build stamp
 
 ---
 
+## ✅ RUN LOG — 2026-08-31, step 2d (throwaway account) — **found a third issue**
+
+`node scripts/checks/step2d-account-checks.js` — creates one throwaway account, runs the checks
+that need a session, then deletes everything it made. **18 checks, 17 passed.**
+Cleanup verified: users back to **9**, orders still **23**, zero `sdgtest-tmp-%` accounts left.
+
+| Check | Result |
+|---|---|
+| **A-11** mixed-case sign-in | Works with exact, ALL-UPPERCASE and MiXeD-case input; stored lowercased |
+| **A-06** address tenancy | `{"userId": <other>}` in the patch is **ignored** — the allowlist drops it and the update is scoped by `user_id`. Address stayed on its owner; the other account's rows untouched. Editing another account's address id → 400, content unchanged |
+| **A-05** cancelling other people's orders | A **guest** order (`user_id NULL`) → 400 *"not yours"*; another customer's order → 400 *"not yours"*. Status unchanged in both cases |
+| **B-10** recurring bounds | Past date, >1yr ahead, non-numeric cadence, malformed date and empty items are **all refused**; cadence 9999 correctly clamps to 90 |
+| **H-03** consent record | A real signup writes `terms_version=2026-08-29` and `terms_accepted_at` — the column the audit added is genuinely populated |
+
+### Issue 3 — input mistakes were being reported as server faults
+
+Four of B-10's guards worked, but answered **500 "Something went wrong on our end. Please try
+again."** `db.recurring.create` threw bare `Error`s with no `.status`, so `fail()` treated them as
+crashes. Three costs:
+
+1. The customer is told the *shop* is broken when they simply typed a date wrong — so they retry
+   the identical request forever instead of fixing it.
+2. Each attempt filed a **500 in `error_logs`** — confirmed, four rows appeared during this run —
+   burying real faults in the Admin → Errors dashboard.
+3. Each was also sent to **Sentry** as an exception.
+
+Fixed by tagging them `status = 400`, the same pattern already used for the duplicate-review 409.
+`fail()` then returns the real message and logs nothing.
+
+### One expectation in this document was wrong, not the code
+
+`cadence 0 stores as 1` **fails as written** — the route's `!cadenceDays` guard rejects `0` with a
+400 before it ever reaches the clamp. **The code is right and this checklist was wrong.** Silently
+turning "0" into a **daily** auto-order is precisely the class of bug B-10 exists to prevent, and
+the database layer's own comment says so. Corrected in the item below.
+
+*(Minor, unfixed: a `cadenceDays: 0` request answers "items, cadenceDays, nextRunAt required",
+which is misleading — it was supplied. Worth a clearer message, not worth changing the behaviour.)*
+
+---
+
 **Deliberately not run, and why:**
 | Check | Why it was held back |
 |---|---|
@@ -261,12 +302,17 @@ Create rider #N where customer #N also exists. Change the rider's password.
 - ☐ The order stays assigned to rider A
 
 ### ☐ Guest orders cannot be cancelled by strangers (A-05)
-- ☐ Place a guest order, note its id
-- ☐ From a different signed-in account, call cancel on that id → rejected
+- ☑ From a different signed-in account, call cancel on a guest order id → **rejected 400 "not yours"** —
+      **verified live 2026-08-31**. Also refused for another *customer's* order. Status unchanged in
+      both cases. (Ownership is checked before any mutation, and a hard 15-minute window sits
+      behind it, so this was safe to run against real order ids.)
 
 ### ☐ Addresses cannot be moved between accounts (A-06)
-- ☐ `PUT /api/me/addresses/:id` with `{"userId": <other id>, "isDefault": true}`
-- ☐ Address stays on the original account; `user_id` unchanged
+- ☑ `PUT /api/me/addresses/:id` with `{"userId": <other id>, "isDefault": true}` — **verified live
+      2026-08-31**: the allowlist drops `userId` entirely and the update is scoped by `user_id`.
+- ☑ Address stays on the original account; `user_id` unchanged (before 15 → after 15, target 2).
+      The other account's default address was untouched, and editing *its* address id → 400 with
+      content unchanged.
 
 ### ☐ `.git` is not downloadable (A-03)
 ```bash
@@ -293,7 +339,8 @@ With `RESEND_API_KEY` blank (as on staging), `POST /api/auth/forgot-password`:
       byte-identical `{"ok":true}` at 295/307/310 ms. The **real-address** arm was deliberately
       NOT run — it sends a live password-reset email. Needs a throwaway account.
 - ☐ A real address still receives its reset email normally
-- ☐ Sign-in still works with mixed-case input (`Solomon@…` vs `solomon@…`)
+- ☑ Sign-in still works with mixed-case input — **verified live 2026-08-31**: exact lowercase,
+      ALL-UPPERCASE and MiXeD-case all issued a session, and the address is stored lowercased.
 
 > **Note (2026-08-31), separate from A-11:** `POST /api/auth/signup` answers **409 "An account with
 > that email already exists"** (server.js:1941). That is a genuine enumeration oracle on the signup
@@ -471,9 +518,14 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 - ☐ Admin dashboard "today" matches the shop's day, not UTC
 
 ### ☐ Recurring orders are bounded (B-10)
-- ☐ Try to schedule one for yesterday → rejected
-- ☐ Cadence 0 stores as 1, cadence 9999 stores as 90, "abc" is rejected
-- ☐ Existing recurring orders still run
+- ☑ Try to schedule one for yesterday → rejected — **verified live 2026-08-31** ("nextRunAt
+      cannot be in the past."). Also rejected: a date more than a year out, and a malformed date.
+- ☑ ~~Cadence 0 stores as 1~~ → **cadence 0 is REJECTED (400), and that is correct.** The route's
+      `!cadenceDays` guard catches it before the clamp. Turning an explicit 0 into a daily
+      auto-order is the bug this item exists to prevent — the original expectation was wrong.
+      **Cadence 9999 correctly stores as 90**, and `"abc"` is rejected.
+- ☐ Existing recurring orders still run *(the daily job runs again as of the `90f0add` fix, but
+      there are 0 active recurring rows, so this still needs a real one to prove)*
 
 ### ☐ One review per order (B-13)
 - ☐ Rate a delivered order → works
@@ -525,7 +577,9 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 - ☑ Submitting without it is refused — **verified live 2026-08-31**: a direct POST to
       `/api/auth/signup` omitting `acceptedTerms` returns 400 "You must accept the Privacy
       Notice and Terms to create an account.", and **no user row was created** (users still 9)
-- ☐ After signup: `select terms_version, terms_accepted_at from users order by created_at desc limit 1`
+- ☑ After signup: `terms_version` and `terms_accepted_at` are both populated — **verified live
+      2026-08-31** on a real signup (`terms_version=2026-08-29`). The server's own TERMS_VERSION is
+      recorded, not the client's claim.
 
 ### ☐ Map pin quality (I-02)
 - ☐ Indoors (network fix) → the "accurate to about N m — drag the pin" warning appears
