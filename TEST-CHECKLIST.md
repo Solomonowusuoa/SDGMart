@@ -7,7 +7,34 @@ points at the production database (finding G-01) and running it would write to t
 Work through this once staging exists — see `STAGING-SETUP.md`.
 
 **Branch:** `fix/pre-launch-critical-batch-1` · **Commits:** `69ac1bf` → `970ee65` + this one
-**Status key:** ☐ not tested · ☑ passed · ✗ failed (note what happened)
+**Status key:** ☐ not tested · ☑ passed · ◐ partly passed · ✗ failed (note what happened)
+
+---
+
+## ✅ RUN LOG — 2026-08-31, step 2 (automated API-level checks)
+
+Ran against **live `sdg-mart.com`** at `main` = `70711ce`. **29 checks, 29 passed, 0 failed.**
+
+Covered: security headers (A-17), secret-file lockdown (A-03), compression (D-06), health
+endpoints, consent enforcement (H-03), order-input validation (C-03/C-04), and the
+non-destructive half of email enumeration (A-11/A-10).
+
+**Nothing was written.** Every request was either read-only or one the server is supposed to
+refuse. Confirmed against the database afterwards: 0 orders created, 0 users created, 0 new
+`error_logs`; totals unchanged at **23 orders / 9 users**, newest order still #42 (2026-08-20).
+
+Re-runnable: `node scripts/checks/step2-api-checks.js` (override the target with `BASE=…`).
+Separately, all **20 migrations were verified applied** by probing the live database for the 46
+objects they create — `node scripts/checks/verify-migrations.js` — 20/20 present, including all
+five unique indexes and all seven stock-hold functions. Both scripts are read-only.
+
+**Deliberately not run, and why:**
+| Check | Why it was held back |
+|---|---|
+| Login rate limits (A-13) | Burns the 50-per-15-min **per-IP** budget and triggers a 15-minute block — from this machine that would lock you out of your own site |
+| `forgot-password` on a real address | Sends a live password-reset email |
+| qty-clamp / duplicate-collapse (C-04) | Only provable by placing a real order |
+| Everything on the money path | Paystack is still on **live keys** |
 
 ---
 
@@ -127,32 +154,53 @@ curl -sI https://sdg-mart.com/.git/config      # expect 404
 curl -sI https://sdg-mart.com/.env             # expect 404
 curl -sI https://sdg-mart.com/app.bundle.js    # expect 200
 ```
-- ☐ First two 404, third 200
+- ☑ First two 404, third 200 — **verified live 2026-08-31**: `/.git/config` 404, `/.git/HEAD` 404,
+      `/.env` 404, `/app.bundle.js` 200
 - ☐ **If `/.git/config` returned 200 before this deploys, rotate the GitHub token**
+      *(n/a — it was already confirmed shut in v92)*
 
 ### ☐ Password reset links are not returned over HTTP (A-10)
 With `RESEND_API_KEY` blank (as on staging), `POST /api/auth/forgot-password`:
-- ☐ Response is exactly `{"ok":true}` — no `resetLink` field
-- ☐ The link is printed in the server console instead
+- ☑ Response is exactly `{"ok":true}` — no `resetLink` field — **verified live 2026-08-31**
+- ☐ The link is printed in the server console instead *(not checkable from outside; Resend is
+      configured in production, so this branch does not run there)*
 
 ### ☐ Email addresses cannot be enumerated (A-11)
-- ☐ `forgot-password` with `a%` → `{"ok":true}`, and **no** password-reset email is sent
-- ☐ Same response for a real address, an unknown one, and a wildcard — all identical
+- ☑ `forgot-password` with `a%` → `{"ok":true}`, and **no** password-reset email is sent —
+      **verified live 2026-08-31**
+- ◐ Same response for a real address, an unknown one, and a wildcard — all identical.
+      **Partly verified**: two different unknown addresses and the `a%` wildcard all returned
+      byte-identical `{"ok":true}` at 295/307/310 ms. The **real-address** arm was deliberately
+      NOT run — it sends a live password-reset email. Needs a throwaway account.
 - ☐ A real address still receives its reset email normally
 - ☐ Sign-in still works with mixed-case input (`Solomon@…` vs `solomon@…`)
+
+> **Note (2026-08-31), separate from A-11:** `POST /api/auth/signup` answers **409 "An account with
+> that email already exists"** (server.js:1941). That is a genuine enumeration oracle on the signup
+> endpoint — A-11 only ever covered `forgot-password`. It is arguably the right UX trade-off, but it
+> should be a decision on the record rather than an oversight.
 
 ---
 
 ## STEP 3 — Order input handling
 
 ### ☐ Empty and unavailable baskets (C-03)
-- ☐ `POST /api/orders` with `items: []` → 400, no order created
-- ☐ Same with only invalid product ids → 400 naming what is unavailable
+- ☑ `POST /api/orders` with `items: []` → 400 "Your cart is empty.", no order created —
+      **verified live 2026-08-31**
+- ☑ Same with only invalid product ids → 400 "Those items are no longer available."
+- ☑ Also refused: `items` as a string, and no `items` field at all → 400
+- ☑ Confirmed against the database afterwards: **0 orders created** in the hour of testing;
+      newest order is still #42 from 2026-08-20, total still 23
 
 ### ☐ Quantities and duplicates (C-04)
 - ☐ 500 lines of the same product → one line, capped at 99 units, order places
-- ☐ 101 different products → 400 "too many different items"
-- ☐ `qty: 0` → that line is dropped, not turned into 1
+      *(NOT run — this one is only provable by placing a real order. Left for the
+      test-key phase, where the resulting row can be cleaned up.)*
+- ☑ 101 different products → 400 "That order has too many different items." —
+      **verified live 2026-08-31** with 130 distinct ids (`MAX_ORDER_LINES = 100`)
+- ☑ `qty: 0` → that line is dropped, not turned into 1 — verified: a basket of one
+      `qty: 0` line falls through to "Your cart is empty.", not a 1-unit order
+- ☑ Negative qty (`-5`) is likewise dropped, not absolutised
 
 ### ☐ Stock is still ignored while sourcing from suppliers (B-03)
 **This is the regression check for your operating model.**
@@ -177,8 +225,11 @@ Admin → Settings → Emergency switches.
 ```bash
 curl -sI -H 'Accept-Encoding: gzip' https://sdg-mart.com/app.bundle.js | grep -i content-encoding
 ```
-- ☐ Returns `content-encoding: gzip`
-- ☐ Bundle transfers at roughly 80 KB rather than 360 KB *(measured locally: 77.9% saving)*
+- ☑ Returns `content-encoding: gzip` — **verified live 2026-08-31**. `/` and `/api/catalog`
+      negotiate **brotli** (`content-encoding: br`) when offered it.
+- ☑ Bundle transfers at **58.2 KB rather than 253 KB — a 77.0% saving**, matching the 77.9%
+      measured locally. Absolute figures are below the 80/360 KB written here because of the
+      v92 shopper/staff bundle split.
 
 ### ☐ Process exits on an uncaught exception (E-06)
 - ☐ Force a crash on staging → process exits and restarts, rather than staying up
@@ -260,7 +311,12 @@ order-level reviews already exist — its INSPECT query is in the file.
 ```bash
 curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transport'
 ```
-- ☐ `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'`
+- ☑ `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'` —
+      **verified live 2026-08-31**, along with all six: `X-Content-Type-Options: nosniff`,
+      `Referrer-Policy: strict-origin-when-cross-origin`,
+      `Permissions-Policy: geolocation=(self), camera=(), microphone=(), payment=()`,
+      `Strict-Transport-Security: max-age=15552000; includeSubDomains`, and the
+      `Content-Security-Policy-Report-Only` policy
 - ☐ **Then open the site and check the browser console for CSP *report-only* violations.**
       That list is what to fix before the full policy can be enforced. Paystack,
       Google sign-in, Leaflet maps and Analytics are the ones to watch.
@@ -317,7 +373,11 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 
 ### ☐ Signup consent (H-03)
 - ☐ The checkbox is there, unchecked, with working Privacy and Terms links
-- ☐ Submitting without it is refused
+      *(the v95 deploy check confirmed the checkbox and both links render; the unchecked
+      default still wants a real eyeball)*
+- ☑ Submitting without it is refused — **verified live 2026-08-31**: a direct POST to
+      `/api/auth/signup` omitting `acceptedTerms` returns 400 "You must accept the Privacy
+      Notice and Terms to create an account.", and **no user row was created** (users still 9)
 - ☐ After signup: `select terms_version, terms_accepted_at from users order by created_at desc limit 1`
 
 ### ☐ Map pin quality (I-02)
