@@ -119,7 +119,19 @@ Loading the stylesheet 'https://accounts.google.com/gsi/style' violates
 Google Sign-In pulls its own stylesheet. `accounts.google.com` was already allowed in `script-src`,
 `connect-src` and `frame-src` — just not `style-src`. **Paystack, Leaflet and Analytics produced no
 violations at all.** Added to `style-src`; this was the last blocker to enforcing the policy rather
-than only reporting it. *(Not yet re-verified live — needs the next deploy.)*
+than only reporting it.
+
+**✅ Both fixes verified live after deploy `94a8ad6`:**
+- `style-src` now includes `https://accounts.google.com`, and a **fresh tab on both the shop and
+  the sign-in page — with the Google button rendering — logs zero console output at all.**
+  No CSP violations, no errors. The policy can now be moved from report-only to enforced.
+- The search input rings on real keyboard focus: `solid 2px rgb(201, 89, 31)`,
+  `:focus-visible` true, `inHeader` true. *(Note for whoever re-tests this: a programmatic
+  `.focus()` will read as no-ring and is a false negative — `:focus-visible` deliberately ignores
+  programmatic focus. Press Tab.)*
+- Worth knowing: `/app.bundle.js` is served `Cache-Control: public, max-age=300`, so a browser can
+  hold the previous bundle for up to 5 minutes after a deploy. Check the served file with `curl`
+  before concluding a front-end fix did not land.
 
 ---
 
