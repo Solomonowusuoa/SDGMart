@@ -821,6 +821,18 @@ const riders = {
     if (!(await verifyPassword(password, r.passwordHash))) return null;
     return r;
   },
+  // Riders had no way to change or recover a password: /api/auth/change-password
+  // is customerOnly, and forgot-password only ever looked in `users`, so a
+  // rider's reset request silently matched nothing. They were stuck with
+  // whatever an admin typed at createRider, permanently.
+  async changePassword(id, newPassword) {
+    const pwErr = validatePasswordStrength(newPassword);
+    if (pwErr) { const e = new Error(pwErr); e.status = 400; throw e; }
+    const { data, error } = await sb.from('riders')
+      .update({ password_hash: await hashPassword(newPassword) }).eq('id', id).select().single();
+    if (error) throw error;
+    return rowOut(data);
+  },
 };
 
 async function createRider({ name, email, phone, password }) {

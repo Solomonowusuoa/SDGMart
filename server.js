@@ -2097,10 +2097,27 @@ app.post('/api/auth/forgot-password', async (req, res) => {
   const rl = db.rateCheck(`reset:${String(email).toLowerCase()}`, { windowMs: 60 * 60 * 1000, max: 5, blockMs: 60 * 60 * 1000 });
   if (!rl.allowed) return res.json(forgotPasswordBody()); // Silent rate-limit (don't leak)
   try {
-    const u = await db.users.findByEmail(email);
+    // Customers first, then riders. A rider's address was never looked up at
+    // all, so their reset silently matched nothing and they had no way back
+    // into their account.
+    //
+    // The token PURPOSE carries the account type, and that is load-bearing:
+    // `email_tokens` records only a bare user_id, and riders and customers
+    // share an id space (the A-01 finding). A token minted for rider #5 under
+    // the plain 'reset' purpose would reset CUSTOMER #5's password. Scoping it
+    // to 'reset-rider' makes the two token families unable to resolve to each
+    // other's table — consumeEmailToken already refuses on a purpose mismatch,
+    // and refuses without consuming, so the reset route can try both in turn.
+    let account = await db.users.findByEmail(email);
+    let purpose = 'reset';
+    if (!account) {
+      account = await db.riders.findByEmail(email);
+      purpose = 'reset-rider';
+    }
     // Respond OK even when the email doesn't exist (don't leak which addresses are registered)
-    if (!u) return res.json(forgotPasswordBody());
-    const token = await db.makeEmailToken(u.id, 'reset');
+    if (!account) return res.json(forgotPasswordBody());
+    const u = account;
+    const token = await db.makeEmailToken(u.id, purpose);
     const link = `${req.protocol}://${req.get('host')}/?reset=${token}`;
     const emailResult = await sendEmail({
       to: u.email,
@@ -2139,10 +2156,24 @@ app.post('/api/auth/reset-password', async (req, res) => {
   const pwErr = db.validatePasswordStrength(newPassword);
   if (pwErr) return res.status(400).json({ error: pwErr });
   try {
-    const result = await db.consumeEmailToken(token, 'reset');
+    // Try the customer family first, then the rider one. consumeEmailToken
+    // refuses a purpose mismatch WITHOUT consuming the token, so the failed
+    // first attempt cannot burn a rider's link. The purpose is what decides
+    // which table is written — never the id, which both tables share.
+    let result = await db.consumeEmailToken(token, 'reset');
+    let isRider = false;
+    if (!result) {
+      result = await db.consumeEmailToken(token, 'reset-rider');
+      isRider = !!result;
+    }
     if (!result) return res.status(400).json({ error: 'Reset link is invalid or has expired' });
-    await db.users.changePassword(result.userId, newPassword);
-    await db.sessions.destroyAllForUser(result.userId);
+    if (isRider) {
+      await db.riders.changePassword(result.userId, newPassword);
+      await db.sessions.destroyAllForUser(result.userId, 'rider');
+    } else {
+      await db.users.changePassword(result.userId, newPassword);
+      await db.sessions.destroyAllForUser(result.userId);
+    }
     res.json({ ok: true });
   } catch (e) { fail(res, e, req, '/api/auth/reset-password'); }
 });
@@ -2160,6 +2191,26 @@ app.post('/api/auth/change-password', requireAuth, customerOnly, async (req, res
     await db.users.changePassword(req.user.id, newPassword);
     await db.sessions.destroyAllForUser(req.user.id);
     const token = await db.sessions.create(req.user.id);
+    res.json({ ok: true, token });
+  } catch (e) { fail(res, e, req); }
+});
+
+// The rider counterpart. Deliberately a SEPARATE route rather than relaxing
+// customerOnly above: that guard exists because riders and customers share an
+// id space, so one handler serving both is exactly the shape that produced
+// A-01. This one only ever writes to `riders`, keyed on a rider session.
+app.post('/api/rider/change-password', riderOnly, async (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Both passwords required' });
+  if (!(await db.verifyPassword(currentPassword, req.user.passwordHash))) return res.status(401).json({ error: 'Current password is incorrect' });
+  const pwErr = db.validatePasswordStrength(newPassword);
+  if (pwErr) return res.status(400).json({ error: pwErr });
+  try {
+    await db.riders.changePassword(req.user.id, newPassword);
+    // Every other device holding the old password is signed out, then this one
+    // gets a fresh session so the rider is not kicked out mid-delivery.
+    await db.sessions.destroyAllForUser(req.user.id, 'rider');
+    const token = await db.sessions.create(req.user.id, 'rider');
     res.json({ ok: true, token });
   } catch (e) { fail(res, e, req); }
 });
