@@ -20,6 +20,7 @@ const now = () => Date.now();
 const heldFor = (id) => holds.filter(h => h.product_id === id && h.expires_at > now()).reduce((s, h) => s + h.qty, 0);
 const availableFor = (id) => Math.max((shelf[id] || 0) - heldFor(id), 0);
 let migrationPresent = true;
+const PENDING = {};   // reference -> { draft } for the webhook test in section F
 
 const RPC = {
   stock_available: ({ p_ids }) => {
@@ -78,7 +79,13 @@ const stubDb = {
   errorLog: { record: async () => {} },
   squads: noop, addresses: noop, carts: noop, stats: noop, searchLog: noop, pushSubs: noop,
   dataRequests: noop, issueReports: noop, productRequests: noop, recurring: noop, metrics: noop,
-  leaderboard: noop, pendingPayments: noop, reviews: noop, riders: noop, retention: { sweep: async () => ({}) },
+  leaderboard: noop, reviews: noop, riders: noop, retention: { sweep: async () => ({}) },
+  // Section F drives the webhook, which looks a draft up by reference.
+  pendingPayments: Object.assign(Object.create(noop), {
+    get: async (ref) => PENDING[ref] || null,
+    delete: async (ref) => { delete PENDING[ref]; },
+    listStaleForUser: async () => [],
+  }),
   sb: { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null }) }) }) }) },
 };
 
@@ -117,6 +124,9 @@ stubDb.stock = realStock;
 
 const dbPath = require.resolve(path.join(ROOT, 'database.js'));
 require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: stubDb };
+// A fake Paystack secret, set BEFORE server.js reads it, so section F can sign a
+// webhook the way Paystack does. Nothing here talks to Paystack.
+process.env.PAYSTACK_SECRET_KEY = 'sk_test_orderflow_fake';
 process.env.PORT = process.env.PORT || '4010';
 require(path.join(ROOT, 'server.js'));
 
@@ -181,6 +191,41 @@ setTimeout(async () => {
   const r6 = await post('/api/admin/settings', { deductStock: true });
   check('accepted once the migration is present', r6.status, 200);
   check('toggle now on', !!CONFIG.deduct_stock, true);
+
+  console.log('\n=== F. An ALREADY-PAID order still completes while ordering is off (G-03) ===');
+  // The kill switch must stop NEW orders without stranding money already taken.
+  // The guard is `!extra.paid && !switchOn('ordering_enabled')`, and only the
+  // Paystack verify/webhook paths set paid — so this cannot be reached from
+  // /api/orders, and needs the webhook. Signed the way Paystack signs it.
+  CONFIG.deduct_stock = false;
+  CONFIG.ordering_enabled = false;
+  created = [];
+
+  const unpaid = await post('/api/orders', order([{ id: 1, qty: 1 }]));
+  check('an ordinary order is refused while ordering is off', unpaid.status, 503);
+  check('and nothing was written', created.length, 0);
+
+  const crypto = require('crypto');
+  const ref = 'SDG_orderflow_' + Date.now();
+  PENDING[ref] = {
+    reference: ref, userId: null,
+    draft: { items: [{ id: 1, qty: 1 }], customer: 'Ama', phone: '0241234567',
+      neighborhood: 'Tamale Central', address: 'Near the market',
+      location: { lat: 9.4, lng: -0.85 } },
+  };
+  const payload = JSON.stringify({ event: 'charge.success', data: { reference: ref, amount: 3000 } });
+  const sig = crypto.createHmac('sha512', process.env.PAYSTACK_SECRET_KEY).update(payload).digest('hex');
+  const hookRes = await fetch(BASE + '/api/paystack/webhook', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-paystack-signature': sig },
+    body: payload,
+  });
+  check('the webhook ACKs so Paystack stops retrying', hookRes.status, 200);
+  check('the paid order IS created even though ordering is off', created.length, 1);
+  check('and it is recorded as paid', !!(created[0] && created[0].paid), true);
+  check('the draft is cleared once the order exists', PENDING[ref], undefined);
+
+  CONFIG.ordering_enabled = true;
 
   console.log('');
   // Shut the listener down rather than exiting under it.

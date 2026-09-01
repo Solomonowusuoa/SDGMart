@@ -52,7 +52,12 @@ const FAKE_JPG = Buffer.from('This is a text file that has simply been renamed t
   let riderAId = null, riderATok = null, riderBId = null, riderBTok = null;
   const switchKeys = ['ordering_enabled', 'online_payment_enabled', 'loyalty_redemption_enabled'];
   const switchesBefore = {};
-  let pricedProduct = null, originalPrice = null;
+  // Snapshot the WHOLE product row, not just the price. PUT /api/products/:id
+  // replaces every field it accepts, so sending a partial body silently wipes
+  // the rest. An earlier version of this script sent `stock: 0` and restored
+  // only the price -- which left a real bestseller flagged out of stock and
+  // de-listed as a bestseller until it was spotted three tests later.
+  let pricedProduct = null, productSnapshot = null;
   // (no audit-log cleanup: KILL SWITCH rows are the record and stay)
 
   try {
@@ -130,10 +135,16 @@ const FAKE_JPG = Buffer.from('This is a text file that has simply been renamed t
     // ── C-09 · catalogue prices are current ───────────────────────────────
     console.log('\nC-09  Prices are current');
     const prod = await sb.from('products').select('id, name, price').order('id').limit(1).single();
-    pricedProduct = prod.data.id; originalPrice = prod.data.price;
+    pricedProduct = prod.data.id;
+    productSnapshot = (await sb.from('products').select('*').eq('id', pricedProduct).single()).data;
     const newPrice = Number((Number(originalPrice) + 3.21).toFixed(2));
+    // Echo the product back unchanged except for the price under test.
     const upd = await call('PUT', '/api/products/' + pricedProduct, {
-      name: prod.data.name, category: 'Rice & Grains', price: newPrice, unit: 'each', stock: 0,
+      name: productSnapshot.name, category: productSnapshot.category, price: newPrice,
+      unit: productSnapshot.unit, stock: productSnapshot.stock,
+      description: productSnapshot.description || '', bestBefore: productSnapshot.best_before,
+      bestseller: productSnapshot.bestseller,
+      lowStockThreshold: productSnapshot.low_stock_threshold,
     }, adminTok);
     const cat = await call('GET', '/api/catalog?ts=' + Date.now());
     const inCat = (cat.json && (cat.json.products || cat.json)) || [];
@@ -184,9 +195,14 @@ const FAKE_JPG = Buffer.from('This is a text file that has simply been renamed t
       const back = await call('POST', '/api/admin/settings',
         { orderingEnabled: true, onlinePaymentEnabled: true, loyaltyRedemptionEnabled: true }, adminTok);
       console.log('  switches back on: ' + back.status);
-      if (pricedProduct != null && originalPrice != null) {
-        await sb.from('products').update({ price: originalPrice }).eq('id', pricedProduct);
-        console.log('  product ' + pricedProduct + ' price restored to ' + originalPrice);
+      if (pricedProduct != null && productSnapshot) {
+        // Restore every field, then prove it round-tripped rather than assuming.
+        const { id, created_at: _c, updated_at: _u, ...restore } = productSnapshot;
+        await sb.from('products').update(restore).eq('id', pricedProduct);
+        const after = (await sb.from('products').select('*').eq('id', pricedProduct).single()).data;
+        const drifted = Object.keys(restore).filter((k) => String(after[k]) !== String(productSnapshot[k]));
+        console.log('  product ' + pricedProduct + ' restored in full' +
+          (drifted.length ? '  *** STILL DIFFERS: ' + drifted.join(', ') + ' ***' : ' (all fields verified identical)'));
       }
     }
     for (const k of switchKeys) {

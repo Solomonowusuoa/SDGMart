@@ -408,6 +408,43 @@ cart and invented a tracking code. Simulated a dropped connection at the moment 
 
 ---
 
+## ✅ RUN LOG — 2026-09-01, step 4 (the last no-risk tier)
+
+`node scripts/checks/step4-remaining.js` — **15 checks, 15 passed**, plus G-03's paid-order case
+added to `npm test` (now **48 assertions, was 42**). Orders back to 23, users 9, no product left
+at stock 0.
+
+| Check | Result |
+|---|---|
+| **B-03** supplier model | `deduct_stock` is off. A product set to **stock 0 still sold** (order placed, 201), and the shelf count was **not** touched. This is the regression check for how the shop actually trades |
+| **C-04** quantities | **500 lines of one product collapsed to ONE line, capped at qty 99**, and the order still placed. Priced off the cap: GHS 544.50 = 99 × 5.50, not 500 × |
+| **C-09** price integrity | Order subtotal = catalogue price × qty exactly; the stored line price matches the catalogue, not a stale copy; and `total = subtotal + delivery − discount − loyalty` with nothing unexplained |
+| **B-13** one review per order | First rating accepted; the second → **400 "You have already rated this order."**; exactly one review row survives (the duplicate would have overwritten 5 stars with 1). Reviewing **someone else's** order → **403 "Not your order"** |
+| **G-03** paid order vs kill switch | With ordering **off**: an ordinary order is refused 503 and writes nothing, but a **signed Paystack webhook still creates the order**, marks it paid, and clears the draft. Money already taken is never stranded |
+
+G-03's paid case lives in `tests/order-flow.test.js` section F rather than the live scripts,
+because it needs `extra.paid` — which only the Paystack verify/webhook paths set, so it cannot be
+reached through `/api/orders` at all. The test signs the webhook exactly as Paystack does, against
+a stubbed database.
+
+### ⚠️ A mistake of mine, found and fixed during this run
+
+The step-2e admin script sent `stock: 0` in its `PUT /api/products/:id` body and then restored
+**only the price**. `PUT` replaces every field it accepts, so this left product 37 (Indomie Instant
+Noodles) **flagged out of stock and de-listed as a bestseller** — invisible to shoppers, since
+stock 0 is the "Sold out" flag in both stock modes.
+
+Caught because it was the **only** product of 132 not at stock 100. Restored from
+`SDGMart-catalog-import.csv`, the original import source: stock 100, `bestseller: true`. The
+bestseller count went **23 → 24**, matching the handoff's record of "24 auto-selected bestsellers"
+exactly — independent confirmation the flag had been wiped.
+
+`step2e-admin-checks.js` now snapshots the **whole product row**, echoes every field back on the
+update, and verifies field-by-field that the restore round-tripped. **Lesson for any future test
+that touches a product: `PUT` is a replace, not a patch.**
+
+---
+
 **Deliberately not run, and why:**
 | Check | Why it was held back |
 |---|---|
@@ -601,9 +638,9 @@ With `RESEND_API_KEY` blank (as on staging), `POST /api/auth/forgot-password`:
       newest order is still #42 from 2026-08-20, total still 23
 
 ### ☐ Quantities and duplicates (C-04)
-- ☐ 500 lines of the same product → one line, capped at 99 units, order places
-      *(NOT run — this one is only provable by placing a real order. Left for the
-      test-key phase, where the resulting row can be cleaned up.)*
+- ☑ 500 lines of the same product → one line, capped at 99 units, order places —
+      **verified live 2026-09-01**: one line, qty 99, status 201, and priced off the cap
+      (GHS 544.50 = 99 × 5.50).
 - ☑ 101 different products → 400 "That order has too many different items." —
       **verified live 2026-08-31** with 130 distinct ids (`MAX_ORDER_LINES = 100`)
 - ☑ `qty: 0` → that line is dropped, not turned into 1 — verified: a basket of one
@@ -612,9 +649,11 @@ With `RESEND_API_KEY` blank (as on staging), `POST /api/auth/forgot-password`:
 
 ### ☐ Stock is still ignored while sourcing from suppliers (B-03)
 **This is the regression check for your operating model.**
-- ☐ Admin → Settings → "Own-stock mode" is **OFF**
-- ☐ Order a product with `stock: 0` → places normally
+- ☑ Admin → Settings → "Own-stock mode" is **OFF** — `deduct_stock` unset, verified 2026-09-01.
+- ☑ Order a product with `stock: 0` → places normally — **verified live**: order created 201 and
+      the shelf count was not touched. The supplier model is intact.
 - ☐ *(Optional)* Turn the toggle ON → the same order is now rejected → turn it back OFF
+      *(deliberately left for the own-stock session; see STEP 10)*
 
 ---
 
@@ -633,8 +672,10 @@ Admin → Settings → Emergency switches. **Exercised live 2026-09-01** (see th
 - ☑ Each switch-off appears in Admin → Errors — three `KILL SWITCH` rows, ids 97–99. **Left in
       place deliberately; they are the audit trail.**
 - ☑ Turn all three back ON — restored and independently re-verified against the live API.
-- ☐ An already-paid order still completes while ordering is off *(the guard is visible in code as
-      `!extra.paid &&`, but proving it needs a real payment — held for the test-key phase)*
+- ☑ An already-paid order still completes while ordering is off — **proven in
+      `tests/order-flow.test.js` section F**: with ordering off an ordinary order is refused 503
+      and writes nothing, while a correctly-signed Paystack webhook still creates the order, marks
+      it paid and clears the draft. Money already taken is never stranded.
 
 ### ☐ Compression (D-06)
 ```bash
@@ -779,8 +820,10 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
       there are 0 active recurring rows, so this still needs a real one to prove)*
 
 ### ☐ One review per order (B-13)
-- ☐ Rate a delivered order → works
-- ☐ Rate the same order again → "You have already rated this order."
+- ☑ Rate a delivered order → works — **verified live 2026-09-01**.
+- ☑ Rate the same order again → **400 "You have already rated this order."**, and exactly one
+      review row survives (the duplicate would have replaced 5 stars with 1).
+- ☑ Rating **someone else's** order → **403 "Not your order"**.
 
 ### ☐ Rider payload no longer carries extra PII (H-04)
 - ☑ **A prepaid order still shows "✓ PAID ONLINE — collect nothing" to the rider** —
@@ -798,8 +841,10 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 ### ☐ Cart prices are current (C-09)
 - ☑ Change a price in Admin → the new price is served immediately — verified live 2026-09-01:
       product 37 GHS 5.50 → 8.71 appeared in `/api/catalog` at once, then restored to 5.50.
-- ☐ Checkout charges the same number the cart displayed *(needs a real order; held for the
-      Paystack test-key phase)*
+- ☑ Checkout charges the same number the cart displayed — **verified live 2026-09-01**: order
+      subtotal = catalogue price × qty exactly, the stored line price matches the catalogue rather
+      than a stale copy, and total = subtotal + delivery − discount − loyalty with no unexplained
+      difference.
 
 ### ☐ Catalogue refreshes on resume (F-06)
 - ☐ Install the PWA, background it for a few minutes, reopen → prices and stock are current
