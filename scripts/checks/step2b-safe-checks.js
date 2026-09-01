@@ -62,8 +62,17 @@ const scalar = (expr) => askText("do $$ declare v text; begin select (" + expr +
 
   // ── B-12 · retention sweep left nothing expired behind ─────────────────
   console.log('\nB-12  Retention');
+  // NOT "zero expired sessions": the sweep runs once a day, so sessions that
+  // expire between runs sit there legitimately for up to 24 hours. Asserting
+  // zero makes this check fail on almost any day for a healthy shop. What
+  // actually indicates a broken sweep is a session still present a good while
+  // after the sweep should have collected it — 36h gives a day's cadence plus
+  // slack. This is the check that caught the dead runDailyJobs (rows from
+  // 2026-06-01 were three months stale), and it still would.
   const expired = await scalar('select count(*) from sessions where expires_at < now()');
-  rec('B-12', 'no expired sessions left in the table', expired === '0', 'count = ' + expired);
+  const stale = await scalar("select count(*) from sessions where expires_at < now() - interval '36 hours'");
+  rec('B-12', 'no session outlives the sweep by more than 36h', stale === '0',
+    stale + ' stale · ' + expired + ' expired-but-within-a-sweep-cycle (normal: the sweep is daily)');
   const heldPending = await scalar("select count(*) from pending_payments");
   rec('B-12', 'pending_payments still readable (reservations not swept)', /^\d+$/.test(heldPending), 'rows = ' + heldPending);
 
