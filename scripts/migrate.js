@@ -85,6 +85,7 @@ const ORDER = [
   'supabase-schema-aggregates.sql',
   'supabase-schema-consent.sql',
   'supabase-schema-stock-holds.sql',
+  'supabase-schema-lifetime-spend.sql',
 ];
 
 const sha = (t) => crypto.createHash('sha256').update(t).digest('hex').slice(0, 16);

@@ -53,6 +53,9 @@ const REQUIRED_SCHEMA = [
   // it just cannot record what a new customer agreed to.
   ['users',    'terms_accepted_at',   'supabase-schema-consent.sql',         false],
   ['users',    'first_order_done',    'supabase-schema-additions.sql',       true],
+  // The tier reward writes this on every delivery. Without it recordSpend's
+  // patch fails and NO reward accrues at all, so it is required, not optional.
+  ['users',    'lifetime_spent',      'supabase-schema-lifetime-spend.sql',  true],
   ['users',    'birthday_gift_claimed_year', 'supabase-schema-tweaks.sql',   true],
   ['carts',    'items',               'supabase-schema-cart.sql',            true],
   ['referrals', 'month',              'supabase-schema-referrals.sql',       true],
@@ -457,6 +460,11 @@ async function casUser(userId, decide) {
   return { ok: false, reason: 'contention' };
 }
 
+// How many people make a squad. The goal pays GHS 25 to EVERY member, so this
+// is the number that decides what a payout round costs — raise or lower it here
+// and the Squad page copy in components/SquadPage.jsx to match.
+const MIN_SQUAD_MEMBERS = 5;
+
 const squads = {
   async members(squadCode) {
     if (!squadCode) return [];
@@ -477,9 +485,22 @@ const squads = {
     const applied = await casUser(userId, (cur) => {
       const prev = Number(cur.totalSpent || 0);
       const total = prev + spend;
-      const earned = (Math.floor(total / 1000) - Math.floor(prev / 1000)) * 50;
+      // The tier reward reads LIFETIME spend, which never resets. It used to
+      // read total_spent — the same counter the squad round wipes back to the
+      // rollover — so once a customer started hitting squad goals their counter
+      // could never climb to 1,000 again and the tier silently stopped paying.
+      // Measured before the split: an identical GHS 1,210 earned GHS 100 spent
+      // as one order and GHS 50 spent as twelve, purely from where the resets
+      // landed. Two jobs, two columns.
+      const prevLife = Number(cur.lifetimeSpent || 0);
+      const newLife = prevLife + spend;
+      const earned = (Math.floor(newLife / 1000) - Math.floor(prevLife / 1000)) * 50;
       return {
-        patch: { total_spent: money(total), loyalty_balance: money(Number(cur.loyaltyBalance || 0) + earned) },
+        patch: {
+          total_spent: money(total),
+          lifetime_spent: money(newLife),
+          loyalty_balance: money(Number(cur.loyaltyBalance || 0) + earned),
+        },
         expect: { total_spent: money(prev), loyalty_balance: money(cur.loyaltyBalance) },
         value: { newTotal: total, loyaltyEarned: earned, newLoyalty: Number(cur.loyaltyBalance || 0) + earned },
       };
@@ -499,7 +520,14 @@ const squads = {
     let squadBonus = 0;
     if (u.squadCode) {
       const members = await squads.members(u.squadCode);
-      const allHit = members.length > 0 && members.every((m) =>
+      // A squad has to be an actual GROUP. The gate was `members.length > 0`,
+      // which one person passes on their own: every signup is given its own
+      // squad_code, so an uninvited shopper was a squad of one, and
+      // `every(member hit 500)` over a single member is just "did I hit 500?".
+      // The whole point of the feature is to reward bringing people in, and the
+      // Squad page already tells a lone member to "share your referral link" —
+      // while the code paid them anyway. Five members, each at the goal.
+      const allHit = members.length >= MIN_SQUAD_MEMBERS && members.every((m) =>
         (String(m.id) === String(userId) ? newTotal : Number(m.totalSpent || 0)) >= 500,
       );
       if (allHit) {

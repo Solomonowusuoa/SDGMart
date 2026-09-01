@@ -1355,7 +1355,11 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
     // could change before this order arrives, so it stays a surprise.
     loyaltyPending: (() => {
       if (!reqUser) return 0;
-      const prev = Number(reqUser.totalSpent || 0);
+      // Lifetime spend, matching what squads.recordSpend actually awards on
+      // delivery. Reading totalSpent here promised against a counter the squad
+      // round resets, so the projection drifted from the payout as soon as a
+      // customer hit a squad goal.
+      const prev = Number(reqUser.lifetimeSpent || 0);
       const after = prev + Number(pricing.subtotal || 0);
       return (Math.floor(after / 1000) - Math.floor(prev / 1000)) * 50;
     })(),

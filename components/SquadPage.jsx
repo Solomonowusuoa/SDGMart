@@ -30,7 +30,7 @@ const SquadPage = ({ setPage, currentUser }) => {
         <div style={{ border: '1px solid var(--rule-2)', padding: '40px 32px' }}>
           <div style={{ fontFamily: 'var(--f-label)', fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--accent)' }}>Group buying</div>
           <h1 style={{ fontFamily: 'var(--f-display)', fontSize: 28, fontWeight: 700, letterSpacing: '-.028em', marginTop: 8 }}>Squad is for members</h1>
-          <p style={{ fontSize: 14, color: 'var(--rd-muted)', marginTop: 10, lineHeight: 1.6 }}>Sign up for a free account to start a squad, invite friends, and unlock GHS 25 credit each when everyone hits GHS 500.</p>
+          <p style={{ fontSize: 14, color: 'var(--rd-muted)', marginTop: 10, lineHeight: 1.6 }}>Sign up for a free account to start a squad, invite friends, and unlock GHS 25 credit each — once your squad is 5 strong and everyone has hit GHS 500.</p>
           <button onClick={() => { sessionStorage.removeItem('sdgmart_user'); window.location.reload(); }} style={{ ...label, marginTop: 22, background: 'var(--ink)', color: '#fff', border: 'none', padding: '13px 24px', fontSize: 12.5 }}>Sign up now</button>
           <button onClick={() => setPage('home')} style={{ display: 'block', margin: '16px auto 0', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--rd-muted)', fontSize: 13 }}>← Back to shopping</button>
         </div>
@@ -53,6 +53,8 @@ const SquadPage = ({ setPage, currentUser }) => {
   if (!squad) return <div style={{ textAlign: 'center', padding: '80px 0', color: 'var(--rd-muted)', fontFamily: 'var(--f-ui)' }}>You are not in a squad yet.</div>;
 
   const GOAL = squad.goal || 500;
+  // Mirrors MIN_SQUAD_MEMBERS in database.js — the goal does not pay out below this.
+  const MIN_MEMBERS = 5;
   const referralLink = `${window.location.origin}/?ref=${squad.referralCode}`;
   const me = squad.members.find(m => m.isYou) || { totalSpent: 0, discountPending: false };
   const myProgress = Math.min(100, ((me.totalSpent || 0) / GOAL) * 100);
@@ -78,7 +80,7 @@ const SquadPage = ({ setPage, currentUser }) => {
       <div style={{ background: 'var(--ink)', color: '#fff', padding: isMobile ? '28px 22px' : '36px 32px', marginBottom: 18 }}>
         <div style={{ fontFamily: 'var(--f-label)', fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--accent-light)' }}>Group buying</div>
         <h1 style={{ margin: '8px 0 10px', fontFamily: 'var(--f-display)', fontSize: isMobile ? 32 : 46, fontWeight: 800, letterSpacing: '-.03em' }}>{squad.me.name}'s Squad</h1>
-        <p style={{ margin: 0, color: 'var(--dark-body)', fontSize: 14, lineHeight: 1.6, maxWidth: 480 }}>When every squad member hits <strong style={{ color: '#fff' }}>GHS {GOAL}</strong> in purchases, everyone is credited <strong style={{ color: '#fff' }}>GHS 25</strong> — applied automatically at your next checkout. Totals then reset so you can go again.</p>
+        <p style={{ margin: 0, color: 'var(--dark-body)', fontSize: 14, lineHeight: 1.6, maxWidth: 480 }}>Once your squad has <strong style={{ color: '#fff' }}>{MIN_MEMBERS} members</strong> and every one of them has hit <strong style={{ color: '#fff' }}>GHS {GOAL}</strong> in purchases, everyone is credited <strong style={{ color: '#fff' }}>GHS 25</strong>. Anything you spend above the goal rolls into the next round, so nothing is wasted while you wait for the others.</p>
       </div>
 
       {discountPending && (
@@ -110,7 +112,7 @@ const SquadPage = ({ setPage, currentUser }) => {
       <div style={card}>
         <h2 style={{ margin: '0 0 16px', fontFamily: 'var(--f-display)', fontSize: 20, fontWeight: 700, letterSpacing: '-.02em' }}>Squad members ({squad.members.length})</h2>
         {squad.members.length === 1 && (
-          <div style={{ background: 'var(--surface-warm)', border: '1px solid var(--rule-2)', padding: '14px 16px', fontSize: 13, color: 'var(--rd-body)', marginBottom: 16, lineHeight: 1.6 }}>You're the only one here right now. Share your referral link below — when friends sign up with your code, they join your squad automatically.</div>
+          <div style={{ background: 'var(--surface-warm)', border: '1px solid var(--rule-2)', padding: '14px 16px', fontSize: 13, color: 'var(--rd-body)', marginBottom: 16, lineHeight: 1.6 }}>You're the only one here right now. A squad needs {MIN_MEMBERS} members before the GHS 25 credit unlocks — share your referral link below, and friends who sign up with your code join automatically. Your spending still counts the whole time.</div>
         )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {squad.members.map(m => {
