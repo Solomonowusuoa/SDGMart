@@ -232,6 +232,57 @@ remains. The 75-byte test PNG that A-19 uploaded was deleted from the `product-p
 
 ---
 
+## 💰 RUN LOG — 2026-09-01, step 3 (the money paths, on Paystack TEST keys)
+
+`node scripts/checks/step3-money-paths.js`. The script **refuses to run unless the public key is
+`pk_test_`**, so it cannot be pointed at live money by accident. It places **real order rows** —
+unavoidable for these checks — records every id, and deletes them in a `finally`.
+
+| Check | Result |
+|---|---|
+| **B-02** idempotency | Same `clientRequestId` returns the **same order** (43 → 43), not a second one. **Five concurrent submits produced exactly ONE order.** This is the double-tap fix, proven under real concurrency |
+| **A-02** loyalty double-spend | Two orders racing for the same GHS 50: **50 consumed of 50**, balance 50 → 0, never negative. One order got the discount (`used: 50`), the other correctly got `used: 0` |
+| **C-01** cancel restores credit | Placing took GHS 20 (20 → 0); cancelling inside the window returned **exactly** 20 (0 → 20), order status `cancelled` |
+| **C-01** rewards on delivery | A GHS 3,999.60 order credited **nothing** at checkout (balance 0). After marking it delivered, balance went **0 → 175**. This is the free-money-loop fix working |
+| **C-07** Paystack reserves credit | Secret key valid (Paystack accepted the initialize). Credit reserved **before** the popup (30 → 0). Draft stored with `_reserved` populated |
+| **C-07** release window | Credit is **NOT** released by an immediate second checkout — correct, the first payment may still complete. Aged past 30 minutes, returning to checkout **released it (0 → 30)** and cleared the abandoned draft |
+| **E-01** webhook | Unsigned → **401**. Bad signature → **401**. It does not answer 200 on failure, so Paystack will retry |
+
+### Two things this run taught us about the harness, not the app
+
+**1. Paystack rejects the `.invalid` TLD.** The first attempt failed C-07 with a 502 that looked
+like a broken secret key. The origin's actual body was `{"error":"Invalid Email Address Passed"}` —
+Paystack refused `@example.invalid`. Test accounts on the money path must use `@example.com`.
+
+**2. The 30-minute release window is deliberate, and an earlier version of this test called it a
+bug.** `releaseStaleReservations()` uses `listStaleForUser(userId, 30)`, so only drafts older than
+**30 minutes** are reclaimed. Releasing instantly would hand the credit back while the customer
+still has the Paystack popup open and could still pay. The test now asserts **both** halves.
+
+### ⚠️ A real operational finding: Cloudflare eats the app's 502 body
+
+The app returns its own `502` with a useful message when Paystack rejects an initialize. Confirmed
+by hitting both hostnames with the same request:
+
+| Path | Response |
+|---|---|
+| `sdgmart.onrender.com` (origin) | `{"error":"Invalid Email Address Passed"}` |
+| `sdg-mart.com` (through Cloudflare) | `error code: 502`, `content-type: text/plain` |
+
+**Cloudflare replaces 5xx bodies with its own error page**, so a customer whose payment fails for a
+fixable reason sees a bare Cloudflare error instead of the explanation the app wrote. Same family as
+the recurring-order 500s already fixed: **a caller-fixable rejection should not be a 5xx.** Returning
+`400`/`422` for Paystack validation failures would let the real message reach the customer.
+
+### The order rate limit is real, and it bit the test
+
+A later run returned **429** on every order attempt. `LIMIT_ORDERS` is **30 orders per 10 minutes
+per IP, then a 10-minute block**, and the test suite's own volume tripped it. Working as designed —
+but worth knowing before anyone re-runs this suite repeatedly, and relevant to **A-15**: the limit
+sits far above any real customer's behaviour, yet a shared NAT address could plausibly approach it.
+
+---
+
 **Deliberately not run, and why:**
 | Check | Why it was held back |
 |---|---|
@@ -281,26 +332,28 @@ DevTools → Network → **Offline** → tap Place Order.
 *Before the fix this showed a confirmation, emptied the cart, and issued a fake `SDG-XXXXXX` code.*
 
 ### ☐ No duplicate orders from double-tapping (F-01, B-02)
-Throttle to Slow 3G, then tap Place Order 4–5 times fast.
-- ☐ Button disables and reads *"Placing your order…"*
-- ☐ **Exactly one** order in Admin → Orders
+- ☑ **Exactly one** order — **verified live 2026-09-01 under real concurrency**: five simultaneous
+      POSTs with one `clientRequestId` produced a single order id, and a repeat submit returned the
+      SAME order (43 → 43) rather than creating a second.
+- ☐ Button disables and reads *"Placing your order…"* *(client-side; needs the browser)*
 - ☐ Repeat with the idempotency migration NOT applied — still one order per tap-set? (protection is off, so expect duplicates; this confirms the migration matters)
 
 ### ☐ Loyalty cannot be spent twice (A-02)
-Give a test user GHS 50 credit. Open checkout in two tabs, both applying the full 50. Complete both.
-- ☐ One order gets the discount, the other is priced without it
-- ☐ Final balance is 0, not negative
-- ☐ Total discount given = 50, not 100
+**Verified live 2026-09-01** with two orders racing for the same GHS 50.
+- ☑ One order gets the discount, the other is priced without it — `loyalty_used` was 50 and 0.
+- ☑ Final balance is 0, not negative.
+- ☑ Total discount given = 50, not 100.
 
 ### ☐ Cancelling restores what it took (C-01)
-Spend GHS 20 credit on an order → cancel within 15 minutes.
-- ☐ The 20 is back in the balance
-- ☐ If it was the first order, free-delivery perk is available again
+- ☑ The 20 is back in the balance — **verified live 2026-09-01**: 20 → 0 on placing, 0 → 20 on
+      cancelling inside the window, order status `cancelled`. Exact, not approximate.
+- ☐ If it was the first order, free-delivery perk is available again *(not separately asserted)*
 
 ### ☐ Rewards land on delivery, not checkout (C-01)
-- ☐ Place a GHS 1,000 order → balance does **not** move
-- ☐ Mark it delivered in Admin → Orders → loyalty is credited now
-- ☐ Place another and cancel it → no credit earned *(this was the free-money loop)*
+- ☑ Place a large order → balance does **not** move — **verified live 2026-09-01**: a GHS 3,999.60
+      order left the balance at 0.
+- ☑ Mark it delivered → loyalty is credited now — balance went **0 → 175**.
+- ☐ Place another and cancel it → no credit earned *(implied by the two above, not separately run)*
 
 ### ☐ Success screen states the pending credit
 - ☐ Signed-in order that crosses a GHS 1,000 lifetime-spend boundary → success screen shows
@@ -310,14 +363,20 @@ Spend GHS 20 credit on an order → cancel within 15 minutes.
 - ☐ The amount shown matches what actually lands after the order is marked delivered
 
 ### ☐ Paystack reserves credit up front (C-07)
-Needs test Paystack keys in the staging `.env`.
-- ☐ Start a payment with credit applied → balance drops **before** the popup
-- ☐ Abandon it → return to checkout → credit is back (release runs at init)
+**Verified live 2026-09-01 on Paystack TEST keys.**
+- ☑ Start a payment with credit applied → balance drops **before** the popup (30 → 0), and the
+      draft is stored with `_reserved` populated.
+- ☑ Abandon it → return to checkout → credit is back — **but only after 30 minutes**, and that
+      matters: an immediate return does NOT release (correct — the popup may still be paid).
+      Past the window it released 0 → 30 and cleared the draft. `listStaleForUser(userId, 30)`.
 - ☐ Complete a payment → amount charged matches the order total in Admin
 - ☐ Check Admin → Errors for any `PAYMENT MISMATCH` entry — there should be none
 
 ### ☐ Webhook retries instead of giving up (E-01)
-- ☐ Complete a payment, close the tab before it returns → order still appears (webhook path)
+- ☑ The webhook does not answer 200 on failure — **verified live 2026-09-01**: unsigned → **401**,
+      bad signature → **401**. Paystack will therefore retry rather than give up.
+- ☐ Complete a payment, close the tab before it returns → order still appears *(needs a completed
+      test payment in the browser)*
 - ☐ Admin → 💳 Reconcile lists nothing unexpected
 
 ### ☐ Reconcile tab (E-01 follow-up)
