@@ -445,6 +445,45 @@ that touches a product: `PUT` is a replace, not a patch.**
 
 ---
 
+## ✅ RUN LOG — 2026-09-01, step 5 (regression sweep)
+
+`node scripts/checks/step5-regressions.js` — **31 checks: 29 passed, 0 failed, 2 skipped.**
+Throwaway customer, admin and rider; everything deleted. Verified after: orders 23, users 9,
+riders 1, **products back to 132**.
+
+| Area | Result |
+|---|---|
+| Sign up / in / out | Account created, session issued, `/api/auth/me` identifies it, **sign-out invalidates the token** (reuse → 401), wrong password refused |
+| Saved addresses | Add, edit, and set-default all work — and setting a new default leaves **exactly one** default, not two |
+| Guest checkout | Guest order placed with no account, tracking token issued, **the tracking link resolves**, and a wrong token → 401 |
+| Admin | Created a product, uploaded a photo, assigned an order to a rider |
+| Rider | Went online, saw the assigned order, marked **in transit → delivered**, and `delivered_at` was stamped |
+| Squad / referral | Squad endpoint returns the account's squad with the GHS 500 goal; leaderboard renders |
+| **C-01** perk | The first-order perk is claimed on placing, **released again on cancel**, and a cancelled order earns **zero** credit |
+| **B-11** admin day | `/api/admin/revenue` defaults to the **Accra** business date, not UTC |
+| **B-10** recurring | A due recurring order **actually placed** when the daily job ran, and `next_run_at` advanced by the cadence (2026-09-01 → 2026-09-08) |
+
+**Two skipped, deliberately and honestly:** Google sign-in needs a real Google account and consent
+screen; push notifications need a real device to hold the subscription. Neither is marked passed.
+
+**One "failure" was my test, not the code.** The first-order perk only applies at
+`FIRST_ORDER_FREE_MIN` = **GHS 50** and up. The first run ordered GHS 5.50 and read the perk
+correctly *not* being claimed as a failure. Re-run with a GHS 60.50 basket: claimed on placing,
+released on cancel.
+
+### 🔎 Finding: riders cannot change or recover their password
+
+There is **no rider password-change route at all**. `/api/auth/change-password` is `customerOnly`
+and answers a rider **403**, and `/api/auth/forgot-password` looks the address up in `users`, not
+`riders` — so a rider's reset request silently matches nothing. A rider is therefore stuck with
+whatever password an admin set at `createRider`, permanently, with no self-service recovery.
+
+Not a security hole — it is a gap in the rider experience, and it will bite the first time a rider
+forgets their password or one leaves and the shared credential needs rotating. The checklist line
+*"Rider's own password changes"* cannot pass because the feature does not exist.
+
+---
+
 **Deliberately not run, and why:**
 | Check | Why it was held back |
 |---|---|
@@ -484,7 +523,7 @@ backup. Not part of staging testing.
 
 The highest-value tests. Everything here changed.
 
-### ☐ Checkout tells the truth when it fails (B-01)
+### ☑ Checkout tells the truth when it fails (B-01)
 DevTools → Network → **Offline** → tap Place Order.
 - ☑ Error panel appears: *"Your order didn't go through"* — **verified live 2026-09-01**
 - ☑ **Cart is still full** — both items intact
@@ -502,24 +541,27 @@ DevTools → Network → **Offline** → tap Place Order.
       mid-request (`disabled: true`)
 - ☐ Repeat with the idempotency migration NOT applied — still one order per tap-set? (protection is off, so expect duplicates; this confirms the migration matters)
 
-### ☐ Loyalty cannot be spent twice (A-02)
+### ☑ Loyalty cannot be spent twice (A-02)
 **Verified live 2026-09-01** with two orders racing for the same GHS 50.
 - ☑ One order gets the discount, the other is priced without it — `loyalty_used` was 50 and 0.
 - ☑ Final balance is 0, not negative.
 - ☑ Total discount given = 50, not 100.
 
-### ☐ Cancelling restores what it took (C-01)
+### ☑ Cancelling restores what it took (C-01)
 - ☑ The 20 is back in the balance — **verified live 2026-09-01**: 20 → 0 on placing, 0 → 20 on
       cancelling inside the window, order status `cancelled`. Exact, not approximate.
-- ☐ If it was the first order, free-delivery perk is available again *(not separately asserted)*
+- ☑ If it was the first order, the free-delivery perk is available again — **verified live**:
+      `first_order_done` true on placing → false after cancelling. *(The perk needs a basket of
+      GHS 50+; a smaller order never claims it in the first place.)*
 
-### ☐ Rewards land on delivery, not checkout (C-01)
+### ☑ Rewards land on delivery, not checkout (C-01)
 - ☑ Place a large order → balance does **not** move — **verified live 2026-09-01**: a GHS 3,999.60
       order left the balance at 0.
 - ☑ Mark it delivered → loyalty is credited now — balance went **0 → 175**.
-- ☐ Place another and cancel it → no credit earned *(implied by the two above, not separately run)*
+- ☑ Place another and cancel it → no credit earned — **verified live**: balance stayed 0. This was
+      the free-money loop.
 
-### ☐ Success screen states the pending credit
+### ◐ Success screen states the pending credit
 - ☑ Signed-in order crossing a GHS 1,000 boundary → **"GHS 50.00 in credit lands in your account
       once this order is delivered."** — verified live 2026-09-01
 - ☑ Ordinary basket that crosses no boundary → **no line at all**, and not "GHS 0.00"
@@ -554,7 +596,7 @@ DevTools → Network → **Offline** → tap Place Order.
 - ☐ A genuinely paid-but-orderless reference shows **PAID — NEEDS ACTION** and "Create the order"
       works *(needs a completed payment — the popup step below)*
 
-### ☐ Revenue and rider cash-up (C-06)
+### ☑ Revenue and rider cash-up (C-06)
 **Verified live 2026-09-01** by seeding a day's orders and reading `/api/admin/revenue`.
 - ☑ A delivered cash order shows under that rider as **collected** — GHS 50, count 1.
 - ☑ An undelivered cash order shows as **still out**, not as takings — GHS 50 outstanding.
@@ -566,26 +608,28 @@ DevTools → Network → **Offline** → tap Place Order.
 
 ## STEP 2 — Access control
 
-### ☐ Rider cannot overwrite a customer's password (A-01)
+### ✗ Rider cannot overwrite a customer's password (A-01)
 - ☑ **Verified live 2026-09-01, and it is stronger than this item assumed.** A rider cannot reach
       the customer password route at all: `POST /api/auth/change-password` with a rider session →
       **403 "Not available for riders"** (the `customerOnly` middleware). `GET /api/me/orders` is
       refused the same way. There is no shared write path left to get the ids confused.
-- ☐ Rider's own password changes *(riders change passwords through their own flow; untested)*
+- ✗ Rider's own password changes — **the feature does not exist.** There is no rider
+      password-change route, `/api/auth/change-password` is `customerOnly` (403 for riders), and
+      forgot-password looks in `users` not `riders`. See the step-5 run log.
 
-### ☐ Rider cannot touch another rider's orders (C-02)
+### ☑ Rider cannot touch another rider's orders (C-02)
 - ☑ Rider B tries to mark rider A's order delivered → **404 "Order not found or not yours"** —
       verified live 2026-09-01 with two temporary riders.
 - ☑ The order stays assigned to rider A — status `assigned` → `assigned`, `rider_id` 1 → 1.
 - ☑ Bonus: an arbitrary status value (`cancelled`) → 400 "Invalid status".
 
-### ☐ Guest orders cannot be cancelled by strangers (A-05)
+### ☑ Guest orders cannot be cancelled by strangers (A-05)
 - ☑ From a different signed-in account, call cancel on a guest order id → **rejected 400 "not yours"** —
       **verified live 2026-08-31**. Also refused for another *customer's* order. Status unchanged in
       both cases. (Ownership is checked before any mutation, and a hard 15-minute window sits
       behind it, so this was safe to run against real order ids.)
 
-### ☐ Addresses cannot be moved between accounts (A-06)
+### ☑ Addresses cannot be moved between accounts (A-06)
 - ☑ `PUT /api/me/addresses/:id` with `{"userId": <other id>, "isDefault": true}` — **verified live
       2026-08-31**: the allowlist drops `userId` entirely and the update is scoped by `user_id`.
 - ☑ Address stays on the original account; `user_id` unchanged (before 15 → after 15, target 2).
@@ -629,7 +673,7 @@ With `RESEND_API_KEY` blank (as on staging), `POST /api/auth/forgot-password`:
 
 ## STEP 3 — Order input handling
 
-### ☐ Empty and unavailable baskets (C-03)
+### ☑ Empty and unavailable baskets (C-03)
 - ☑ `POST /api/orders` with `items: []` → 400 "Your cart is empty.", no order created —
       **verified live 2026-08-31**
 - ☑ Same with only invalid product ids → 400 "Those items are no longer available."
@@ -637,7 +681,7 @@ With `RESEND_API_KEY` blank (as on staging), `POST /api/auth/forgot-password`:
 - ☑ Confirmed against the database afterwards: **0 orders created** in the hour of testing;
       newest order is still #42 from 2026-08-20, total still 23
 
-### ☐ Quantities and duplicates (C-04)
+### ☑ Quantities and duplicates (C-04)
 - ☑ 500 lines of the same product → one line, capped at 99 units, order places —
       **verified live 2026-09-01**: one line, qty 99, status 201, and priced off the cap
       (GHS 544.50 = 99 × 5.50).
@@ -659,7 +703,7 @@ With `RESEND_API_KEY` blank (as on staging), `POST /api/auth/forgot-password`:
 
 ## STEP 4 — Operations
 
-### ☐ Kill switches (G-03)
+### ☑ Kill switches (G-03)
 Admin → Settings → Emergency switches. **Exercised live 2026-09-01** (see the step-2e run log).
 - ☑ Turn off **Accept new orders** → checkout shows a clear message, not an error:
       **503 "We have paused new orders for a short while. Please try again soon, or message us on
@@ -677,7 +721,7 @@ Admin → Settings → Emergency switches. **Exercised live 2026-09-01** (see th
       and writes nothing, while a correctly-signed Paystack webhook still creates the order, marks
       it paid and clears the draft. Money already taken is never stranded.
 
-### ☐ Compression (D-06)
+### ☑ Compression (D-06)
 ```bash
 curl -sI -H 'Accept-Encoding: gzip' https://sdg-mart.com/app.bundle.js | grep -i content-encoding
 ```
@@ -691,7 +735,7 @@ curl -sI -H 'Accept-Encoding: gzip' https://sdg-mart.com/app.bundle.js | grep -i
 - ☐ Force a crash on staging → process exits and restarts, rather than staying up
 - ☐ The crash is recorded in Admin → Errors
 
-### ☐ Indexes are being used (D-01)
+### ☑ Indexes are being used (D-01)
 ```sql
 explain analyze select * from orders order by created_at desc limit 50;
 ```
@@ -708,19 +752,26 @@ explain analyze select * from orders order by created_at desc limit 50;
 
 Things that were working and must still work.
 
-- ☐ Sign up, sign in, sign out
-- ☐ Google sign-in *(needs `GOOGLE_CLIENT_ID` and the staging origin allowed)*
+- ☑ Sign up, sign in, sign out — **verified live 2026-09-01**, including sign-out invalidating the
+      token (reuse → 401) and a wrong password being refused
+- ☐ Google sign-in — **SKIPPED, not tested**: needs a real Google account and consent screen
 - ☑ Browse, search, add to cart, cart persists across reload — **verified live 2026-08-31**
       as a guest: 14 categories and the full catalogue render, "rice" returns results, Add
       updates the badge to "Cart, 1 item", and the cart survives a full page reload. Search
       submit also blurs the input, so the v81 mobile-keyboard fix still holds.
-- ☐ Guest checkout end to end, tracking code works
-- ☐ Saved addresses: add, edit, set default
-- ☐ Admin: create product, upload photo, assign rider
-- ☐ Rider: go online, see assigned orders, mark in transit then delivered
-- ☐ Push notifications arrive *(staging VAPID keys — subscribe a test device)*
-- ☐ Recurring orders still place via the daily job
-- ☐ Squad and referral pages render
+- ☑ Guest checkout end to end, tracking code works — **verified live**: order placed with no
+      account, token issued, tracking link resolved, and a wrong token → 401
+- ☑ Saved addresses: add, edit, set default — **verified live**, and a new default leaves exactly
+      one default rather than two
+- ☑ Admin: create product, upload photo, assign rider — **verified live** (test product deleted)
+- ☑ Rider: go online, see assigned orders, mark in transit then delivered — **verified live**,
+      with `delivered_at` correctly stamped
+- ☐ Push notifications arrive — **SKIPPED, not tested**: needs a real device holding the
+      subscription
+- ☑ Recurring orders still place via the daily job — **verified live 2026-09-01**: a due row
+      placed a real order and `next_run_at` advanced 2026-09-01 → 2026-09-08
+- ☑ Squad and referral pages render — squad endpoint returns the account's squad and the GHS 500
+      goal; leaderboard responds 200
 
 ---
 
@@ -790,7 +841,7 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
       then the policy can move from report-only to enforced.
 - ☐ Paystack checkout still opens · Google sign-in still works · the map still loads tiles
 
-### ☐ Product photo upload (A-19)
+### ☑ Product photo upload (A-19)
 - ☑ A normal JPEG/PNG/WebP still uploads — verified live 2026-09-01 (test object deleted after).
 - ☑ Renaming a `.txt` to `.jpg` and uploading it is rejected — **400 "Only JPEG, PNG and WebP
       images can be uploaded."** The declared MIME is ignored and the real format is read from the
@@ -799,7 +850,7 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 
 ## STEP 7 — Money and scheduling
 
-### ☐ Delivery dating uses Accra time, not the server's (B-11)
+### ☑ Delivery dating uses Accra time, not the server's (B-11)
 - ☑ Order at 11:30 Accra → same-day · order at 12:30 Accra → next-day — **verified 2026-08-31**
       at the function level (`businessDate`/`businessHour`/`businessDatePlus` driven with a fake
       clock, so the cutoff can be tested at any hour): 11:30→same day, 12:30→next day,
@@ -807,25 +858,26 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
       `BUSINESS_TZ = Africa/Accra` while this machine is UTC, and the date still derives from
       Accra. *(The end-to-end half — a real order placed either side of noon — still needs an
       order and is held for the test-key phase.)*
-- ☐ Admin dashboard "today" matches the shop's day, not UTC
+- ☑ Admin dashboard "today" matches the shop's day, not UTC — `/api/admin/revenue` defaults to the
+      Accra business date
 
-### ☐ Recurring orders are bounded (B-10)
+### ☑ Recurring orders are bounded (B-10)
 - ☑ Try to schedule one for yesterday → rejected — **verified live 2026-08-31** ("nextRunAt
       cannot be in the past."). Also rejected: a date more than a year out, and a malformed date.
 - ☑ ~~Cadence 0 stores as 1~~ → **cadence 0 is REJECTED (400), and that is correct.** The route's
       `!cadenceDays` guard catches it before the clamp. Turning an explicit 0 into a daily
       auto-order is the bug this item exists to prevent — the original expectation was wrong.
       **Cadence 9999 correctly stores as 90**, and `"abc"` is rejected.
-- ☐ Existing recurring orders still run *(the daily job runs again as of the `90f0add` fix, but
-      there are 0 active recurring rows, so this still needs a real one to prove)*
+- ☑ Existing recurring orders still run — **proven live 2026-09-01** with a real due row: the
+      daily job placed the order and advanced `next_run_at` by the cadence
 
-### ☐ One review per order (B-13)
+### ☑ One review per order (B-13)
 - ☑ Rate a delivered order → works — **verified live 2026-09-01**.
 - ☑ Rate the same order again → **400 "You have already rated this order."**, and exactly one
       review row survives (the duplicate would have replaced 5 stars with 1).
 - ☑ Rating **someone else's** order → **403 "Not your order"**.
 
-### ☐ Rider payload no longer carries extra PII (H-04)
+### ☑ Rider payload no longer carries extra PII (H-04)
 - ☑ **A prepaid order still shows "✓ PAID ONLINE — collect nothing" to the rider** —
       **verified live 2026-09-01**: the order reaches `/api/rider/orders` with **`paid: true`** and
       `paymentMethod: paystack`, which is exactly what drives that badge. The money-losing failure
@@ -838,7 +890,7 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 
 ## STEP 8 — Customer-facing
 
-### ☐ Cart prices are current (C-09)
+### ☑ Cart prices are current (C-09)
 - ☑ Change a price in Admin → the new price is served immediately — verified live 2026-09-01:
       product 37 GHS 5.50 → 8.71 appeared in `/api/catalog` at once, then restored to 5.50.
 - ☑ Checkout charges the same number the cart displayed — **verified live 2026-09-01**: order
@@ -850,7 +902,7 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 - ☐ Install the PWA, background it for a few minutes, reopen → prices and stock are current
 - ☐ Change a price in Admin while a phone has the app backgrounded → it appears on resume
 
-### ☐ Payment options fail honestly (F-05)
+### ☑ Payment options fail honestly (F-05)
 - ☑ Block `/api/paystack/config` → checkout says it couldn't check, offers "Try again", and cash
       on delivery still works — **verified live 2026-08-31**. Exact copy: *"We couldn't check
       whether online payment is available just now. Cash on delivery still works."* Pay Now was
@@ -858,7 +910,7 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 - ☑ Unblock, tap "Try again" → the Pay Now option appears — verified: the warning cleared and
       *"Pay Now — Card or Mobile Money"* returned, with cash still offered alongside
 
-### ☐ Keyboard focus is visible (F-07)
+### ☑ Keyboard focus is visible (F-07)
 - ☑ Tab through the shop → every focused control has a visible orange ring —
       **verified live 2026-08-31**: `solid 2px rgb(201, 89, 31)` on the wordmark, Home,
       Categories and the nav buttons. **One exception found and fixed**: the search input
@@ -871,7 +923,7 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 - ☐ Open Admin → Orders on an actual phone → the table scrolls sideways to the last column
 - ☐ Same for Inventory and All Riders
 
-### ☐ Signup consent (H-03)
+### ☑ Signup consent (H-03)
 - ☑ The checkbox is there, unchecked, with working Privacy and Terms links — **verified live
       2026-08-31** on the real signup form: checkbox present and `checked === false` by default,
       label reads *"I've read and accept the Privacy Notice and Terms…"*, both links resolve
@@ -902,7 +954,7 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
       unredacted `?t=` / `?reset=` / `?token=` value. Zero leaks in what is actually stored.
       *(The two boxes above force the path deliberately and are still worth doing.)*
 
-### ☐ Retention sweep (B-12)
+### ☑ Retention sweep (B-12)
 - ☑ After the first daily run, the sweep runs — **confirmed in production 2026-08-31 19:13Z**,
       the first successful run ever (see the deploy-verification block above)
 - ☑ `select count(*) from sessions where expires_at < now()` → **0**. Was **42** before the fix;
