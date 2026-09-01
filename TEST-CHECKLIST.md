@@ -484,6 +484,52 @@ forgets their password or one leaves and the shared credential needs rotating. T
 
 ---
 
+## 🛵 RUN LOG — 2026-09-01, step 6 (rider password recovery — new feature)
+
+Riders had **no way to change or recover a password**. Built and proven:
+`node scripts/checks/step6-rider-password.js` — **19 checks, 19 passed.**
+
+Added: `db.riders.changePassword`, `POST /api/rider/change-password` (riderOnly), and rider support
+in forgot-password / reset-password. Migration `supabase-schema-rider-tokens.sql`.
+
+**The dangerous part, and why it is built this way.** `email_tokens` recorded a bare `user_id`, and
+riders and customers **share an id space** — the A-01 finding. A reset token minted for rider #N
+under the plain `'reset'` purpose would have reset **customer #N's** password. Rider tokens now get
+their own owner column (`rider_id`, with its own cascade) *and* their own purpose
+(`'reset-rider'`), and a CHECK enforces exactly one owner — never both, never neither.
+
+**Exercised, not argued.** The test builds the collision deliberately: a customer and a rider both
+on **id 56**. Using the rider's reset link changed the **rider's** hash, left the **customer's**
+untouched, and both could still sign in with their own credentials.
+
+Two schema constraints were rejecting every rider token — a `purpose` CHECK limited to
+`('verify','reset')` and a foreign key to `users(id)` — and **both failed silently**, because
+`makeEmailToken` never checked its insert error: the caller answered "check your email" for a token
+that had never been stored. **A customer hitting any insert failure would have had the same silent
+dead end.** It now throws.
+
+forgot-password still returns a byte-identical `{"ok":true}` for a rider, a customer and an unknown
+address, so A-11 stays shut.
+
+---
+
+## ✅ RUN LOG — 2026-09-01, settling the "not testable" items
+
+Seven items were conditionals already answered, or only visible from inside Render. Resolved with
+evidence rather than left looking outstanding.
+
+| Item | Resolution |
+|---|---|
+| **A-17** Paystack · Google · map tiles | **VERIFIED live.** Paystack popup opened earlier with its TEST badge; Google Sign-In loads its script, **its stylesheet** and its button; the map opened with **6 of 6 OpenStreetMap tiles** and Leaflet CSS from unpkg. **Zero CSP violations across the whole flow** — the tightened policy broke nothing |
+| **A-16** bootstrap password not logged | **Resolved by construction.** `bootstrap()` prints a password in exactly one branch: creating an admin that does not exist *and* `ADMIN_BOOTSTRAP_PASSWORD` unset. With the variable set it prints only the sentence, never the value — and an admin already exists, so neither branch runs |
+| **A-16** unlock after must_change_password | **n/a** — the flag is `false` on the one admin |
+| **A-03** rotate the GitHub token | **n/a** — conditional on `/.git/config` having been open before v92. It was confirmed shut then and 404s now |
+| **A-10** reset link printed to console | **n/a in production** — that branch runs only when `RESEND_API_KEY` is blank. Resend is configured, and there has **never** been a mail-failure row in `error_logs` |
+| **F-01** repeat without the idempotency migration | **Won't do.** It means dropping a live unique index to watch duplicates appear. The protection is proven under real concurrency (five simultaneous submits → one order) |
+| **A-11** a real address receives its reset email | **Still genuinely open** — needs a mailbox. The send path is healthy (zero mail failures ever), but arrival cannot be asserted from here |
+
+---
+
 **Deliberately not run, and why:**
 | Check | Why it was held back |
 |---|---|
@@ -533,13 +579,15 @@ DevTools → Network → **Offline** → tap Place Order.
 
 *Before the fix this showed a confirmation, emptied the cart, and issued a fake `SDG-XXXXXX` code.*
 
-### ☐ No duplicate orders from double-tapping (F-01, B-02)
+### ☑ No duplicate orders from double-tapping (F-01, B-02)
 - ☑ **Exactly one** order — **verified live 2026-09-01 under real concurrency**: five simultaneous
       POSTs with one `clientRequestId` produced a single order id, and a repeat submit returned the
       SAME order (43 → 43) rather than creating a second.
 - ☑ Button disables and reads *"Placing your order…"* — **verified live 2026-09-01**, captured
       mid-request (`disabled: true`)
-- ☐ Repeat with the idempotency migration NOT applied — still one order per tap-set? (protection is off, so expect duplicates; this confirms the migration matters)
+- ☑ Repeat with the idempotency migration NOT applied — **won't do, deliberately**: it means
+      dropping a live unique index to watch duplicates appear. The migration is applied and the
+      protection is proven under real concurrency (five simultaneous submits → exactly one order).
 
 ### ☑ Loyalty cannot be spent twice (A-02)
 **Verified live 2026-09-01** with two orders racing for the same GHS 50.
@@ -613,9 +661,9 @@ DevTools → Network → **Offline** → tap Place Order.
       the customer password route at all: `POST /api/auth/change-password` with a rider session →
       **403 "Not available for riders"** (the `customerOnly` middleware). `GET /api/me/orders` is
       refused the same way. There is no shared write path left to get the ids confused.
-- ✗ Rider's own password changes — **the feature does not exist.** There is no rider
-      password-change route, `/api/auth/change-password` is `customerOnly` (403 for riders), and
-      forgot-password looks in `users` not `riders`. See the step-5 run log.
+- ☑ Rider's own password changes — **BUILT and verified 2026-09-01.** It genuinely did not exist;
+      `POST /api/rider/change-password` now does, along with rider recovery through
+      forgot-password. Proven not to cross into a customer sharing the same id. See the step-6 log.
 
 ### ☑ Rider cannot touch another rider's orders (C-02)
 - ☑ Rider B tries to mark rider A's order delivered → **404 "Order not found or not yours"** —
@@ -636,7 +684,7 @@ DevTools → Network → **Offline** → tap Place Order.
       The other account's default address was untouched, and editing *its* address id → 400 with
       content unchanged.
 
-### ☐ `.git` is not downloadable (A-03)
+### ☑ `.git` is not downloadable (A-03)
 ```bash
 curl -sI https://sdg-mart.com/.git/config      # expect 404
 curl -sI https://sdg-mart.com/.env             # expect 404
@@ -644,14 +692,15 @@ curl -sI https://sdg-mart.com/app.bundle.js    # expect 200
 ```
 - ☑ First two 404, third 200 — **verified live 2026-08-31**: `/.git/config` 404, `/.git/HEAD` 404,
       `/.env` 404, `/app.bundle.js` 200
-- ☐ **If `/.git/config` returned 200 before this deploys, rotate the GitHub token**
-      *(n/a — it was already confirmed shut in v92)*
+- ☑ **If `/.git/config` returned 200 before this deploys, rotate the GitHub token** — **n/a**:
+      confirmed shut in v92 and 404s today. No rotation needed.
 
-### ☐ Password reset links are not returned over HTTP (A-10)
+### ☑ Password reset links are not returned over HTTP (A-10)
 With `RESEND_API_KEY` blank (as on staging), `POST /api/auth/forgot-password`:
 - ☑ Response is exactly `{"ok":true}` — no `resetLink` field — **verified live 2026-08-31**
-- ☐ The link is printed in the server console instead *(not checkable from outside; Resend is
-      configured in production, so this branch does not run there)*
+- ☑ The link is printed in the server console instead — **n/a in production**: that branch runs
+      only when `RESEND_API_KEY` is blank. Resend is configured, and `error_logs` has **never**
+      recorded a mail failure.
 
 ### ☐ Email addresses cannot be enumerated (A-11)
 - ☑ `forgot-password` with `a%` → `{"ok":true}`, and **no** password-reset email is sent —
@@ -660,7 +709,9 @@ With `RESEND_API_KEY` blank (as on staging), `POST /api/auth/forgot-password`:
       **Partly verified**: two different unknown addresses and the `a%` wildcard all returned
       byte-identical `{"ok":true}` at 295/307/310 ms. The **real-address** arm was deliberately
       NOT run — it sends a live password-reset email. Needs a throwaway account.
-- ☐ A real address still receives its reset email normally
+- ☐ A real address still receives its reset email normally — **still open**: needs a mailbox to
+      check. The send path is healthy (zero mail-failure rows ever recorded), but arrival cannot be
+      asserted from here.
 - ☑ Sign-in still works with mixed-case input — **verified live 2026-08-31**: exact lowercase,
       ALL-UPPERCASE and MiXeD-case all issued a session, and the address is stored lowercased.
 
@@ -817,13 +868,17 @@ order-level reviews already exist — its INSPECT query is in the file.
 - ☐ Place a real order → no 429
 - ☐ Two people in the same household ordering within minutes → both succeed
 
-### ☐ Admin password enforcement (A-16)
+### ☑ Admin password enforcement (A-16)
 - ☑ `select email, must_change_password from users where role='admin'` BEFORE deploying —
       **checked 2026-08-31**: one admin row, `must_change_password = false`. No lockout risk.
-- ☐ If true: sign in, change the password, admin routes unlock *(n/a — the flag is false)*
-- ☐ Bootstrap password no longer appears in the Render log at startup
+- ☑ If true: sign in, change the password, admin routes unlock — **n/a**: `must_change_password`
+      is `false` on the one admin account, so there is no lockout to clear.
+- ☑ Bootstrap password no longer appears in the Render log at startup — **resolved by
+      construction**: `bootstrap()` prints a password only when creating an admin that does not
+      exist AND `ADMIN_BOOTSTRAP_PASSWORD` is unset. With it set, only the sentence is printed,
+      never the value — and an admin already exists, so neither branch runs.
 
-### ☐ Security headers (A-17)
+### ☑ Security headers (A-17)
 ```bash
 curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transport'
 ```
@@ -839,7 +894,10 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
       its own stylesheet, and that host was allowed everywhere except `style-src`. **Paystack,
       Leaflet and Analytics produced none.** Added to `style-src`; re-verify on the next deploy,
       then the policy can move from report-only to enforced.
-- ☐ Paystack checkout still opens · Google sign-in still works · the map still loads tiles
+- ☑ Paystack checkout still opens · Google sign-in still works · the map still loads tiles —
+      **verified live 2026-09-01**: Paystack popup opened (TEST badge); Google Sign-In loaded its
+      script, **stylesheet** and button; the map opened with **6/6 OpenStreetMap tiles** and
+      Leaflet CSS. **Zero CSP violations** across the whole flow.
 
 ### ☑ Product photo upload (A-19)
 - ☑ A normal JPEG/PNG/WebP still uploads — verified live 2026-09-01 (test object deleted after).
