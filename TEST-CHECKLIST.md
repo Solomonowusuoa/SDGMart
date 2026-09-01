@@ -196,6 +196,42 @@ which is misleading — it was supplied. Worth a clearer message, not worth chan
 
 ---
 
+## ✅ RUN LOG — 2026-09-01, step 2e (admin + rider tier) — **15 checks, 15 passed**
+
+`node scripts/checks/step2e-admin-checks.js`, authorised by the shop owner, run in the evening
+Accra time (well past the 12pm cutoff, the lowest-risk window).
+
+**How admin access was obtained, and why it was done this way.** The script mints a **temporary
+admin and two temporary riders directly in the database**, each with a deliberately unusable
+password hash, and issues them session tokens. **No password is ever created, typed or stored**,
+so there is nothing to leak and nothing to rotate afterwards; the real shared admin account is
+never touched; and the H-04 bulk-PII access log attributes the run to an obviously-labelled temp
+account rather than to the owner. All three accounts are deleted in a `finally`, so an exception
+mid-run still cleans up. **Prefer this to using the real admin credentials for any future testing.**
+
+| Check | Result |
+|---|---|
+| **A-01** rider cannot overwrite a customer's password | `POST /api/auth/change-password` as a rider → **403 "Not available for riders"**. `GET /api/me/orders` → 403 too. The `customerOnly` middleware makes this structural, not incidental |
+| **C-02** rider cannot touch another rider's orders | Rider B on rider A's order → **404 "Order not found or not yours"**; status and `rider_id` both unchanged. An arbitrary status (`cancelled`) → 400 "Invalid status" |
+| **A-19** photo upload | A real PNG uploads. **A text file renamed `.jpg` is rejected on its BYTES** ("Only JPEG, PNG and WebP images can be uploaded.") — the declared MIME is correctly ignored. Unauthenticated → 401 |
+| **C-09** prices are current | Changed product 37 from GHS 5.50 → 8.71; `/api/catalog` served the new price immediately. Restored to 5.50 and re-verified live |
+| **G-03** kill switches | All three off → checkout **503 "We have paused new orders for a short while"** (a clear message, not an error); Paystack init **503 "Online payment is temporarily unavailable — please choose Cash on Delivery."**; settings read back `false/false/false`. All three restored and independently re-verified |
+
+**The audit trail was left in place on purpose.** Three `KILL SWITCH` rows (ids 97–99, dated
+2026-09-01, attributed to temp admin 18) are in `error_logs` and will appear in Admin → Errors.
+They are the record that the switches were genuinely exercised — an earlier draft of this script
+deleted them, which would have defeated the very control G-03 exists to verify. **Do not "clean
+them up".**
+
+**Restored and independently confirmed** (not merely reported by the script): an empty-basket POST
+now answers *"Your cart is empty."* rather than *"paused"*, so ordering is genuinely back on;
+`/api/paystack/config` is enabled; product 37 reads GHS 5.50 in the live catalogue; switches all
+`true`; users **9** / riders **1** / orders **23**, back to baseline; exactly **1 admin account**
+remains. The 75-byte test PNG that A-19 uploaded was deleted from the `product-photos` bucket
+(125 objects, no test-sized files left).
+
+---
+
 **Deliberately not run, and why:**
 | Check | Why it was held back |
 |---|---|
@@ -300,13 +336,17 @@ Needs test Paystack keys in the staging `.env`.
 ## STEP 2 — Access control
 
 ### ☐ Rider cannot overwrite a customer's password (A-01)
-Create rider #N where customer #N also exists. Change the rider's password.
-- ☐ Rider's own password changes
-- ☐ Customer #N can still sign in with their original password
+- ☑ **Verified live 2026-09-01, and it is stronger than this item assumed.** A rider cannot reach
+      the customer password route at all: `POST /api/auth/change-password` with a rider session →
+      **403 "Not available for riders"** (the `customerOnly` middleware). `GET /api/me/orders` is
+      refused the same way. There is no shared write path left to get the ids confused.
+- ☐ Rider's own password changes *(riders change passwords through their own flow; untested)*
 
 ### ☐ Rider cannot touch another rider's orders (C-02)
-- ☐ Rider B tries to mark rider A's order delivered → rejected
-- ☐ The order stays assigned to rider A
+- ☑ Rider B tries to mark rider A's order delivered → **404 "Order not found or not yours"** —
+      verified live 2026-09-01 with two temporary riders.
+- ☑ The order stays assigned to rider A — status `assigned` → `assigned`, `rider_id` 1 → 1.
+- ☑ Bonus: an arbitrary status value (`cancelled`) → 400 "Invalid status".
 
 ### ☐ Guest orders cannot be cancelled by strangers (A-05)
 - ☑ From a different signed-in account, call cancel on a guest order id → **rejected 400 "not yours"** —
@@ -387,13 +427,20 @@ With `RESEND_API_KEY` blank (as on staging), `POST /api/auth/forgot-password`:
 ## STEP 4 — Operations
 
 ### ☐ Kill switches (G-03)
-Admin → Settings → Emergency switches.
-- ☐ Turn off **Accept new orders** → checkout shows a clear message, not an error
-- ☐ Turn off **Online payment** → Pay Now disappears, Cash on Delivery remains
-- ☐ Turn off **Loyalty redemption** → credit is not applied at checkout
-- ☐ Each switch-off appears in Admin → Errors
-- ☐ Turn all three back ON
-- ☐ An already-paid order still completes while ordering is off
+Admin → Settings → Emergency switches. **Exercised live 2026-09-01** (see the step-2e run log).
+- ☑ Turn off **Accept new orders** → checkout shows a clear message, not an error:
+      **503 "We have paused new orders for a short while. Please try again soon, or message us on
+      WhatsApp."**
+- ☑ Turn off **Online payment** → `/api/paystack/init` → **503 "Online payment is temporarily
+      unavailable — please choose Cash on Delivery."** *(the UI half — Pay Now disappearing while
+      Cash remains — was already proven in step 2c via F-05.)*
+- ☑ Turn off **Loyalty redemption** → settings read back `false`; the credit path itself needs a
+      priced basket to observe, so the switch is proven, its effect on a real checkout is not.
+- ☑ Each switch-off appears in Admin → Errors — three `KILL SWITCH` rows, ids 97–99. **Left in
+      place deliberately; they are the audit trail.**
+- ☑ Turn all three back ON — restored and independently re-verified against the live API.
+- ☐ An already-paid order still completes while ordering is off *(the guard is visible in code as
+      `!extra.paid &&`, but proving it needs a real payment — held for the test-key phase)*
 
 ### ☐ Compression (D-06)
 ```bash
@@ -509,8 +556,11 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 - ☐ Paystack checkout still opens · Google sign-in still works · the map still loads tiles
 
 ### ☐ Product photo upload (A-19)
-- ☐ A normal JPEG/PNG/WebP still uploads
-- ☐ Renaming a `.txt` to `.jpg` and uploading it is rejected
+- ☑ A normal JPEG/PNG/WebP still uploads — verified live 2026-09-01 (test object deleted after).
+- ☑ Renaming a `.txt` to `.jpg` and uploading it is rejected — **400 "Only JPEG, PNG and WebP
+      images can be uploaded."** The declared MIME is ignored and the real format is read from the
+      bytes, so the rename buys nothing.
+- ☑ Unauthenticated upload → 401.
 
 ## STEP 7 — Money and scheduling
 
@@ -548,8 +598,10 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 ## STEP 8 — Customer-facing
 
 ### ☐ Cart prices are current (C-09)
-- ☐ Add an item, change its price in Admin, reopen the cart → the new price shows
-- ☐ Checkout charges the same number the cart displayed
+- ☑ Change a price in Admin → the new price is served immediately — verified live 2026-09-01:
+      product 37 GHS 5.50 → 8.71 appeared in `/api/catalog` at once, then restored to 5.50.
+- ☐ Checkout charges the same number the cart displayed *(needs a real order; held for the
+      Paystack test-key phase)*
 
 ### ☐ Catalogue refreshes on resume (F-06)
 - ☐ Install the PWA, background it for a few minutes, reopen → prices and stock are current
