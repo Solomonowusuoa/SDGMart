@@ -327,6 +327,47 @@ discard because the previous run discarded it.
 
 ---
 
+## 🧾 RUN LOG — 2026-09-01, the human-completed Paystack payments
+
+The shop owner completed the popup step by hand (the part the harness cannot reach) and closed the
+tab. **Two real test-mode checkouts landed cleanly:**
+
+| Order | Total | Paid | Ref | Draft |
+|---|---|---|---|---|
+| 90 | GHS 466.99 | `true` | `SDG_1788289001610_33m04u` | cleaned up |
+| 91 | GHS 933.98 | `true` | `SDG_1788289054300_as4pvx` | cleaned up |
+
+Both guest checkouts, 8 line items each, `paid = true`, `payment_method = paystack`, correct
+Paystack reference recorded, `status = queued`, delivery date 2026-09-02 (after the noon cutoff —
+the B-11 dating rule working on a real order). **No money moved: these were test keys.**
+
+**The `pending_payments` drafts for both were deleted**, so whichever path created the order also
+completed its cleanup. And across the entire database there has **never** been a `PAYMENT MISMATCH`
+or a `PAID BUT NO ORDER` row — the two conditions the audit added alarms for.
+
+**⚠️ Still not distinguished: webhook vs verify.** Both `/api/paystack/verify` and
+`/api/paystack/webhook` create the order identically, so the row alone cannot say which ran. If the
+success screen appeared before the tab was closed, `verify` created it and the webhook correctly
+skipped via the `findByPaystackRef` guard. Only if the tab closed *first* is the webhook proven.
+**Paystack Dashboard → the transaction → its webhook delivery log settles it.** The E-01 safety net
+therefore remains the one genuinely unproven link in the chain.
+
+### An unhandled rejection worth chasing
+
+Two `unhandledRejection: invalid input syntax for type bigint: "undefined"` rows appeared at 18:28
+and 18:35 — **during automated testing, not during the owner's payments at 18:56/18:57**, which
+produced no errors at all. Non-fatal: only `uncaughtException` exits the process, and this is not
+that.
+
+The problem is that it is **untraceable**. A Supabase/PostgREST error is a plain object, not an
+`Error`, so it carries no `.stack` — the rows recorded an empty stack. The handler now keeps
+PostgREST's `code`/`details`/`hint` and synthesises a stack when the reason has none, so the next
+occurrence can actually be located. There is also at least one true fire-and-forget promise in the
+codebase (`pushToUser` at server.js:1928, no `await`, no `.catch`), which is the shape of thing that
+produces these.
+
+---
+
 **Deliberately not run, and why:**
 | Check | Why it was held back |
 |---|---|

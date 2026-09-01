@@ -3105,7 +3105,21 @@ app.use((err, req, res, next) => {
 process.on('unhandledRejection', (reason) => {
   console.error('Unhandled promise rejection:', reason);
   if (Sentry) { try { Sentry.captureException(reason); } catch (_) {} }
-  db.errorLog.record({ message: 'unhandledRejection: ' + (reason && reason.message ? reason.message : String(reason)), stack: reason && reason.stack ? reason.stack : '' });
+  // A Supabase/PostgREST error is a plain object, not an Error, so it carries no
+  // .stack — two of these landed as `invalid input syntax for type bigint:
+  // "undefined"` with an EMPTY stack, which says something broke but gives no way
+  // to find it. Keep the code/details/hint PostgREST does provide, and synthesise
+  // a stack when the reason has none, so the next one is traceable instead of a
+  // mystery. The message stays first so existing log reading is unaffected.
+  const parts = [];
+  if (reason && reason.message) parts.push(reason.message); else parts.push(String(reason));
+  for (const k of ['code', 'details', 'hint']) {
+    if (reason && reason[k]) parts.push(k + '=' + String(reason[k]).slice(0, 200));
+  }
+  db.errorLog.record({
+    message: 'unhandledRejection: ' + parts.join(' · '),
+    stack: (reason && reason.stack) ? reason.stack : ('no stack on reason; captured at handler:\n' + new Error('unhandledRejection').stack),
+  }).catch(() => {});   // never let the logger itself reject unhandled
 });
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception:', err);
