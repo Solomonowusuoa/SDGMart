@@ -2117,7 +2117,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     // Respond OK even when the email doesn't exist (don't leak which addresses are registered)
     if (!account) return res.json(forgotPasswordBody());
     const u = account;
-    const token = await db.makeEmailToken(u.id, purpose);
+    const token = await db.makeEmailToken(u.id, purpose, purpose === 'reset-rider');
     const link = `${req.protocol}://${req.get('host')}/?reset=${token}`;
     const emailResult = await sendEmail({
       to: u.email,
@@ -2168,8 +2168,9 @@ app.post('/api/auth/reset-password', async (req, res) => {
     }
     if (!result) return res.status(400).json({ error: 'Reset link is invalid or has expired' });
     if (isRider) {
-      await db.riders.changePassword(result.userId, newPassword);
-      await db.sessions.destroyAllForUser(result.userId, 'rider');
+      // riderId, never userId: the two columns are what keep the id spaces apart.
+      await db.riders.changePassword(result.riderId, newPassword);
+      await db.sessions.destroyAllForUser(result.riderId, 'rider');
     } else {
       await db.users.changePassword(result.userId, newPassword);
       await db.sessions.destroyAllForUser(result.userId);

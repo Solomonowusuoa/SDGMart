@@ -773,10 +773,20 @@ const sessions = {
 
 // ── Email tokens (verify + password reset) ───────────────────────────────
 const EMAIL_TOKEN_TTL_HOURS = 24;
-async function makeEmailToken(userId, purpose = 'verify') {
+// `isRider` picks which owner column is written. Riders and customers share an
+// id space (audit A-01), so a bare id cannot say which table it means — the
+// column, and the matching purpose, are what keep a rider's reset link from
+// resolving to the customer holding the same number.
+async function makeEmailToken(userId, purpose = 'verify', isRider = false) {
   const token = crypto.randomBytes(24).toString('hex');
   const expiresAt = new Date(Date.now() + EMAIL_TOKEN_TTL_HOURS * 60 * 60 * 1000).toISOString();
-  await sb.from('email_tokens').insert({ token, user_id: userId, purpose, expires_at: expiresAt });
+  const owner = isRider ? { rider_id: userId } : { user_id: userId };
+  const { error } = await sb.from('email_tokens').insert({ token, ...owner, purpose, expires_at: expiresAt });
+  // This used to be unchecked. Two schema constraints were rejecting every
+  // rider token — a purpose CHECK and a foreign key to users — and the failure
+  // was completely silent: the caller went on to send a "check your email"
+  // response for a token that had never been stored. Never swallow this again.
+  if (error) throw error;
   return token;
 }
 async function consumeEmailToken(token, expectedPurpose = null) {
@@ -789,7 +799,9 @@ async function consumeEmailToken(token, expectedPurpose = null) {
   }
   if (expectedPurpose && data.purpose !== expectedPurpose) return null;
   await sb.from('email_tokens').delete().eq('token', token);
-  return { userId: data.user_id, purpose: data.purpose };
+  // `userId` stays the customer id and is null for a rider token, so an existing
+  // caller that ignores riderId cannot accidentally act on a rider's id.
+  return { userId: data.user_id, riderId: data.rider_id || null, purpose: data.purpose };
 }
 
 // ── Riders ───────────────────────────────────────────────────────────────
