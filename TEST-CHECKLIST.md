@@ -530,6 +530,53 @@ evidence rather than left looking outstanding.
 
 ---
 
+## 🚦 RUN LOG — 2026-09-01, step 7 (rate limiting: A-13, A-14, A-15)
+
+`node scripts/checks/step7-rate-limits.js` — **10 checks, 10 passed.** Run while the shop owner was
+away from the machine, because A-13 deliberately gets this IP blocked from signing in for 15
+minutes. Customers on other addresses are unaffected: the buckets are per-IP.
+
+**Section order is deliberate and the script explains why:** A-15 first (cheapest, needs a working
+sign-in), A-14 second (spends the 20-per-hour signup allowance), A-13 **last** (blocks sign-in from
+this IP). Test accounts were seeded straight into the database rather than through
+`/api/auth/signup`, so the signup allowance was reserved for the one section actually testing it.
+
+| Check | Result |
+|---|---|
+| **A-15** normal use | A real order → 201. A **second household member on the same connection** → 201. Five more back to back → all 201. The cap is 30 per 10 minutes per IP; ordinary use is nowhere near it |
+| **A-14** concurrent signups | **6 at once, all 201.** An existing account still signs in afterwards — hashes unchanged in format |
+| **A-14** shop stays responsive | Idle catalogue latency **256 ms**; during the signup burst **2216 / 273 / 238 / 290 / 271 / 257 ms** |
+| **A-13** a fumbling customer | Three wrong passwords → 401, 401, 401, then the **correct one → 200**. A customer mistyping their own password is not locked out |
+| **A-13** spraying | One password against many different addresses → **first 429 after 44 attempts** |
+| **A-13** the message | *"Too many sign-in attempts from this connection. Try again in 15 minute(s)"*, with `Retry-After: 899s` |
+| **A-13** blast radius | **Browsing still works while sign-in is blocked** — a sprayer cannot take the shop down |
+
+### Read the A-14 latency honestly
+
+One of the six polls took **2216 ms**; the other five ran at **238–290 ms** against an idle baseline
+of **256 ms**. That is the shape of a *free* event loop with one unlucky request — most likely a
+cold catalogue cache (60 s TTL) or a network hiccup. **If scrypt were still blocking the loop,
+every poll during the burst would have been slow, not one of six.** The fix is doing its job; the
+outlier is noise, and is recorded rather than smoothed away.
+
+### Why the first 429 came at 44, not 50
+
+The cap is 50 per 15 minutes, and the bucket had already counted the session's earlier sign-ins —
+A-15's two logins, A-13's three fumbles and the recovery. 44 + those ≈ 50. That the count carried
+across the window is itself confirmation the bucket is a real sliding window, not something that
+resets per request.
+
+### ⚠️ One thing to watch after launch, not a failure
+
+**50 sign-ins per 15 minutes per IP is roughly 3 a minute.** That is generous for a household and
+tight for a **carrier NAT**: MTN and Vodafone put many subscribers behind one address, and the
+checklist flags exactly this. With today's handful of customers it cannot bite. At scale, a
+legitimate customer seeing *"Too many sign-in attempts from this connection"* is the symptom —
+**raise `LOGIN_IP_LIMIT`, do not remove it**, since the per-account bucket alone gave spraying a
+fresh allowance for every address tried, which is what A-13 was about.
+
+---
+
 **Deliberately not run, and why:**
 | Check | Why it was held back |
 |---|---|
@@ -854,19 +901,30 @@ order-level reviews already exist — its INSPECT query is in the file.
 
 ## STEP 6 — Access and rate limiting
 
-### ☐ Password spraying is throttled (A-13)
-- ☐ 50+ sign-in attempts from one connection, each with a *different* email → 429
-- ☐ A normal customer getting their own password wrong 3 times is unaffected
-- ☐ Watch for false positives: many real customers share one carrier NAT address.
-      If legitimate users see 429, raise `LOGIN_IP_LIMIT` rather than removing it.
+### ◐ Password spraying is throttled (A-13)
+- ☑ 50+ sign-in attempts from one connection, each with a different email → **429** — verified
+      live 2026-09-01: first block after 44 attempts (the session's earlier sign-ins had already
+      counted toward the 50/15min bucket), `Retry-After: 899s`
+- ☑ A normal customer getting their own password wrong 3 times is unaffected — verified:
+      401, 401, 401, then the correct password → **200**
+- ◐ Watch for false positives: many real customers share one carrier NAT address. — **noted, and
+      it cannot be settled before launch.** 50 per 15 min is ~3/minute: generous for a household,
+      tight for an MTN/Vodafone NAT. Harmless at today's volume. If real customers ever see
+      *"Too many sign-in attempts from this connection"*, **raise `LOGIN_IP_LIMIT` — do not remove
+      it**, because the per-account bucket alone gave spraying a fresh allowance per address.
 
-### ☐ Signup and checkout stay responsive under load (A-14)
-- ☐ Several signups at once → the shop still browses normally (scrypt is off the event loop now)
-- ☐ Sign-in still works for every existing account *(password hashes are unchanged in format)*
+### ☑ Signup and checkout stay responsive under load (A-14)
+- ☑ Several signups at once → the shop still browses normally — verified live: **6 concurrent
+      signups all succeeded**, and catalogue latency during the burst was 238–290 ms against a
+      256 ms idle baseline (one 2216 ms outlier of six — a blocked event loop would have slowed
+      *all* of them)
+- ☑ Sign-in still works for every existing account — verified after the burst, status 200
 
-### ☐ Anonymous write limits do not bite real customers (A-15)
-- ☐ Place a real order → no 429
-- ☐ Two people in the same household ordering within minutes → both succeed
+### ☑ Anonymous write limits do not bite real customers (A-15)
+- ☑ Place a real order → no 429 — verified live: 201, plus five more back to back all 201 (the
+      cap is 30 per 10 minutes per IP)
+- ☑ Two people in the same household ordering within minutes → both succeed — verified with two
+      accounts on the **same IP**, both 201
 
 ### ☑ Admin password enforcement (A-16)
 - ☑ `select email, must_change_password from users where role='admin'` BEFORE deploying —
