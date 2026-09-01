@@ -1756,7 +1756,16 @@ app.post('/api/paystack/init', rateLimitIp('payinit', LIMIT_PAYMENT), async (req
         items: (pricing.items || []).map((i) => i.id + 'x' + i.qty).join(',').slice(0, 900),
       },
     });
-    if (!init || !init.status || !init.data) return res.status(502).json({ error: (init && init.message) || 'Could not start payment' });
+    // 422, not 502. Reaching here means Paystack ANSWERED and refused — an
+    // unreachable or slow provider throws out of paystackApi instead and becomes
+    // a 500. So this is a caller-fixable rejection ("Invalid Email Address
+    // Passed", a bad amount), and it must not be a 5xx: Cloudflare replaces 5xx
+    // bodies with its own plain-text page, so the message never reached the
+    // customer. Worse, the client does `await initRes.json()` on that page,
+    // which throws, dropping it into the generic catch — the shopper was told
+    // "Check your connection and try again" for an email typo. A 4xx passes
+    // through Cloudflare intact and the client alerts the real reason.
+    if (!init || !init.status || !init.data) return res.status(422).json({ error: (init && init.message) || 'Could not start payment' });
     // Take the value NOW, while the price is locked and before the customer is
     // charged, so a second checkout cannot spend the same credit. Released by
     // releaseStaleReservations() / the verify failure path if they never pay.
