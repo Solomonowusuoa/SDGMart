@@ -1814,6 +1814,31 @@ app.post('/api/paystack/init', rateLimitIp('payinit', LIMIT_PAYMENT), async (req
 });
 
 // 2) Verify a transaction and create the order (idempotent).
+// The charge and the stored order must agree. Shared by BOTH paths that can
+// create a paid order, because this check used to live only inside /verify —
+// so an order created by the WEBHOOK was never reconciled against what Paystack
+// actually took. That is the wrong way round: the webhook is the path that runs
+// precisely when the customer closed their tab and nobody is watching a screen.
+// Keeping one implementation is what stops the two drifting apart again.
+// Never throws: a mismatch is a business alarm, not a delivery failure, and the
+// webhook must still be able to ACK so Paystack stops retrying.
+async function assertChargeMatchesOrder(reference, amountPesewas, order, path) {
+  const charged = amountPesewas != null ? amountPesewas / 100 : null;
+  if (charged == null) return;
+  const total = Number((order && order.total) || 0);
+  if (Math.abs(charged - total) <= 0.005) return;
+  const msg = 'PAYMENT MISMATCH — ref ' + reference + ' charged GHS ' + charged.toFixed(2)
+    + ' but order ' + (order && order.id) + ' totals GHS ' + total.toFixed(2);
+  console.error(msg);
+  try { await db.errorLog.record({ message: msg, path, method: 'POST', status: 500 }); } catch (_) {}
+  // Money actually changed hands for a different amount than the order says.
+  // Never let this sit only in a log (audit G-08).
+  alertAdmins('payment-mismatch', '⚠️ Payment amount mismatch',
+    'A charge does not match its order total. Check Admin → Errors now.', '/?admin=1');
+  if (Sentry) { try { Sentry.captureException(new Error(msg)); } catch (_) {} }
+  notifyAdmins({ title: '⚠️ Payment mismatch', body: msg.slice(0, 120), url: '/admin', tag: 'admin-mismatch-' + reference }).catch(() => {});
+}
+
 app.post('/api/paystack/verify', async (req, res) => {
   const { reference } = req.body || {};
   if (!reference) return res.status(400).json({ error: 'Missing reference' });
@@ -1844,19 +1869,7 @@ app.post('/api/paystack/verify', async (req, res) => {
     });
     // The charge and the stored order must agree. If they ever diverge, say so
     // loudly rather than letting it settle quietly into the books.
-    const charged = ver.data.amount != null ? ver.data.amount / 100 : null;
-    if (charged != null && Math.abs(charged - Number(result.total || 0)) > 0.005) {
-      const msg = 'PAYMENT MISMATCH — ref ' + reference + ' charged GHS ' + charged.toFixed(2)
-        + ' but order ' + result.id + ' totals GHS ' + Number(result.total || 0).toFixed(2);
-      console.error(msg);
-      await db.errorLog.record({ message: msg, path: '/api/paystack/verify', method: 'POST', status: 500 });
-      // Money actually changed hands for a different amount than the order
-      // says. Never let this sit only in a log (audit G-08).
-      alertAdmins('payment-mismatch', '⚠️ Payment amount mismatch',
-        'A charge does not match its order total. Check Admin → Errors now.', '/?admin=1');
-      if (Sentry) { try { Sentry.captureException(new Error(msg)); } catch (_) {} }
-      notifyAdmins({ title: '⚠️ Payment mismatch', body: msg.slice(0, 120), url: '/admin', tag: 'admin-mismatch-' + reference }).catch(() => {});
-    }
+    await assertChargeMatchesOrder(reference, ver.data.amount, result, '/api/paystack/verify');
     await db.pendingPayments.delete(reference);
     res.json(result);
   } catch (e) { fail(res, e, req, '/api/paystack/verify'); }
@@ -1878,9 +1891,13 @@ app.post('/api/paystack/webhook', async (req, res) => {
         const pending = await db.pendingPayments.get(ref);
         if (pending && pending.draft) {
           const reqUser = pending.userId ? await db.users.get(pending.userId) : null;
-          await createOrderFromBody(reqUser, pending.draft, {
+          const created = await createOrderFromBody(reqUser, pending.draft, {
             paid: true, paystackRef: ref, locked: pending.draft._locked || null,
           });
+          // Reconcile the charge here too. This path runs when the customer's
+          // tab closed, so a wrong amount would otherwise reach the books with
+          // nobody looking at a screen to notice it.
+          await assertChargeMatchesOrder(ref, event.data.amount, created, '/api/paystack/webhook');
           await db.pendingPayments.delete(ref);
         } else {
           // Paid, but the draft is gone and no order exists — a retry can never
