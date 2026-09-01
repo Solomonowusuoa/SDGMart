@@ -283,6 +283,50 @@ sits far above any real customer's behaviour, yet a shared NAT address could pla
 
 ---
 
+## 💳 RUN LOG — 2026-09-01, step 3b (the rest of the payment chain)
+
+`node scripts/checks/step3b-payment-chain.js` — **16 checks, 15 passed, 1 skipped**, on test keys.
+Mints a temp admin + rider, seeds the database into the state a finished day leaves behind, and
+deletes everything. Verified after: orders **23**, users **9**, riders **1**, only order 42 open.
+
+### ⚠️ THE ONE STEP A HUMAN STILL HAS TO DO
+
+**Completing a Paystack payment through the popup cannot be automated here.** The popup is a
+cross-origin iframe; the browser harness cannot deliver clicks or keystrokes into it — they land on
+the parent document instead (confirmed by watching the focus ring appear on the shop's own search
+box while trying to press the popup's Confirm button). Paystack's own test-mode MoMo number
+(0551234967, MTN) is pre-filled and the **TEST** badge renders, so the popup is reachable and
+correctly in test mode — it simply cannot be finished programmatically from here.
+
+**So this remains untested end to end:** complete a payment → close the tab before it returns →
+confirm the webhook still creates the order. Everything on either side of that single click is
+proven; the click itself needs a person. **Do it while the test keys are still on.**
+
+| Check | Result |
+|---|---|
+| **E-01** Reconcile lists orphans | 3 listed for an admin; unauthenticated → 401 |
+| **E-01** ABANDONED vs PAID | A draft Paystack confirms unpaid shows **ABANDONED**. An unverifiable one shows **UNKNOWN**, never a guess |
+| **E-01** Discard | Removed the abandoned draft; row confirmed gone *(passed in the first run; skipped on re-runs once consumed)* |
+| **E-01** no order for an abandoned payment | Orders stayed at 23 across an abandoned checkout — the draft exists, the order does not |
+| **C-06** prepaid vs rider cash | The prepaid order lands in **online takings and in no rider bucket**; the rider's cash reads GHS 100 (the two cash orders only), not 150 |
+| **C-06** collected vs still-out | Delivered cash → **collected GHS 50**; undelivered cash → **still out GHS 50**, not counted as takings |
+| **C-06** totals roll up | `totalTakings 100 = online 50 + collected 50`, with 50 still out |
+| **H-04** ⭐ prepaid rider view | The prepaid order reaches the rider with **`paid: true`**, so it renders "collect nothing" rather than demanding cash. **This is the one that costs real money if wrong.** |
+| **H-04** cash rider view | The cash order carries `paid: false` → "collect GHS X" |
+| **H-04** rider can still work | Phone, address and neighbourhood all present |
+| **H-04** PII withheld | `userId`, `momoNumber`, `subtotal`, `discount`, `loyaltyUsed` are **all absent** from the rider payload (18 keys) |
+
+**Worth knowing for real use:** while the shop is on test keys, Reconcile **cannot verify references
+created under the live keys** — they come back `UNKNOWN`. That is correct (the code refuses to
+guess), but an admin opening Reconcile during a test window will see UNKNOWN against every genuine
+orphan. Judge Reconcile on live keys.
+
+**Two of the three "failures" in the first pass were my assertions, not the app:** `byRider` is
+nested under `cash`, not top level; and a re-run legitimately finds no abandoned draft left to
+discard because the previous run discarded it.
+
+---
+
 **Deliberately not run, and why:**
 | Check | Why it was held back |
 |---|---|
@@ -380,15 +424,21 @@ DevTools → Network → **Offline** → tap Place Order.
 - ☐ Admin → 💳 Reconcile lists nothing unexpected
 
 ### ☐ Reconcile tab (E-01 follow-up)
-- ☐ Start a payment, abandon it, wait 15 min → appears as **ABANDONED**
-- ☐ "Discard" works on it
-- ☐ A genuinely paid-but-orderless reference shows **PAID — NEEDS ACTION** and "Create the order" works
+- ☑ Start a payment, abandon it → appears as **ABANDONED** — **verified live 2026-09-01**. A real
+      abandoned checkout produced a `pending_payments` draft and **no order** (orders stayed 23).
+- ☑ "Discard" works on it — DELETE 200, row confirmed gone.
+- ☑ An unverifiable reference reads **UNKNOWN**, never guessed as abandoned. *(On test keys, every
+      live-key orphan reads UNKNOWN — correct, but judge Reconcile on live keys.)*
+- ☐ A genuinely paid-but-orderless reference shows **PAID — NEEDS ACTION** and "Create the order"
+      works *(needs a completed payment — the popup step below)*
 
 ### ☐ Revenue and rider cash-up (C-06)
-- ☐ Place a cash order, assign a rider, mark delivered
-- ☐ Admin → 💰 Revenue shows it under that rider as **collected**
-- ☐ An undelivered cash order shows as **still out**, not as takings
-- ☐ A Paystack order appears under Mobile money / card, not in any rider total
+**Verified live 2026-09-01** by seeding a day's orders and reading `/api/admin/revenue`.
+- ☑ A delivered cash order shows under that rider as **collected** — GHS 50, count 1.
+- ☑ An undelivered cash order shows as **still out**, not as takings — GHS 50 outstanding.
+- ☑ A Paystack order appears in online takings and **in no rider total** — the rider's cash read
+      GHS 100 (the two cash orders), not 150.
+- ☑ Day totals roll up: `totalTakings 100 = online 50 + collected 50`, 50 still out.
 
 ---
 
@@ -648,11 +698,15 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 - ☐ Rate the same order again → "You have already rated this order."
 
 ### ☐ Rider payload no longer carries extra PII (H-04)
-- ☐ **A prepaid order still shows "✓ PAID ONLINE — collect nothing" to the rider.**
-      This is the one that would cost real money if wrong — riders demanding cash
-      for orders already paid. Check it on a real Paystack order.
-- ☐ A cash order still shows "COLLECT GHS X CASH"
-- ☐ Rider can still call the customer and find the address
+- ☑ **A prepaid order still shows "✓ PAID ONLINE — collect nothing" to the rider** —
+      **verified live 2026-09-01**: the order reaches `/api/rider/orders` with **`paid: true`** and
+      `paymentMethod: paystack`, which is exactly what drives that badge. The money-losing failure
+      mode — a rider demanding cash for an already-paid order — does not occur.
+- ☑ A cash order still shows "COLLECT GHS X CASH" — carries `paid: false`.
+- ☑ Rider can still call the customer and find the address — phone, address and neighbourhood all
+      present.
+- ☑ And the payload **withholds** `userId`, `momoNumber`, `subtotal`, `discount` and
+      `loyaltyUsed` — 18 keys, none of them the ones H-04 flagged.
 
 ## STEP 8 — Customer-facing
 
