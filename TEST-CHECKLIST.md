@@ -368,6 +368,46 @@ produces these.
 
 ---
 
+## 🖥️ RUN LOG — 2026-09-01, step 3c (browser UI, on test keys)
+
+Driven through the real UI on live `sdg-mart.com`. Four test orders created and **all deleted**;
+verified after: orders back to 25, users 9, no `sdgtest-` accounts left.
+
+### B-01 — checkout tells the truth when it fails ⭐
+
+The highest-value one: before the fix a failed checkout showed a **success** screen, cleared the
+cart and invented a tracking code. Simulated a dropped connection at the moment of submission.
+
+- ☑ Error panel appears — verbatim: **"Your order didn't go through"** ·
+      *"Your connection dropped before we could send it. Nothing was charged and your items are
+      still in your cart. Check your internet, then tap Place Order again."*
+- ☑ **Cart still full** — both items intact
+- ☑ No success screen, no tracking code
+- ☑ Back online, tapped again → order placed normally (`SDG-00092`), cart then cleared
+- ☑ **The failed attempt created NOTHING**: exactly one order row existed afterwards, not two
+
+### F-01 — the button state during submission
+
+- ☑ While in flight the button is **disabled** and reads **"Placing your order…"** — captured
+      mid-request, not inferred
+
+### Success screen states the pending credit — all four cases
+
+- ☑ Crossing a GHS 1,000 boundary → **"GHS 50.00 in credit lands in your account once this order
+      is delivered."** (`total_spent` 980 + subtotal 39.99 = 1,019.99, one boundary, GHS 50)
+- ☑ Ordinary basket crossing no boundary → **no line at all**, and specifically not "GHS 0.00"
+- ☑ Guest checkout → no line
+- ◐ "The amount shown matches what actually lands" — **it does not, and that is deliberate.**
+      Promised 50, delivered credit was **75**. The extra 25 is the squad bonus, and
+      `createOrderFromBody` says why: *"Only the tier credit is promised: the squad bonus also
+      depends on other members and could change before this order arrives, so it stays a
+      surprise."* The customer is never promised **more** than they receive — the direction that
+      would matter — so this is safe. `total_spent` also dropped 1,019.99 → 519.99, which is the
+      documented squad rollover, not corruption. **Worth re-wording this checklist line, not the
+      code.**
+
+---
+
 **Deliberately not run, and why:**
 | Check | Why it was held back |
 |---|---|
@@ -409,10 +449,11 @@ The highest-value tests. Everything here changed.
 
 ### ☐ Checkout tells the truth when it fails (B-01)
 DevTools → Network → **Offline** → tap Place Order.
-- ☐ Error panel appears: *"Your order didn't go through"*
-- ☐ **Cart is still full**
-- ☐ No success screen, no tracking code
-- ☐ Go back Online, tap again → order places normally
+- ☑ Error panel appears: *"Your order didn't go through"* — **verified live 2026-09-01**
+- ☑ **Cart is still full** — both items intact
+- ☑ No success screen, no tracking code
+- ☑ Go back Online, tap again → order places normally (`SDG-00092`), and the failed attempt
+      created **no** row — exactly one order existed afterwards
 
 *Before the fix this showed a confirmation, emptied the cart, and issued a fake `SDG-XXXXXX` code.*
 
@@ -420,7 +461,8 @@ DevTools → Network → **Offline** → tap Place Order.
 - ☑ **Exactly one** order — **verified live 2026-09-01 under real concurrency**: five simultaneous
       POSTs with one `clientRequestId` produced a single order id, and a repeat submit returned the
       SAME order (43 → 43) rather than creating a second.
-- ☐ Button disables and reads *"Placing your order…"* *(client-side; needs the browser)*
+- ☑ Button disables and reads *"Placing your order…"* — **verified live 2026-09-01**, captured
+      mid-request (`disabled: true`)
 - ☐ Repeat with the idempotency migration NOT applied — still one order per tap-set? (protection is off, so expect duplicates; this confirms the migration matters)
 
 ### ☐ Loyalty cannot be spent twice (A-02)
@@ -441,11 +483,13 @@ DevTools → Network → **Offline** → tap Place Order.
 - ☐ Place another and cancel it → no credit earned *(implied by the two above, not separately run)*
 
 ### ☐ Success screen states the pending credit
-- ☐ Signed-in order that crosses a GHS 1,000 lifetime-spend boundary → success screen shows
-  *“GHS 50.00 in credit lands in your account once this order is delivered”*
-- ☐ Ordinary basket that crosses no boundary → **no line at all** (not “GHS 0”)
-- ☐ Guest checkout → no line
-- ☐ The amount shown matches what actually lands after the order is marked delivered
+- ☑ Signed-in order crossing a GHS 1,000 boundary → **"GHS 50.00 in credit lands in your account
+      once this order is delivered."** — verified live 2026-09-01
+- ☑ Ordinary basket that crosses no boundary → **no line at all**, and not "GHS 0.00"
+- ☑ Guest checkout → no line
+- ◐ The amount shown matches what actually lands — promised 50, landed **75**. The extra 25 is
+      the squad bonus, which the code deliberately does not promise. The customer is never
+      promised more than they get. **Re-word this line, not the code** — see the step-3c run log.
 
 ### ☐ Paystack reserves credit up front (C-07)
 **Verified live 2026-09-01 on Paystack TEST keys.**
