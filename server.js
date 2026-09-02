@@ -3205,6 +3205,10 @@ process.on('unhandledRejection', (reason) => {
   db.errorLog.record({
     message: 'unhandledRejection: ' + parts.join(' · '),
     stack: (reason && reason.stack) ? reason.stack : ('no stack on reason; captured at handler:\n' + new Error('unhandledRejection').stack),
+    // Findable, not anonymous. Without these a process-level fault lands in
+    // Admin → Errors as status null / path null — the most serious row in the
+    // table and the only one that cannot be filtered for or sorted to the top.
+    path: 'process', method: 'REJECTION', status: 500,
   }).catch(() => {});   // never let the logger itself reject unhandled
 });
 process.on('uncaughtException', (err) => {
@@ -3215,7 +3219,10 @@ process.on('uncaughtException', (err) => {
   // wrong results indefinitely. Render restarts an exited process in seconds,
   // so losing the in-flight requests is the cheaper trade. The delay gives the
   // log write and the Sentry flush a chance to land first.
-  Promise.resolve(db.errorLog.record({ message: 'uncaughtException: ' + err.message, stack: err.stack }))
+  Promise.resolve(db.errorLog.record({
+    message: 'uncaughtException: ' + err.message, stack: err.stack,
+    path: 'process', method: 'CRASH', status: 500,
+  }))
     .catch(() => {})
     .finally(() => setTimeout(() => process.exit(1), 500).unref());
 });

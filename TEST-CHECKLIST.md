@@ -688,6 +688,40 @@ is written at all. Good ordering, and it means the most obvious leak path cannot
 
 ---
 
+## 💥 RUN LOG — 2026-09-02, step 10 (E-06: the process must stop on a crash)
+
+`node tests/crash.test.js`, now part of `npm test` (**66 assertions**). **8 checks, 8 passed.**
+
+**Run in a child process, not against the live shop, and that is a deliberate call.** The checklist
+says "force a crash on staging"; there is no staging, and crashing production to watch it return
+buys a fact already evidenced — Render restarted this service on **every deploy today** and it came
+back each time. What was genuinely unproven is that `server.js`'s own `uncaughtException` handler
+fires at all, rather than the fault being swallowed and the process continuing in an unknown state.
+The child boots the **real `server.js`** and throws from a timer callback: not inside a route
+(Express would route that to the error handler) and not inside a promise (that surfaces as
+`unhandledRejection`). Same shape a real bug takes.
+
+- ☑ The process **exits**, non-zero (code 1), not killed by a signal
+- ☑ The fault reaches **our** handler, not just Node's default
+- ☑ The crash is **recorded before the process dies**, naming the fault
+
+### The failing assertion that found a real gap
+
+The test originally asserted the crash is logged as a 500. **It failed** — and that turned out to
+be the code's problem, not the test's. Both process-level handlers recorded with no `status`, no
+`path` and no `method`, so every crash and every unhandled rejection landed in `error_logs` as:
+
+```
+status=null  path=null  method=null
+```
+
+Ordinary route errors carry a status and a path. So **the most serious entries in the table were
+the only ones that could not be filtered for or sorted to the top** — precisely the rows an owner
+most needs to find. Both handlers now record `path: 'process'`, `status: 500`, and a method of
+`CRASH` or `REJECTION`.
+
+---
+
 **Deliberately not run, and why:**
 | Check | Why it was held back |
 |---|---|
@@ -949,9 +983,15 @@ curl -sI -H 'Accept-Encoding: gzip' https://sdg-mart.com/app.bundle.js | grep -i
       measured locally. Absolute figures are below the 80/360 KB written here because of the
       v92 shopper/staff bundle split.
 
-### ☐ Process exits on an uncaught exception (E-06)
-- ☐ Force a crash on staging → process exits and restarts, rather than staying up
-- ☐ The crash is recorded in Admin → Errors
+### ☑ Process exits on an uncaught exception (E-06)
+- ☑ Force a crash → the process exits rather than staying up — **verified 2026-09-02** against
+      the real `server.js` in a child process (code 1, no signal). Restart-on-exit is separately
+      evidenced by every deploy today. Deliberately not run against production: crashing the live
+      shop would have proven only the half already demonstrated.
+- ☑ The crash is recorded in Admin → Errors — **verified**, and improved as a result: both
+      process handlers previously logged with `status=null path=null`, leaving the most serious
+      rows in the table unfilterable. They now record `path: 'process'`, `status: 500`, and a
+      method of `CRASH` / `REJECTION`.
 
 ### ☑ Indexes are being used (D-01)
 ```sql
