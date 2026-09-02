@@ -577,7 +577,7 @@ fresh allowance for every address tried, which is what A-13 was about.
 
 ---
 
-## 💳 RUN LOG — 2026-09-01, step 8 (the last Paystack items)
+## 💳 RUN LOG — 2026-09-02, step 8 (the last Paystack items)
 
 Two pieces. `npm test` gained **section G** (7 assertions, no database), and
 `node scripts/checks/step8-paystack-recovery.js 111` ran against a real test-mode payment
@@ -738,7 +738,7 @@ DevTools → Network → **Offline** → tap Place Order.
       bad signature → **401**. Paystack will therefore retry rather than give up.
 - ☐ Complete a payment, close the tab before it returns → order still appears *(needs a completed
       test payment in the browser)*
-- ☑ Admin → 💳 Reconcile lists nothing unexpected — **verified live 2026-09-01**: the only two
+- ☑ Admin → 💳 Reconcile lists nothing unexpected — **verified live 2026-09-02**: the only two
       entries are 8- and 14-day-old drafts from the LIVE-key era, which correctly read UNKNOWN on
       test keys rather than being guessed.
 
@@ -749,7 +749,7 @@ DevTools → Network → **Offline** → tap Place Order.
 - ☑ An unverifiable reference reads **UNKNOWN**, never guessed as abandoned. *(On test keys, every
       live-key orphan reads UNKNOWN — correct, but judge Reconcile on live keys.)*
 - ☑ A genuinely paid-but-orderless reference shows **PAID — NEEDS ACTION** and "Create the order"
-      works — **verified live 2026-09-01** by reconstructing the state from a real test payment
+      works — **verified live 2026-09-02** by reconstructing the state from a real test payment
       rather than sabotaging order creation. Recovery recreated the order with the same total,
       kept the reference, cleared the draft, and a second attempt was refused 409.
 

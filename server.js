@@ -1903,6 +1903,19 @@ app.post('/api/paystack/webhook', async (req, res) => {
           // nobody looking at a screen to notice it.
           await assertChargeMatchesOrder(ref, event.data.amount, created, '/api/paystack/webhook');
           await db.pendingPayments.delete(ref);
+          // Record that the SAFETY NET caught this one. Nothing else
+          // distinguishes an order the webhook rescued from one /verify created
+          // normally — the rows are identical — so "did the net actually fire?"
+          // was unanswerable without going to Paystack's own delivery log. This
+          // is the only trace, and it is the point of E-01: a net you cannot
+          // observe is a net you cannot trust. Status 200, not an error: this
+          // is the system working, and it should read that way in Admin → Errors.
+          db.errorLog.record({
+            message: 'WEBHOOK RESCUE — order ' + created.id + ' was created by the Paystack webhook, '
+              + 'not by /verify. The customer closed the tab or lost connection before confirming; '
+              + 'ref ' + ref + ', GHS ' + Number(created.total || 0).toFixed(2) + '.',
+            path: '/api/paystack/webhook', method: 'POST', status: 200,
+          }).catch(() => {});
         } else {
           // Paid, but the draft is gone and no order exists — a retry can never
           // fix this, so we still ACK (200 below) to stop Paystack looping on

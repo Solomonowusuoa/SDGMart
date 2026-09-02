@@ -225,6 +225,10 @@ setTimeout(async () => {
   check('the paid order IS created even though ordering is off', created.length, 1);
   check('and it is recorded as paid', !!(created[0] && created[0].paid), true);
   check('the draft is cleared once the order exists', PENDING[ref], undefined);
+  const rescue = LOGGED.filter((l) => /WEBHOOK RESCUE/.test(l.message || ''));
+  check('the rescue is recorded, so the safety net is observable', rescue.length, 1);
+  check('and recorded as status 200, not an error -- this is the system working',
+    (rescue[0] || {}).status, 200);
 
   CONFIG.ordering_enabled = true;
 
