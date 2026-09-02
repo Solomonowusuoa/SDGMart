@@ -631,6 +631,63 @@ and would be deleted and recreated to learn nothing.
 
 ---
 
+## 🎯 RUN LOG — 2026-09-02, step 9 (the webhook net, alerts, and log redaction)
+
+Three items closed, one of which I had already advised dropping.
+
+### ⭐ E-01 — the webhook safety net demonstrably fired
+
+The shop owner made one more payment with the client's `verify` call prevented from completing.
+The order appeared anyway, and the marker added earlier that day recorded it on its first real use:
+
+> `WEBHOOK RESCUE — order 114 was created by the Paystack webhook, not by /verify. The customer
+> closed the tab or lost connection before confirming; ref SDG_1788378537446_15acz3, GHS 472.49.`
+
+**This is the mechanism that protects a customer who paid and then lost their connection**, and it
+is now proven end to end in production rather than inferred. Worth noting the sequence: two earlier
+close-the-tab attempts were ambiguous because `/verify` won the race each time and the webhook
+correctly did nothing — the rescued and unrescued rows are byte-identical, which is exactly why the
+marker was needed.
+
+### G-08 — alerts actually arrive
+
+The admin device was subscribed, and the watchdog fired on the next daily run:
+
+> `ALERT orders-stuck: ⚠️ 1 order(s) not moving — 1 order(s) past 4h. Oldest: #42, 314h old.`
+
+- ☑ **The alert is generated and pushed** to the admin's two registered devices. VAPID is
+  configured in production (`/api/push/vapid-public-key` answers with a real key)
+- ☑ **The 30-minute cooldown holds** — re-running the daily job immediately produced **no** second
+  alert. A phone that buzzes every few minutes gets muted, which is worse than no alert at all
+- ◐ **Arrival on the handset is the owner's to confirm.** Everything up to the push send is
+  verified; whether the notification appeared on the phone cannot be observed from here
+
+The alert history is itself a record of the daily-jobs fix working: entries begin
+2026-08-31 19:13, minutes after that deploy, and the count falls from **6 stuck orders to 1** as
+the stale pilot orders were closed.
+
+Note `users.notify_subscribed` reads `false` on the admin while two rows exist in
+`push_subscriptions`. That flag is **not** a gate — `notifyAdmins` selects admins by role and
+`pushToUser` reads the subscriptions table directly. The flag is a UI hint only.
+
+### E-08 — nothing sensitive in the logs
+
+Proven live, by making the JSON body parser throw on a URL carrying three credentials. The stored
+row reads:
+
+```
+/api/orders?t=[redacted]&reset=[redacted]&reference=[redacted]&harmless=keepme
+```
+
+Every sensitive parameter stripped, **and the harmless one kept** — a targeted scrub rather than
+blanket destruction of diagnostic value. No raw secret anywhere in the row.
+
+**A first attempt failed for an instructive reason.** Requesting a tracking link with a wrong `?t=`
+returned **401, not 500** — the route rejects a bad token *before* touching the database, so no log
+is written at all. Good ordering, and it means the most obvious leak path cannot even be reached.
+
+---
+
 **Deliberately not run, and why:**
 | Check | Why it was held back |
 |---|---|
@@ -733,11 +790,12 @@ DevTools → Network → **Offline** → tap Place Order.
       something**: `npm test` section G proves the alarm fires when a charge and its order disagree
       (naming both figures), so silence is evidence rather than an untested detector.
 
-### ☐ Webhook retries instead of giving up (E-01)
+### ☑ Webhook retries instead of giving up (E-01)
 - ☑ The webhook does not answer 200 on failure — **verified live 2026-09-01**: unsigned → **401**,
       bad signature → **401**. Paystack will therefore retry rather than give up.
-- ☐ Complete a payment, close the tab before it returns → order still appears *(needs a completed
-      test payment in the browser)*
+- ☑ Complete a payment, close the tab before it returns → order still appears — **PROVEN live
+      2026-09-02**: order 114 was created by the webhook, not `/verify`, and said so in the log.
+      The safety net that protects a customer who paid and lost their connection works.
 - ☑ Admin → 💳 Reconcile lists nothing unexpected — **verified live 2026-09-02**: the only two
       entries are 8- and 14-day-old drafts from the LIVE-key era, which correctly read UNKNOWN on
       test keys rather than being guessed.
@@ -1120,14 +1178,22 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 
 ## STEP 9 — Things that only show up in production
 
-### ☐ Alerts actually arrive (G-08)
-- ☐ **Tap "Enable admin alerts" on the phone you carry, once.** Nothing below works without it.
-- ☐ Mark an order queued and leave it past `ORDER_SLA_HOURS` → an alert arrives
-- ☐ Alerts do not repeat more than once per 30 minutes per kind
+### ◐ Alerts actually arrive (G-08)
+- ☑ **Tap "Enable admin alerts" on the phone you carry, once.** — done 2026-09-02; two devices
+      are registered in `push_subscriptions` and VAPID is configured in production.
+- ◐ Mark an order queued and leave it past `ORDER_SLA_HOURS` → an alert arrives — the alert is
+      **generated and pushed**: *"1 order(s) past 4h. Oldest: #42, 314h old."* Arrival on the
+      handset is the owner's to confirm; it cannot be observed from here.
+- ☑ Alerts do not repeat more than once per 30 minutes per kind — **verified 2026-09-02**:
+      re-running the daily job immediately produced no second alert.
 
-### ☐ Nothing sensitive in the logs (E-08)
-- ☐ Force a 500 on a guest tracking link → Admin → Errors shows `?t=[redacted]`, not the token
-- ☐ Same for a password-reset link (`?reset=[redacted]`)
+### ☑ Nothing sensitive in the logs (E-08)
+- ☑ Force a 500 → Admin → Errors shows `?t=[redacted]`, not the token — **verified live
+      2026-09-02**. *(Not via a tracking link: a wrong `?t=` returns 401 before any DB call, so no
+      log is written. Forced through the JSON body parser instead.)*
+- ☑ Same for a password-reset link — the stored row read
+      `?t=[redacted]&reset=[redacted]&reference=[redacted]&harmless=keepme`: every credential
+      stripped, the harmless parameter kept.
 - ☑ **Standing check, verified 2026-08-31**: no row in `error_logs` currently stores an
       unredacted `?t=` / `?reset=` / `?token=` value. Zero leaks in what is actually stored.
       *(The two boxes above force the path deliberately and are still worth doing.)*
