@@ -21,6 +21,7 @@ const heldFor = (id) => holds.filter(h => h.product_id === id && h.expires_at > 
 const availableFor = (id) => Math.max((shelf[id] || 0) - heldFor(id), 0);
 let migrationPresent = true;
 const PENDING = {};   // reference -> { draft } for the webhook test in section F
+const LOGGED = [];    // everything written to error_logs, for section G
 
 const RPC = {
   stock_available: ({ p_ids }) => {
@@ -76,7 +77,7 @@ const stubDb = {
   orders: { create: async (o) => { const row = { id: created.length + 1, ...o }; created.push(row); return row; }, findByPaystackRef: async () => null, list: async () => [], get: async () => null },
   sessions: { get: async () => ({ userId: 1, userType: 'user' }), create: async () => 'tok', destroy: async () => {} },
   users: { get: async () => ({ id: 1, role: 'admin', mustChangePassword: false, name: 'A', email: 'a@b.c', firstOrderDone: true, loyaltyBalance: 0, discountPending: false }) },
-  errorLog: { record: async () => {} },
+  errorLog: { record: async (r) => { LOGGED.push(r); } },
   squads: noop, addresses: noop, carts: noop, stats: noop, searchLog: noop, pushSubs: noop,
   dataRequests: noop, issueReports: noop, productRequests: noop, recurring: noop, metrics: noop,
   leaderboard: noop, reviews: noop, riders: noop, retention: { sweep: async () => ({}) },
@@ -226,6 +227,53 @@ setTimeout(async () => {
   check('the draft is cleared once the order exists', PENDING[ref], undefined);
 
   CONFIG.ordering_enabled = true;
+
+  console.log('\n=== G. A charge that does not match its order raises the alarm (C-07) ===');
+  // "Zero PAYMENT MISMATCH rows in production" only means something if the
+  // detector actually fires. This proves both directions. The webhook path is
+  // used because it is the one that had NO amount check at all until this
+  // session -- an order created there was never reconciled against what
+  // Paystack actually took.
+  CONFIG.ordering_enabled = true;
+  CONFIG.deduct_stock = false;
+
+  const crypto2 = require('crypto');
+  const hook = async (ref, pesewas, draftItems) => {
+    PENDING[ref] = {
+      reference: ref, userId: null,
+      draft: { items: draftItems, customer: 'Ama', phone: '0241234567',
+        neighborhood: 'Tamale Central', address: 'Near the market',
+        location: { lat: 9.4, lng: -0.85 } },
+    };
+    const payload = JSON.stringify({ event: 'charge.success', data: { reference: ref, amount: pesewas } });
+    const sig = crypto2.createHmac('sha512', process.env.PAYSTACK_SECRET_KEY).update(payload).digest('hex');
+    const r = await fetch(BASE + '/api/paystack/webhook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-paystack-signature': sig },
+      body: payload,
+    });
+    return r.status;
+  };
+
+  // Item 1 costs 20, delivery 10 -> the order totals 30, i.e. 3000 pesewas.
+  created = []; LOGGED.length = 0;
+  const okStatus = await hook('SDG_match_' + Date.now(), 3000, [{ id: 1, qty: 1 }]);
+  const mismatchesAfterMatch = LOGGED.filter((l) => /PAYMENT MISMATCH/.test(l.message || ''));
+  check('a webhook whose amount MATCHES is accepted', okStatus, 200);
+  check('the order was created', created.length, 1);
+  check('and NO mismatch alarm was raised', mismatchesAfterMatch.length, 0);
+
+  // Same basket, but Paystack says it took 5000 pesewas (GHS 50) not 3000.
+  created = []; LOGGED.length = 0;
+  const badStatus = await hook('SDG_mismatch_' + Date.now(), 5000, [{ id: 1, qty: 1 }]);
+  const raised = LOGGED.filter((l) => /PAYMENT MISMATCH/.test(l.message || ''));
+  check('a webhook whose amount DIFFERS still ACKs, so Paystack stops retrying', badStatus, 200);
+  check('the order is still created rather than the money being stranded', created.length, 1);
+  check('the mismatch alarm IS raised', raised.length, 1);
+  check('the alarm names both figures',
+    /charged GHS 50\.00.*totals GHS 30\.00/.test((raised[0] || {}).message || ''), true);
+  check('it is attributed to the webhook path, not verify',
+    (raised[0] || {}).path, '/api/paystack/webhook');
 
   console.log('');
   // Shut the listener down rather than exiting under it.

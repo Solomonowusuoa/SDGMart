@@ -577,6 +577,60 @@ fresh allowance for every address tried, which is what A-13 was about.
 
 ---
 
+## 💳 RUN LOG — 2026-09-01, step 8 (the last Paystack items)
+
+Two pieces. `npm test` gained **section G** (7 assertions, no database), and
+`node scripts/checks/step8-paystack-recovery.js 111` ran against a real test-mode payment
+(**9 checks, 9 passed**).
+
+### Section G — the mismatch alarm actually fires
+
+"Zero `PAYMENT MISMATCH` rows in production" only means something if the detector works. Section G
+drives the **webhook** path — the one that had no amount check at all until this session — with a
+signed webhook in both directions:
+
+- a charge that **matches** the order → 200, order created, **no alarm**
+- a charge that **differs** (Paystack says GHS 50, the order totals GHS 30) → still **200** so
+  Paystack stops retrying, the order is still created rather than the money being stranded, and the
+  alarm **is** raised, naming both figures and attributed to `/api/paystack/webhook`
+
+### Step 8 — the charged amount, and PAID — NEEDS ACTION
+
+The Reconcile "PAID — NEEDS ACTION" state means Paystack took the money and no order exists.
+Producing it by breaking order creation mid-payment would mean sabotaging the live code path.
+Instead it is **reconstructed** from a payment that already succeeded: snapshot the order, rebuild
+its draft, delete the order — the reference is now genuinely paid with no order — then press the
+real recovery endpoint. Nothing is sabotaged, and a `finally` puts the order back if anything fails.
+
+| Check | Result |
+|---|---|
+| Reconcile lists the orphaned reference | Listed |
+| ⭐ it reads **PAID — NEEDS ACTION**, not ABANDONED | `paid = true` |
+| ⭐ **C-07** the charged amount matches the order | **Paystack charged GHS 124 · the order totalled GHS 124** · channel `mobile_money`. Asked of Paystack directly, not inferred |
+| "Create the order" recovery | Recreated it, same total, marked paid, reference kept, draft cleared |
+| Recovering twice | **409 "An order already exists for this payment"** — cannot double-create |
+| Recovery requires admin | Unauthenticated → 401 |
+
+**Reconcile's live view is clean.** The two orphans an admin sees today are 8- and 14-day-old
+drafts from the LIVE-key era; on test keys Paystack cannot verify them, so they correctly read
+UNKNOWN rather than a guess. Nothing unexpected.
+
+### ⚠️ A near miss of mine, and the guard that came out of it
+
+The first version of the recovery script **auto-picked "the most recent paid order"**. With no
+fresh test payment on the books yet, that selected **order 42 — a real customer's 13-day-old GHS 50
+payment — and deleted it.** The `finally` block restored it byte-for-byte from its full-row
+snapshot (same id, total, status, reference, user and original `created_at`), and totals returned to
+23 orders, so nothing was lost. But convenience should never have been able to aim a destructive
+script at live customer data.
+
+The auto-pick is **gone**. The script now requires an explicit order id, prints the recent
+candidates rather than choosing, and **refuses any order older than 6 hours** without `--force` —
+because such an order predates the test-key window, cannot be verified against Paystack's test API,
+and would be deleted and recreated to learn nothing.
+
+---
+
 **Deliberately not run, and why:**
 | Check | Why it was held back |
 |---|---|
@@ -665,31 +719,39 @@ DevTools → Network → **Offline** → tap Place Order.
       the squad bonus, which the code deliberately does not promise. The customer is never
       promised more than they get. **Re-word this line, not the code** — see the step-3c run log.
 
-### ☐ Paystack reserves credit up front (C-07)
+### ☑ Paystack reserves credit up front (C-07)
 **Verified live 2026-09-01 on Paystack TEST keys.**
 - ☑ Start a payment with credit applied → balance drops **before** the popup (30 → 0), and the
       draft is stored with `_reserved` populated.
 - ☑ Abandon it → return to checkout → credit is back — **but only after 30 minutes**, and that
       matters: an immediate return does NOT release (correct — the popup may still be paid).
       Past the window it released 0 → 30 and cleared the draft. `listStaleForUser(userId, 30)`.
-- ☐ Complete a payment → amount charged matches the order total in Admin
-- ☐ Check Admin → Errors for any `PAYMENT MISMATCH` entry — there should be none
+- ☑ Complete a payment → amount charged matches the order total — **verified live 2026-09-01**:
+      Paystack reported **GHS 124** charged against an order totalling **GHS 124**, channel
+      `mobile_money`. Asked of Paystack directly through Reconcile, not inferred from our own row.
+- ☑ Check Admin → Errors for any `PAYMENT MISMATCH` entry — **none, and that now means
+      something**: `npm test` section G proves the alarm fires when a charge and its order disagree
+      (naming both figures), so silence is evidence rather than an untested detector.
 
 ### ☐ Webhook retries instead of giving up (E-01)
 - ☑ The webhook does not answer 200 on failure — **verified live 2026-09-01**: unsigned → **401**,
       bad signature → **401**. Paystack will therefore retry rather than give up.
 - ☐ Complete a payment, close the tab before it returns → order still appears *(needs a completed
       test payment in the browser)*
-- ☐ Admin → 💳 Reconcile lists nothing unexpected
+- ☑ Admin → 💳 Reconcile lists nothing unexpected — **verified live 2026-09-01**: the only two
+      entries are 8- and 14-day-old drafts from the LIVE-key era, which correctly read UNKNOWN on
+      test keys rather than being guessed.
 
-### ☐ Reconcile tab (E-01 follow-up)
+### ☑ Reconcile tab (E-01 follow-up)
 - ☑ Start a payment, abandon it → appears as **ABANDONED** — **verified live 2026-09-01**. A real
       abandoned checkout produced a `pending_payments` draft and **no order** (orders stayed 23).
 - ☑ "Discard" works on it — DELETE 200, row confirmed gone.
 - ☑ An unverifiable reference reads **UNKNOWN**, never guessed as abandoned. *(On test keys, every
       live-key orphan reads UNKNOWN — correct, but judge Reconcile on live keys.)*
-- ☐ A genuinely paid-but-orderless reference shows **PAID — NEEDS ACTION** and "Create the order"
-      works *(needs a completed payment — the popup step below)*
+- ☑ A genuinely paid-but-orderless reference shows **PAID — NEEDS ACTION** and "Create the order"
+      works — **verified live 2026-09-01** by reconstructing the state from a real test payment
+      rather than sabotaging order creation. Recovery recreated the order with the same total,
+      kept the reference, cleared the draft, and a second attempt was refused 409.
 
 ### ☑ Revenue and rider cash-up (C-06)
 **Verified live 2026-09-01** by seeding a day's orders and reading `/api/admin/revenue`.
