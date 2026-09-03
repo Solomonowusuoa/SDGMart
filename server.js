@@ -1402,16 +1402,11 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
     // Projected so the success screen can say what is coming. Only the tier
     // credit is promised: the squad bonus also depends on other members and
     // could change before this order arrives, so it stays a surprise.
-    loyaltyPending: (() => {
-      if (!reqUser) return 0;
-      // Lifetime spend, matching what squads.recordSpend actually awards on
-      // delivery. Reading totalSpent here promised against a counter the squad
-      // round resets, so the projection drifted from the payout as soon as a
-      // customer hit a squad goal.
-      const prev = Number(reqUser.lifetimeSpent || 0);
-      const after = prev + Number(pricing.subtotal || 0);
-      return (Math.floor(after / 1000) - Math.floor(prev / 1000)) * 50;
-    })(),
+    // The GHS 50-per-1,000 tier was retired on 2026-09-03, so no order earns
+    // credit at checkout any more. This must stay in lockstep with what
+    // squads.recordSpend actually pays on delivery: promising a credit here
+    // that never arrives is the same class of lie as B-01.
+    loyaltyPending: 0,
     squadGoalHit: false,
     // Lets guests track this order later (stored client-side; see orderTrackToken)
     trackToken: orderTrackToken(created.id),

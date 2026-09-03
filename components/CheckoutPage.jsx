@@ -118,8 +118,10 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // one. Regenerated only once an order actually succeeds.
   const newRequestId = () => 'cr_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
   const requestIdRef = React.useRef(newRequestId());
-  // Credit this order will earn once delivered. 0 for most baskets — the tier
-  // only crosses every GHS 1,000 — so the line is shown only when non-zero.
+  // Credit this order will earn once delivered. Always 0 since the
+  // GHS 50-per-1,000 tier was retired (2026-09-03) — the server now sends 0 —
+  // but the banner below is kept and still gated on `> 0`, so a future reward
+  // that pays at delivery has somewhere to say so.
   const [loyaltyPending, setLoyaltyPending] = React.useState(0);
   // null | 'network' | 'server' — drives the retry panel above the buttons.
   const [submitError, setSubmitError] = React.useState(null);
@@ -185,8 +187,11 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   // We still honour an existing discountPending flag for users who earned it
   // under the old rules but haven't redeemed yet.
   const canUseDiscount = !!(currentUser && currentUser.id && currentUser.discountPending);
-  // Loyalty: GHS 50 credit per GHS 1000 lifetime spend, applied as a flat
-  // discount the user can opt to use on this order (capped at the subtotal).
+  // Spendable credit balance, applied as a flat discount the customer can opt
+  // into on this order (capped at the subtotal). Since the GHS 50-per-1,000
+  // tier was retired (2026-09-03) the only thing that ADDS to this balance is
+  // the squad goal — but balances earned under the old tier are still here and
+  // still spendable, which is deliberate: that credit was earned.
   const loyaltyAvailable = Number(currentUser && currentUser.loyaltyBalance || 0);
   const [useLoyalty, setUseLoyalty] = React.useState(false);
 

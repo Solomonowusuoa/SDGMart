@@ -162,7 +162,12 @@ const TopRecruiters = () => {
   return (
     <div style={{ border: '1px solid var(--rule-2)', padding: '20px 24px', marginTop: 2 }}>
       <h2 style={{ margin: 0, fontFamily: 'var(--f-display)', fontSize: 18, fontWeight: 700, letterSpacing: '-.02em' }}>Top recruiters — this month</h2>
-      <p style={{ fontSize: 12.5, color: 'var(--rd-muted)', margin: '4px 0 14px' }}>Most friends brought in this month. The leader at month-end wins <strong style={{ color: 'var(--ink)' }}>GHS 15 off</strong> their next order. Resets on the 1st.</p>
+      {/* The GHS 15 month-end prize was retired 2026-09-03. The copy has to go
+          with it: promising a credit the code no longer pays is the same lie as
+          a success screen for an order that was never placed. Every referral
+          still earns GHS 5 when the friend's first order reaches GHS 50 — that
+          is the reward, and it is worth saying here instead. */}
+      <p style={{ fontSize: 12.5, color: 'var(--rd-muted)', margin: '4px 0 14px' }}>Most friends brought in this month. Every friend who joins with your code and spends GHS 50 earns you <strong style={{ color: 'var(--ink)' }}>GHS 5 credit</strong>. Resets on the 1st.</p>
       <div style={{ display: 'flex', flexDirection: 'column' }}>
         {leaders.slice(0, 5).map((u, i) => (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderTop: i === 0 ? 'none' : '1px solid var(--rule)' }}>

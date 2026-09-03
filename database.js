@@ -485,16 +485,21 @@ const squads = {
     const applied = await casUser(userId, (cur) => {
       const prev = Number(cur.totalSpent || 0);
       const total = prev + spend;
-      // The tier reward reads LIFETIME spend, which never resets. It used to
-      // read total_spent — the same counter the squad round wipes back to the
-      // rollover — so once a customer started hitting squad goals their counter
-      // could never climb to 1,000 again and the tier silently stopped paying.
-      // Measured before the split: an identical GHS 1,210 earned GHS 100 spent
-      // as one order and GHS 50 spent as twelve, purely from where the resets
-      // landed. Two jobs, two columns.
+      // ── The GHS 50-per-1,000 tier was RETIRED (owner's decision, 2026-09-03).
+      // Stacked on the squad bonus it paid a member of a full squad about 10%
+      // back, which is untenable at grocery margins of 10-25%. The squad goal
+      // is the reward that earns its keep — it only pays when someone brings
+      // four other shoppers in — so that one stays and this one goes.
+      //
+      // `lifetime_spent` is still maintained. It is the honest record of what a
+      // customer has spent, it is what the tier used to (correctly) read after
+      // the total_spent split, and reporting wants it. It simply no longer pays.
+      //
+      // Credit already granted is NOT clawed back: balances stay spendable.
+      // People earned that under the old terms.
       const prevLife = Number(cur.lifetimeSpent || 0);
       const newLife = prevLife + spend;
-      const earned = (Math.floor(newLife / 1000) - Math.floor(prevLife / 1000)) * 50;
+      const earned = 0;
       return {
         patch: {
           total_spent: money(total),
@@ -1837,27 +1842,29 @@ const leaderboard = {
       });
     } catch (e) { console.warn('leaderboard failed:', e.message); return []; }
   },
-  // Award last month's top referrer GHS 15 (once). Cron-less: runs on demand,
-  // idempotent via an app_config marker.
+  // RETIRED 2026-09-03 (owner's decision, alongside the GHS 50-per-1,000 tier).
+  // This paid last month's top referrer GHS 15 automatically. The GHS 5 per
+  // referral stays — that one pays only when a new customer is actually
+  // acquired — but the leaderboard prize paid a second time for the same
+  // referrals, on top of the per-referral credit.
+  //
+  // The board itself is untouched: topReferrers() still ranks people and the
+  // Squad page still shows it. It is recognition now, not a payout.
+  //
+  // Kept as a no-op rather than deleted, because runDailyJobs() calls it and a
+  // missing method there throws inside the daily-job chain — which is exactly
+  // how every daily job died silently for two days in v96. The marker is still
+  // advanced so that if this is ever re-enabled it does not back-pay months of
+  // winners at once.
   async awardLastMonthWinner() {
     try {
       const now = new Date();
-      const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const lastMonth = lastMonthDate.toISOString().slice(0, 7);
-      const marker = await appConfig.get('leaderboard_awarded_month');
-      if (marker === lastMonth) return null; // already awarded
-      const { data } = await sb.from('referrals').select('referrer_id').eq('month', lastMonth);
-      if (!data || !data.length) { await appConfig.set('leaderboard_awarded_month', lastMonth); return null; }
-      const counts = {};
-      data.forEach(r => { counts[r.referrer_id] = (counts[r.referrer_id] || 0) + 1; });
-      const winnerId = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
-      const winner = await users.get(winnerId);
-      if (winner) {
-        await squads.addLoyalty(winnerId, 15);
+      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 7);
+      if ((await appConfig.get('leaderboard_awarded_month')) !== lastMonth) {
+        await appConfig.set('leaderboard_awarded_month', lastMonth);
       }
-      await appConfig.set('leaderboard_awarded_month', lastMonth);
-      return { winnerId, month: lastMonth };
-    } catch (e) { console.warn('award winner failed:', e.message); return null; }
+      return null;
+    } catch (e) { console.warn('leaderboard marker failed:', e.message); return null; }
   },
 };
 
