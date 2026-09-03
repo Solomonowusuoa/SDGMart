@@ -1506,12 +1506,15 @@ const issueReports = {
     return rowOut(data);
   },
   async listAll({ limit } = {}) {
+    // phone comes along too: an in-app message arrives with no reply channel
+    // attached, so without it the admin can read the complaint but has no way
+    // to follow it up — which is the whole point of reading it.
     const { data, error } = await sb.from('issue_reports')
-      .select('*, users(name, email)').order('created_at', { ascending: false }).limit(listLimit(limit));
+      .select('*, users(name, email, phone)').order('created_at', { ascending: false }).limit(listLimit(limit));
     if (error) throw error;
     return (data || []).map((r) => {
       const { users: u, ...rest } = r;
-      return { ...rowOut(rest), userName: u ? u.name : null, userEmail: u ? u.email : null };
+      return { ...rowOut(rest), userName: u ? u.name : null, userEmail: u ? u.email : null, userPhone: u ? u.phone : null };
     });
   },
   async resolve(id, note) {

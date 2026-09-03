@@ -61,6 +61,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   const [uploadingPhoto, setUploadingPhoto] = React.useState(false);
   const [editingId, setEditingId] = React.useState(null);
   const [editDraft, setEditDraft] = React.useState(null);
+  const [invQuery, setInvQuery] = React.useState('');
   const [smsText, setSmsText] = React.useState('');
   const [smsSent, setSmsSent] = React.useState(false);
   // Force the Security tab to open if a password change is required
@@ -148,9 +149,12 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
 
   // Load live data from API on mount.
   React.useEffect(() => {
+    // Only an actual array replaces the catalogue we booted with. A 401/403/500
+    // returns {error: "..."}, and setting that as `products` breaks every
+    // .map/.filter on this screen.
     apiFetch('/api/products')
-      .then(r => r.json())
-      .then(data => setProducts(data))
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (Array.isArray(data)) setProducts(data); })
       .catch(() => {});
     loadOrders();
   }, []);
@@ -382,32 +386,63 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   const cancelEdit = () => { setEditingId(null); setEditDraft(null); };
   const saveEdit = async () => {
     if (!editingId || !editDraft) return;
+    // A blank price used to be saved as GHS 0.00 without a word. Say so instead.
+    const price = parseFloat(editDraft.price);
+    if (!Number.isFinite(price) || price < 0) {
+      alert('Enter a price of 0 or more before saving.');
+      return;
+    }
     const payload = {
       name: editDraft.name,
       category: editDraft.category,
-      price: parseFloat(editDraft.price) || 0,
+      price,
       unit: editDraft.unit,
-      bestBefore: editDraft.bestBefore,
+      // An untouched date input submits ''. best_before is a Postgres date
+      // column, so '' is an error there — null is how you say "no date".
+      bestBefore: editDraft.bestBefore || null,
       stock: parseInt(editDraft.stock) || 0,
       description: editDraft.description,
       bestseller: !!editDraft.bestseller,
       lowStockThreshold: editDraft.lowStockThreshold !== '' && editDraft.lowStockThreshold != null ? parseInt(editDraft.lowStockThreshold) : 5,
     };
+    let saved = null, reason = '';
     try {
       const res = await apiFetch(`/api/products/${editingId}`, {
         method: 'PUT',
         body: JSON.stringify(payload),
       });
-      const saved = await res.json();
-      setProducts(prev => prev.map(p => p.id === editingId ? saved : p));
-      window.PRODUCTS = window.PRODUCTS.map(p => p.id === editingId ? saved : p);
-    } catch (_) {
-      // Optimistic local update if API fails
-      setProducts(prev => prev.map(p => p.id === editingId ? { ...p, ...payload } : p));
+      try { saved = await res.json(); } catch (_) {}
+      if (!res.ok) reason = (saved && saved.error) || 'The server did not accept the change.';
+      else if (!saved || saved.id == null) reason = 'The server did not return the saved product.';
+    } catch (e) {
+      reason = 'Could not reach the server.';
     }
+    // res.ok was never checked here, and the failure path wrote whatever came
+    // back into the row. A rejected edit returns {error: "..."} with no id, so
+    // the product turned into that error object: the name went blank, the price
+    // rendered "GHS NaN", and the missing stock field read as 0, which set the
+    // low-stock banner off. Nothing had actually changed in the shop. On any
+    // failure now: say so, leave the row exactly as the shop has it, and keep
+    // the admin in the editor with their typing intact.
+    if (reason) {
+      alert('Could not save this product — nothing was changed.\n\n' + reason);
+      return;
+    }
+    setProducts(prev => prev.map(p => p.id === editingId ? saved : p));
+    window.PRODUCTS = window.PRODUCTS.map(p => p.id === editingId ? { ...p, ...saved } : p);
     cancelEdit();
   };
   const setEditField = (k, v) => setEditDraft(d => ({ ...d, [k]: v }));
+
+  // Inventory search. Matches name, category, unit and product id, so "milo",
+  // "drinks" and "37" all find something. The row being edited always stays
+  // visible — otherwise typing in the box while a row is open would make the
+  // half-finished edit disappear.
+  const invSearch = invQuery.trim().toLowerCase();
+  const visibleProducts = !invSearch ? products : products.filter(p =>
+    p.id === editingId ||
+    [p.name, p.category, p.unit, p.id].some(v => String(v == null ? '' : v).toLowerCase().includes(invSearch))
+  );
 
   const tabs = [
     ['overview','📊 Overview'],['dashboard','📈 Dashboard'],['revenue','💰 Revenue'],['orders','📦 Orders'],['inventory','🏪 Inventory'],
@@ -520,6 +555,12 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   const loadSettings = React.useCallback(() => {
     apiFetch('/api/admin/settings').then(r => r.ok ? r.json() : {}).then(s => { setSettings({ showFreshness: !!s.showFreshness, deductStock: !!s.deductStock, orderingEnabled: s.orderingEnabled !== false, onlinePaymentEnabled: s.onlinePaymentEnabled !== false, loyaltyRedemptionEnabled: s.loyaltyRedemptionEnabled !== false }); setSlotsText((s.deliverySlots || []).join('\n')); }).catch(() => {});
   }, []);
+  // On mount, not just when the Settings tab opens: Inventory reads
+  // settings.deductStock to decide whether low-stock alerts mean anything, and
+  // with a lazy load it would only ever see the `false` default — quietly
+  // suppressing the alerts even for a shop that does hold its own stock.
+  // Re-read on entering Settings so a change made elsewhere still shows.
+  React.useEffect(() => { loadSettings(); }, [loadSettings]);
   React.useEffect(() => { if (adminTab === 'settings') loadSettings(); }, [adminTab, loadSettings]);
   const saveSettings = async (patch) => {
     const next = { ...settings, ...patch };
@@ -565,7 +606,13 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   // ── Issues tab state ──
   const [issues, setIssues] = React.useState([]);
   const loadIssues = React.useCallback(() => {
-    apiFetch('/api/admin/issue-reports').then(r => r.ok ? r.json() : []).then(setIssues).catch(() => {});
+    // Anything but an array here (a null body, an {error} object) reaches
+    // `issues.length` in the render and takes the whole admin console down to
+    // the "Something hiccuped" screen — not just this tab.
+    apiFetch('/api/admin/issue-reports')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setIssues(Array.isArray(d) ? d : []))
+      .catch(() => {});
   }, []);
   React.useEffect(() => { if (adminTab === 'issues') loadIssues(); }, [adminTab, loadIssues]);
   const resolveIssue = async (id) => {
@@ -958,6 +1005,12 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
             {/* Products list */}
             {/* Low-stock alert banner */}
             {(() => {
+              // Low-stock alerts only mean something when we hold the stock.
+              // With own-stock mode off (Settings → "Deduct stock on order"),
+              // orders never touch these counts and the shop sells from zero on
+              // the supplier model — so every product sits at or below its
+              // threshold and the banner cries wolf about all of them.
+              if (!settings.deductStock) return null;
               const lowStock = products.filter(p => Number(p.stock || 0) <= Number(p.lowStockThreshold != null ? p.lowStockThreshold : 5));
               if (lowStock.length === 0) return null;
               return (
@@ -980,8 +1033,34 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
 
             <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
               <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--cream-dark)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: 700, fontSize: 15 }}>All Products ({products.length})</span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                <div>
+                  <span style={{ fontWeight: 700, fontSize: 15 }}>
+                    {invSearch
+                      ? `${visibleProducts.length} of ${products.length} products`
+                      : `All Products (${products.length})`}
+                  </span>
+                  {!settings.deductStock && (
+                    <div style={{ fontSize: 11, color: 'var(--warm-gray)', marginTop: 3 }}>
+                      Own-stock mode is off, so these counts are a note to yourself — orders do not
+                      reduce them and low-stock alerts stay quiet. Turn it on in Settings to use them.
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      value={invQuery}
+                      onChange={e => setInvQuery(e.target.value)}
+                      placeholder="Search name, category, unit…"
+                      aria-label="Search inventory"
+                      style={{ width: 230, padding: '7px 28px 7px 30px', borderRadius: 8, border: '1.5px solid var(--cream-dark)', fontSize: 12.5, outline: 'none', background: 'var(--white)', color: 'inherit', fontFamily: 'inherit' }}
+                    />
+                    <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 12, color: 'var(--warm-gray)', pointerEvents: 'none' }}>🔎</span>
+                    {invQuery && (
+                      <button onClick={() => setInvQuery('')} aria-label="Clear search"
+                        style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', fontSize: 14, lineHeight: 1, color: 'var(--warm-gray)', background: 'none', border: 'none', cursor: 'pointer', padding: 2 }}>×</button>
+                    )}
+                  </div>
                   <span style={{ fontSize: 13, color: 'var(--warm-gray)' }}>Total Stock Value: <strong>GHS {products.reduce((s,p)=>s+p.price*p.stock,0).toFixed(2)}</strong></span>
                   <button onClick={exportInventory}
                     style={{ fontSize: 12, fontWeight: 700, background: 'var(--sage)', color: '#fff', borderRadius: 8, padding: '7px 12px' }}>
@@ -999,7 +1078,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                     </tr>
                   </thead>
                   <tbody>
-                    {products.map((p, i) => {
+                    {visibleProducts.map((p, i) => {
                       const d = Math.ceil((new Date(p.bestBefore) - new Date()) / 86400000);
                       const editing = editingId === p.id;
                       const cellEdit = { width: '100%', padding: '6px 8px', borderRadius: 6, border: '1.5px solid var(--cream-dark)', fontSize: 12, outline: 'none', background: 'var(--white)' };
@@ -1045,10 +1124,13 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                           <td style={{ padding: '10px 14px' }}>
                             {(() => {
                               const th = p.lowStockThreshold != null ? p.lowStockThreshold : 5;
-                              const isLow = Number(p.stock || 0) <= Number(th);
+                              // Same reason as the banner: with own-stock mode
+                              // off nothing deducts these counts and a 0 is not
+                              // "sold out" — the shop still takes the order.
+                              const isLow = settings.deductStock && Number(p.stock || 0) <= Number(th);
                               return (
                                 <span style={{ fontWeight: 700, color: isLow ? 'var(--accent-red)' : 'var(--warm-black)' }}>
-                                  {p.stock}{isLow && p.stock > 0 ? ' ⚠' : ''}{p.stock === 0 ? ' (sold out)' : ''}
+                                  {p.stock}{isLow && p.stock > 0 ? ' ⚠' : ''}{settings.deductStock && p.stock === 0 ? ' (sold out)' : ''}
                                 </span>
                               );
                             })()}
@@ -1068,6 +1150,14 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                         </tr>
                       );
                     })}
+                    {visibleProducts.length === 0 && (
+                      <tr>
+                        <td colSpan={8} style={{ padding: '26px 14px', textAlign: 'center', color: 'var(--warm-gray)', fontSize: 13 }}>
+                          Nothing matches “{invQuery}”.{' '}
+                          <button onClick={() => setInvQuery('')} style={{ color: 'var(--sage-dark)', fontWeight: 700, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 13 }}>Clear search</button>
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -1578,6 +1668,17 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                       <strong style={{ fontSize: 13 }}>{i.orderId ? `Order ${window.orderCode(i.orderId)}` : '💬 General feedback'}</strong>
                       {i.userName && <span style={{ fontSize: 12, color: 'var(--warm-gray)' }}>from {i.userName}{i.userEmail ? ` (${i.userEmail})` : ''}</span>}
+                      {/* An in-app message carries no reply channel of its own —
+                          without the number here, following one up meant hunting
+                          the customer down in the Orders tab. */}
+                      {i.userPhone && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                          <a href={`tel:${i.userPhone}`} style={{ color: 'var(--sage-dark)', fontWeight: 700, textDecoration: 'none' }}>📞 {i.userPhone}</a>
+                          <a href={`https://wa.me/${String(i.userPhone).replace(/[^0-9]/g, '').replace(/^0/, '233')}`}
+                            target="_blank" rel="noopener noreferrer"
+                            style={{ color: '#25D366', fontWeight: 700, textDecoration: 'none' }}>WhatsApp</a>
+                        </span>
+                      )}
                       <span style={{ background: i.orderId ? 'rgba(192,57,43,.1)' : 'rgba(56,121,191,.12)', color: i.orderId ? 'var(--accent-red)' : '#3879BF', borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>{i.issueType}</span>
                       {i.resolved && <span style={{ background: 'var(--sage)', color: '#fff', borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>RESOLVED</span>}
                       <span style={{ fontSize: 11, color: 'var(--warm-gray)', marginLeft: 'auto' }}>{new Date(i.createdAt).toLocaleString()}</span>

@@ -691,9 +691,9 @@ app.get('/api/products/:id', async (req, res) => {
 app.post('/api/products', requireAdmin, async (req, res) => {
   try {
     const { name, category, price, unit, bestBefore, stock, description, bestseller, lowStockThreshold } = req.body;
-    const vErr = validateProductFields({ price, stock, lowStockThreshold });
+    const vErr = validateProductFields({ price, stock, lowStockThreshold, bestBefore });
     if (vErr) return res.status(400).json({ error: vErr });
-    const created = await db.products.create({ name, category, price: parseFloat(price), unit, bestBefore, stock: parseInt(stock) || 0, description: description || '', bestseller: !!bestseller, lowStockThreshold: lowStockThreshold != null ? parseInt(lowStockThreshold) : undefined });
+    const created = await db.products.create({ name, category, price: parseFloat(price), unit, bestBefore: normalizeBestBefore(bestBefore), stock: parseInt(stock) || 0, description: description || '', bestseller: !!bestseller, lowStockThreshold: lowStockThreshold != null ? parseInt(lowStockThreshold) : undefined });
     invalidateCatalog();
     res.status(201).json({ ...created, bestseller: !!created.bestseller });
   } catch (e) { res.status(400).json({ error: e.message }); }
@@ -702,9 +702,9 @@ app.post('/api/products', requireAdmin, async (req, res) => {
 app.put('/api/products/:id', requireAdmin, async (req, res) => {
   try {
     const { name, category, price, unit, bestBefore, stock, description, bestseller, lowStockThreshold } = req.body;
-    const vErr = validateProductFields({ price, stock, lowStockThreshold });
+    const vErr = validateProductFields({ price, stock, lowStockThreshold, bestBefore });
     if (vErr) return res.status(400).json({ error: vErr });
-    const updated = await db.products.update(req.params.id, { name, category, price: parseFloat(price), unit, bestBefore, stock: parseInt(stock) || 0, description: description || '', bestseller: !!bestseller, ...(lowStockThreshold != null ? { lowStockThreshold: parseInt(lowStockThreshold) } : {}) });
+    const updated = await db.products.update(req.params.id, { name, category, price: parseFloat(price), unit, bestBefore: normalizeBestBefore(bestBefore), stock: parseInt(stock) || 0, description: description || '', bestseller: !!bestseller, ...(lowStockThreshold != null ? { lowStockThreshold: parseInt(lowStockThreshold) } : {}) });
     invalidateCatalog();
     res.json({ ...updated, bestseller: !!updated.bestseller });
   } catch (e) { res.status(404).json({ error: e.message }); }
@@ -757,7 +757,7 @@ const FIRST_ORDER_FREE_MIN = 50; // first-order free delivery only when the orde
 // behind them. computeOrderPricing already clamps a line to >= 0, so a
 // negative price could not drive a cart total down, but it would still show
 // as a negative price in the catalogue and in every admin figure.
-function validateProductFields({ price, stock, lowStockThreshold }) {
+function validateProductFields({ price, stock, lowStockThreshold, bestBefore }) {
   const p = parseFloat(price);
   if (!Number.isFinite(p) || p < 0) return 'Price must be a number of 0 or more.';
   if (p > 100000) return 'Price looks wrong — over GHS 100,000.';
@@ -769,7 +769,28 @@ function validateProductFields({ price, stock, lowStockThreshold }) {
     const t = parseInt(lowStockThreshold, 10);
     if (!Number.isFinite(t) || t < 0) return 'Low-stock threshold cannot be negative.';
   }
+  if (normalizeBestBefore(bestBefore) === BAD_DATE) {
+    return 'Best Before must be a date like 2026-12-31, or left empty.';
+  }
   return null;
+}
+// best_before is a Postgres `date`, which takes 'YYYY-MM-DD' or NULL — never
+// ''. An <input type="date"> that has never been filled in submits '', so every
+// Save on a product without a Best Before date reached Postgres as
+// `invalid input syntax for type date: ""`, came back as a 404 {error: ...},
+// and AdminPage wrote that error object into the row (blank name, GHS NaN, and
+// a low-stock alert for the stock field it did not have). Empty means "no
+// date": store NULL. Anything else that is not a plain date is a 400 with a
+// reason, not a database error dressed up as "not found".
+const BAD_DATE = Symbol('bad-date');
+function normalizeBestBefore(v) {
+  if (v == null) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return BAD_DATE;
+  const d = new Date(s + 'T00:00:00Z');
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) return BAD_DATE;
+  return s;
 }
 // A cart cannot legitimately contain more distinct products than this; the cap
 // exists so one request cannot be turned into an unbounded amount of work.
@@ -2689,7 +2710,13 @@ app.post('/api/me/orders/:id/report-issue', requireAuth, async (req, res) => {
   if (!description) return res.status(400).json({ error: 'Please describe the issue' });
   try {
     const rep = await db.issueReports.create({ orderId: o.id, userId: req.user.id, issueType, description });
-    notifyAdmins({ title: '⚠️ Order issue reported', body: 'Order #' + o.id + ': ' + String(description).slice(0, 80), url: '/admin', tag: 'admin-issue-' + o.id }).catch(() => {});
+    // Same reason as /api/feedback: carry who to call back, not just what broke.
+    const who = [o.customer || req.user.name, o.phone || req.user.phone].filter(Boolean).join(' · ');
+    notifyAdmins({
+      title: '⚠️ Issue on order #' + o.id,
+      body: (who ? who + '\n' : '') + String(description).slice(0, 120),
+      url: '/admin', tag: 'admin-issue-' + o.id,
+    }).catch(() => {});
     res.json(rep);
   } catch (e) { fail(res, e, req); }
 });
@@ -2702,7 +2729,16 @@ app.post('/api/feedback', requireAuth, async (req, res) => {
   if (!rate.allowed) return res.status(429).json({ error: 'Too many messages — please try again later' });
   try {
     const fb = await db.issueReports.create({ orderId: null, userId: req.user.id, issueType: 'feedback', description });
-    notifyAdmins({ title: '💬 New feedback', body: String(description).slice(0, 90), url: '/admin', tag: 'admin-feedback' }).catch(() => {});
+    // Name and phone in the notification itself. The message alone told the
+    // admin something was wrong but not who to call back, so every in-app
+    // message meant opening the console to find out — and an anonymous-looking
+    // buzz is easy to leave for later. The Issues tab carries the same details.
+    const who = [req.user.name, req.user.phone].filter(Boolean).join(' · ') || 'A customer';
+    notifyAdmins({
+      title: '💬 Feedback from ' + (req.user.name || 'a customer'),
+      body: who + '\n' + String(description).slice(0, 120),
+      url: '/admin', tag: 'admin-feedback',
+    }).catch(() => {});
     res.json(fb);
   } catch (e) {
     console.error('feedback save failed:', e.message);
