@@ -24,6 +24,7 @@ async function ask(expr) {
 }
 const idx = (n) => ask("exists(select 1 from pg_indexes where indexname='" + n + "')");
 const fn = (n) => ask("exists(select 1 from pg_proc where proname='" + n + "')");
+const con = (n) => ask("exists(select 1 from pg_constraint where conname='" + n + "')");
 const rls = (t) => ask("exists(select 1 from pg_class where relname='" + t + "' and relrowsecurity)");
 const nullable = (t, c) => ask("exists(select 1 from information_schema.columns where table_name='" + t + "' and column_name='" + c + "' and is_nullable='YES')");
 
@@ -47,6 +48,8 @@ const CHECKS = {
   'supabase-schema-updated-at.sql': [['fn set_updated_at', () => fn('set_updated_at')], ['addresses.updated_at', () => col('addresses', 'updated_at')], ['table order_events', () => col('order_events', 'id')]],
   'supabase-schema-aggregates.sql': [['fn search_top_queries', () => fn('search_top_queries')], ['fn search_unmatched_queries', () => fn('search_unmatched_queries')], ['idx search_queries_created_at_idx', () => idx('search_queries_created_at_idx')]],
   'supabase-schema-consent.sql': [['users.terms_version', () => col('users', 'terms_version')], ['users.terms_accepted_at', () => col('users', 'terms_accepted_at')]],
+  'supabase-schema-lifetime-spend.sql': [['users.lifetime_spent', () => col('users', 'lifetime_spent')], ['no customer has a negative lifetime', () => ask("(select count(*) from users where lifetime_spent < 0)=0")]],
+  'supabase-schema-rider-tokens.sql': [['email_tokens.rider_id', () => col('email_tokens', 'rider_id')], ['user_id is now nullable', () => nullable('email_tokens', 'user_id')], ['purpose CHECK allows reset-rider', () => ask("exists(select 1 from pg_constraint where conname='email_tokens_purpose_check' and pg_get_constraintdef(oid) like '%reset-rider%')")], ['exactly-one-owner CHECK exists', () => con('email_tokens_one_owner')]],
   'supabase-schema-stock-holds.sql': [['table stock_holds', () => col('stock_holds', 'id')], ['fn stock_available', () => fn('stock_available')], ['fn hold_stock', () => fn('hold_stock')], ['fn release_stock_hold', () => fn('release_stock_hold')], ['fn commit_stock_hold', () => fn('commit_stock_hold')], ['fn consume_stock', () => fn('consume_stock')], ['fn restock_items', () => fn('restock_items')], ['fn expire_stock_holds', () => fn('expire_stock_holds')]],
 };
 

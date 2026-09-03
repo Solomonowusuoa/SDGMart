@@ -4,6 +4,124 @@ A same-day grocery web app for Tamale, Ghana. This doc lets a new chat (or you) 
 
 ---
 
+## ⭐ LATEST STATE — resume here (updated 2026-09-03)
+
+- **(2026-08-31 → 2026-09-03) v96 — THE TEST PLAN WAS ACTUALLY RUN. 27 commits, `main` at `76b4818`, all deployed.** v95 built the fixes and verified them against stubs; this session executed them against the live shop and **found eleven real bugs the audit had missed**. Every one is fixed, deployed and covered by a re-runnable check. `npm test` went **42 → 66 assertions**.
+
+  - **⚠️⚠️ PAYSTACK IS STILL ON TEST KEYS (`pk_test_1df0c539…`). REAL CUSTOMERS CANNOT PAY YOU.** This is the single most urgent thing to undo. Swap `PAYSTACK_PUBLIC_KEY` and `PAYSTACK_SECRET_KEY` back to the `pk_live_`/`sk_live_` pair on Render, then confirm with `curl -s https://sdg-mart.com/api/paystack/config`. Everything that needed test keys is finished.
+
+  - **⭐ THE BIGGEST FIND: every daily job had been dead since the v95 deploy.** `db.appConfig.claim()` threw on **every** call — `app_config.value` is `jsonb` and the filter passed a bare date, so PostgREST read `2026` as a number and choked on `-08`. `claim()` is the first thing `runDailyJobs()` does, so everything behind it stopped **silently** (the outer handler only `console.warn`s): the retention sweep (42 expired sessions, oldest 2026-06-01), the **stuck-order watchdog and its SLA alerts**, recurring orders, birthday pushes, the leaderboard award, and the hold sweeps. Fixed in `90f0add`; verified live — `daily_job_last_run` moved `2026-08-29 → 2026-08-31` and sessions went 45 → 3 on the first real run.
+
+  - **⭐ THE ADMIN SCREENS REPORTED SUCCESS THEY NEVER CONFIRMED — this is B-01 again, where the audit did not look.** The owner deleted a product and it stayed on sale. `removeProduct` swallowed every failure and filtered the row out regardless; `fetch` does not reject on 4xx/5xx, so even a 500 sailed through and the product **vanished from the admin table while remaining in the shop**. `addProduct` never checked `res.ok`, so a rejected product was added to the table with no id — pressing Remove on it sent `DELETE /api/products/undefined`, which is what the error log showed. Its catch also fabricated a row with `id: Date.now()`, a product existing only in that browser. **Two more paths had the same shape**: `updateOrderStatus` could show an order as Delivered that the database still had as Queued, and `deleteOrder` hid orders it had not deleted. All five now check the response and leave the row alone on failure (`76b4818`).
+
+  - **⭐ THE SQUAD REWARD PAID OUT TO PEOPLE WITH NO SQUAD, and the tier reward was a lottery.** Every signup gets its own `squad_code`, so an uninvited shopper was a squad of one and `every(member hit 500)` was just "did I hit 500?" — 5 of 6 squads were solo. Separately, `users.total_spent` was doing two incompatible jobs: lifetime spend for the GHS 50-per-1,000 tier, and progress in the squad round, which **resets**. The reset destroyed the tier: two customers spending an identical GHS 1,210 earned **GHS 100 and GHS 50** depending only on how they split their orders. Fixed with `MIN_SQUAD_MEMBERS = 5` and a new non-resetting `users.lifetime_spent` (migration `supabase-schema-lifetime-spend.sql`, backfilled from delivered-order subtotals — all 8 customers matched order history exactly). **Note the economics changed:** a member of a full active squad now earns ~10% back (5% tier + 5% squad). That is steep for groceries and is a pricing decision left open.
+
+  - **⭐ RIDERS COULD NOT CHANGE OR RECOVER A PASSWORD AT ALL.** `/api/auth/change-password` is `customerOnly` (403 for riders) and forgot-password looked only in `users`, so a rider's reset silently matched nothing — they were stuck with whatever an admin typed at `createRider`, permanently. Built `POST /api/rider/change-password` plus rider support in forgot/reset. **The dangerous part was the shared id space (A-01):** `email_tokens` held a bare `user_id`, so a token for rider #N would have reset **customer #N's** password. Rider tokens now have their own owner column and purpose, with a CHECK enforcing exactly one owner (migration `supabase-schema-rider-tokens.sql`). Proven by building the collision deliberately — a customer and a rider both on id 56 — and confirming the rider's reset changed only the rider.
+
+  - **Five smaller fixes, each found by a test that failed for a real reason.** (1) The search box had **no focus ring**: an inline `outline: 'none'` in `Header.jsx` beat the `:focus-visible` rule three lines below it. (2) The **last CSP violation** was Google Sign-In's stylesheet, missing from `style-src` — the policy can now move from report-only to enforced. (3) Recurring-order input mistakes answered **500 "Something went wrong on our end"** and filed a 500 in `error_logs` for a mistyped date; now 400 with the real reason. (4) **Cloudflare replaces 5xx bodies**, so a Paystack rejection reached the shopper as a bare `error code: 502` — and `CheckoutPage` then threw parsing it, telling them "Check your connection" for an email typo. Now 422, which passes through intact. (5) The **webhook had no amount-mismatch check** — the path that runs precisely when nobody is watching a screen. Now shared with `/verify` via `assertChargeMatchesOrder`.
+
+  - **Three observability fixes, because the first two of these were found by not being able to diagnose something.** `unhandledRejection` recorded an **empty stack** (Supabase errors are plain objects, not `Error`s), so a real fault said "something broke" and nothing else — it now keeps PostgREST's code/details/hint and synthesises a stack. Crash and rejection rows carried **no status and no path**, making the most serious entries in Admin → Errors the only ones that could not be filtered for — now `path: 'process'`, `status: 500`. And the webhook now writes a **`WEBHOOK RESCUE`** line when it creates an order, because a rescued order is otherwise byte-identical to a normal one and the safety net was unobservable.
+
+  - **What is PROVEN now, live, that was not before.** Checkout tells the truth when it fails (cart kept, no fake tracking code). Five concurrent submits produce **one** order. Loyalty cannot be spent twice. Cancelling returns exactly what it took. Rewards land on delivery, not checkout. Paystack reserves credit before the popup and releases it after 30 minutes. **The webhook safety net demonstrably fired** — order 114 was created by it, not `/verify`, and said so. A prepaid order reaches the rider as `paid: true` ("collect nothing") with `userId`/`momoNumber`/money-breakdown withheld. Revenue splits online vs rider cash correctly. Reconcile separates ABANDONED from PAID and its recovery works, refusing a second attempt with 409. Rate limits: spraying is throttled at ~50/15min per IP while a customer fumbling three passwords is not, and browsing keeps working while sign-in is blocked. An uncaught exception exits the process, non-zero, after recording the crash.
+
+  - **⚠️ TWO MISTAKES OF MINE, recorded so they are not repeated.** (1) The step-2e admin script sent `stock: 0` in a `PUT /api/products/:id` body and restored only the price — **`PUT` is a replace, not a patch**, so it left product 37 flagged out of stock and de-listed as a bestseller, invisible to shoppers for ~2 hours. Restored from `SDGMart-catalog-import.csv`; the bestseller count going 23 → 24 confirmed the flag had been wiped. The script now snapshots the whole row and verifies the restore field by field. (2) The step-8 recovery script **auto-picked "the most recent paid order"** and, with no fresh test payment on the books, deleted a **real customer's** 13-day-old GHS 50 order. The `finally` restored it byte-for-byte, but the auto-pick is gone: an explicit id is now required and anything older than 6 hours is refused.
+
+  - **The test board is in `TEST-CHECKLIST.md`, and its count was wrong all session until fixed.** 45 section headers still read `☐` while every child under them was ticked, so the raw count overstated the work left by nearly half. Headers now roll up from their children. **20 real items remain**, down from ~106.
+
+  - **Re-runnable checks now live in `scripts/checks/`** — twelve scripts, each self-cleaning, most with a `--cleanup` recovery mode because a killed process skips the `finally` and leaves orders in `queued` firing SLA alerts. Start with `node scripts/checks/verify-migrations.js` (read-only, proves all 22 migrations are genuinely applied — 22/22 as of this writing by probing for the objects they create).
+
+  - **STILL OPEN, in the order that matters.** (1) **Swap Paystack back to live keys.** (2) **Own-stock mode (STEP 10, 10 checks)** — deliberately left for last; it changes how the shop treats inventory and `deduct_stock` is currently OFF, which is the supplier model the shop actually runs on. (3) **F-06 catalogue-on-resume** was never really tested — the "deleted product still visible" turned out to be the admin bug above, so a genuine catalogue change has still not been watched propagating to a backgrounded PWA. (4) **G-06 migration rollback** needs staging (G-01, still open). (5) **A-11's last item** needs a real mailbox to confirm a reset email arrives. (6) **2FA on the shared admin account** — the real answer to H-04, untouched. (7) **D-11 — one Render instance only**; scale up, never out, until rate limits and caches move to Postgres.
+
+## ▶️ HOW TO CONTINUE IN A NEW SESSION
+
+Paste this as your first message:
+
+> Read HANDOFF.md and TEST-CHECKLIST.md. We are at v96 and part-way through the test plan.
+> Tell me the current state, then let's continue.
+
+Everything below is what that session needs to know.
+
+### First, five minutes of orientation — all read-only, nothing is written
+
+```bash
+cd /c/Users/Solo/Downloads/SDGMart
+git log --oneline -5                              # where main is
+npm test                                          # expect 66 assertions, 0 failures
+node scripts/checks/verify-migrations.js          # expect 22/22 present
+node scripts/checks/step2-api-checks.js           # expect 29/29, writes nothing
+curl -s https://sdg-mart.com/api/paystack/config  # ⚠️ pk_live_ or pk_test_?
+```
+
+If that last one still says `pk_test_`, **stop and swap the keys back first** — real customers
+cannot pay while it does.
+
+### The checks, and what each one costs
+
+`scripts/checks/` — every script cleans up after itself. The ones marked ⚠️ write to production.
+
+| Script | What it proves | Cost |
+|---|---|---|
+| `verify-migrations.js` | All 22 migrations genuinely applied, by probing for the 46+ objects they create | read-only |
+| `step2-api-checks.js` | Headers, `.git` lockdown, compression, consent, order validation, enumeration | read-only |
+| `step2b-safe-checks.js` | Index plans, retention, admin flags, Accra dating, the daily-job claim marker | read-only |
+| `step2d-account-checks.js` | Mixed-case sign-in, address tenancy, cancelling others' orders, recurring bounds | ⚠️ one throwaway account |
+| `step2e-admin-checks.js` | Rider isolation, photo upload, price freshness, **kill switches** | ⚠️ pauses trading ~15s |
+| `step3-money-paths.js` | Duplicate protection, loyalty, cancel refunds, Paystack reservation | ⚠️ **test keys only** — it refuses otherwise |
+| `step3b-payment-chain.js` | Reconcile, Revenue split, the rider's view of a prepaid order | ⚠️ temp admin + rider |
+| `step4-remaining.js` | Quantity caps, price integrity, one-review-per-order, the supplier model | ⚠️ throwaway account |
+| `step5-regressions.js` | Sign-up/in/out, addresses, guest checkout, rider flow, recurring cron | ⚠️ throwaway accounts |
+| `step6-rider-password.js` | Rider password change + recovery, and the id-collision case | ⚠️ throwaway accounts |
+| `step7-rate-limits.js` | A-13/A-14/A-15 | ⚠️ **blocks this IP from signing in for 15 min** |
+| `step8-paystack-recovery.js <orderId>` | PAID — NEEDS ACTION and the recovery button | ⚠️ test keys + a fresh payment |
+
+If a run is interrupted, most take `--cleanup` to remove what they left behind. **Always run it** —
+leftover orders sit in `queued` and fire SLA alerts.
+
+### What is left, and what unblocks each
+
+**20 items.** `TEST-CHECKLIST.md` is the board; its section headers roll up from their children, so
+`grep -c '^- ☐'` is the honest count.
+
+| Blocker | Items | Notes |
+|---|---|---|
+| **Own-stock mode (STEP 10)** | 10 | Deliberately last. `deduct_stock` is OFF and that is the supplier model the shop runs on. Turning it ON makes the shop start refusing orders it cannot fill. Do it in one sitting and turn it back OFF. |
+| **A phone** | 3 | F-06 catalogue-on-resume (never genuinely tested — see below), plus outdoor GPS accuracy |
+| **Staging** | 3 | G-06 migration rollback. Needs G-01, still open — see `STAGING-SETUP.md` |
+| **A real mailbox** | 1 | Confirm a password-reset email actually arrives |
+| **Optional / judgement** | 3 | The own-stock toggle in B-03; the squad bonus rate; 2FA on the admin account |
+
+### Three things a new session should NOT re-litigate
+
+1. **The webhook safety net works.** Order 114 was created by it, not `/verify`, and the
+   `WEBHOOK RESCUE` line in `error_logs` says so. Do not go looking for this again.
+2. **Zero `PAYMENT MISMATCH` rows is meaningful**, because `npm test` section G proves the alarm
+   fires when a charge and its order disagree. Silence is evidence, not an untested detector.
+3. **`deduct_stock` being OFF is correct**, not a bug. The shop sells from suppliers and must keep
+   selling from `stock: 0`. `npm test` order-flow section D exists to keep that true.
+
+### Two open judgement calls for the owner, not the assistant
+
+- **The squad bonus rate.** A member of a full active squad now earns ~10% back (5% tier + 5%
+  squad). That is steep for groceries at 10–25% gross margin. Changing it is one line in
+  `database.js` plus the Squad page copy — but it is a pricing decision, not a bug.
+- **F-06 is genuinely untested.** The "deleted product still visible" symptom turned out to be the
+  admin write-confirmation bug, not caching. A real catalogue change has still never been watched
+  propagating to a backgrounded PWA. Worth retrying now that deletes actually work.
+
+### Habits worth keeping
+
+- **Verify against the database after any run**, not just the script's own summary. `orders` and
+  `users` counts are the fastest tell that something was left behind.
+- **`PUT /api/products/:id` is a replace, not a patch.** Send the whole row back or fields get wiped.
+- **Never let a script choose which production row to act on.** Pass ids explicitly.
+- **A failing test is not automatically a bug.** Several this session were the test's fault — a
+  basket under the GHS 50 perk threshold, `byRider` nested under `cash`, querying `user_id` for a
+  token that lives in `rider_id`. Check the expectation before changing code.
+
+---
+
+## Earlier states (v95 and before)
+
 ## ⭐ LATEST STATE — resume here (updated 2026-08-29)
 - **(2026-08-29, end of session) v95 — ALL OF THE ABOVE IS MERGED, PUSHED AND LIVE on `sdg-mart.com`.** `main` at `faa98d4`. The v93/v94 entries below describe what was built; this entry is the current truth about its state.
   - **Verified live after deploy:** service-worker stamp went `sdgmart-v92-remaining-highs` → `sdgmart-faa98d4deba3` (the G-05 automation working in production); app renders with 132 products and **zero console errors, including zero CSP report-only violations**; all six security headers present; `/.git/config` and `/.env` 404; `/healthz` and `/readyz` 200; catalogue payload **5,741 → 4,774 bytes gzipped**; signup consent checkbox live with working `/privacy` and `/terms` links.

@@ -1195,9 +1195,9 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 - ☑ Clicking with a mouse leaves no ring behind — verified: after a mouse click,
       `:focus-visible` is false and `outline-style` is `none`
 
-### ☐ Admin tables on a phone (F-08)
-- ☐ Open Admin → Orders on an actual phone → the table scrolls sideways to the last column
-- ☐ Same for Inventory and All Riders
+### ☑ Admin tables on a phone (F-08)
+- ☑ Open Admin → Orders on an actual phone → the table scrolls sideways — **confirmed by the shop owner on their handset, 2026-09-02**
+- ☑ Same for Inventory and All Riders — confirmed on the handset. F-08 was a real bug (three of four admin tables were unreachable on a phone); the fix holds on real hardware.
 
 ### ☑ Signup consent (H-03)
 - ☑ The checkbox is there, unchecked, with working Privacy and Terms links — **verified live
@@ -1212,7 +1212,7 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
       recorded, not the client's claim.
 
 ### ☐ Map pin quality (I-02)
-- ☐ Indoors (network fix) → the "accurate to about N m — drag the pin" warning appears
+- ☑ Indoors → the accuracy guidance appears — **confirmed by the shop owner on their handset, 2026-09-02**
 - ☐ Outdoors (GPS) → shows a small accuracy figure, no warning
 - ☐ `select location from orders order by id desc limit 1` → includes `accuracy` and `source`
 
