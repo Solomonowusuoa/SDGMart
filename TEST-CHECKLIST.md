@@ -1260,7 +1260,15 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 The SQL functions have never executed. Run these on **staging** first — they are
 section 9 of `supabase-schema-stock-holds.sql`.
 
-> **Blocked on staging (G-01), and until 2026-09-03 it was blocked twice over.**
+> **DONE 2026-09-03 against the live database, at the owner's direction, rather than staging.**
+> All 132 products had healthy stock, so turning `deduct_stock` ON made nothing unsellable, and
+> the run is self-cleaning: it snapshots the target product and the toggle, restores both in a
+> `finally`, and re-checks field by field. Verified independently afterwards — 132 products with
+> zero drift, orders back to 26, no leftover holds, `deduct_stock` absent again. Re-runnable:
+> `node scripts/checks/step10-stock-reservations.js <productId>` (`--section-a-only` stops before
+> the toggle is touched; `--cleanup` recovers an interrupted run).
+>
+> **The staging blocker below still applied until this session, and still applies to G-06.**
 > `STAGING-SETUP.md` step 3 listed 13 migration files to paste by hand; there are 22, and
 > `supabase-schema-stock-holds.sql` was one of the nine missing. A staging database built from
 > that list would not have had `stock_available`, `hold_stock`, `release_stock_hold`,
@@ -1277,16 +1285,21 @@ select release_stock_hold('chk');                            -- 1
 select * from stock_available(array[1]);                     -- back to on_shelf
 select hold_stock('[{"id":1,"qty":999999}]'::jsonb, 'x', 15);-- {"ok": false, shortfalls...}
 ```
-- ☐ A hold lowers `available` but never `on_shelf`
-- ☐ Releasing restores it
-- ☐ Over-holding is refused rather than going negative
-- ☐ `commit_stock_hold` lowers `on_shelf` and clears the hold
-- ☐ `restock_items` puts it back
+- ☑ A hold lowers `available` but never `on_shelf` — **verified 2026-09-03** against the live database by `node scripts/checks/step10-stock-reservations.js 38` (14/14; product 38 and the deduct_stock toggle restored field by field, 0 drift across all 132 products): on_shelf 100 unchanged, available 100 → 98
+- ☑ Releasing restores it — available back to 100
+- ☑ Over-holding is refused rather than going negative — 999,999 units returned ok:false with shortfalls; available still 100, never negative
+- ☑ `commit_stock_hold` lowers `on_shelf` and clears the hold — on_shelf 100 → 97, held 0
+- ☑ `restock_items` puts it back — on_shelf back to 100
 
 Then, still on staging, with own-stock mode ON:
-- ☐ Two browsers, one unit left → the first to reach payment gets it, the second
+- ☑ Two browsers, one unit left → the first to reach payment gets it, the second
       is told which item ran out and is **not** charged
-- ☐ Abandon a Paystack popup → stock is sellable again within 15 minutes
-- ☐ Place a cash order, cancel it → the stock comes back
-- ☐ **Turn own-stock mode back OFF → ordering a `stock: 0` product works again.**
+- ☑ Abandon a Paystack popup → stock is sellable again within 15 minutes — available 0 while
+      held, back to 5 once the hold expired. Note `expire_stock_holds()` returned 0 and that is
+      correct: it is a garbage collector that deletes rows over a day old, while `stock_available`
+      already ignores any hold past `expires_at`. The stock frees itself; the sweep only tidies up.
+- ☑ Place a cash order, cancel it → the stock comes back — on_shelf 4 → 2 on order → 4 after
+      cancel. Needed a signed-in throwaway customer: `cancelOrder` refuses a guest order outright
+      ("not yours"), which is the A-02 fix stopping any account cancelling guest orders by id.
+- ☑ **Turn own-stock mode back OFF → ordering a `stock: 0` product works again.**
       This is the supplier model the live shop runs on. If it breaks, stop.
