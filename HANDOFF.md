@@ -61,7 +61,7 @@ A same-day grocery web app for Tamale, Ghana. This doc lets a new chat (or you) 
 
   - **Re-runnable checks now live in `scripts/checks/`** — twelve scripts, each self-cleaning, most with a `--cleanup` recovery mode because a killed process skips the `finally` and leaves orders in `queued` firing SLA alerts. Start with `node scripts/checks/verify-migrations.js` (read-only, proves all 22 migrations are genuinely applied — 22/22 as of this writing by probing for the objects they create).
 
-  - **STILL OPEN, in the order that matters.** (1) **Swap Paystack back to live keys.** (2) **Own-stock mode (STEP 10, 10 checks)** — deliberately left for last; it changes how the shop treats inventory and `deduct_stock` is currently OFF, which is the supplier model the shop actually runs on. (3) **F-06 catalogue-on-resume** was never really tested — the "deleted product still visible" turned out to be the admin bug above, so a genuine catalogue change has still not been watched propagating to a backgrounded PWA. (4) **G-06 migration rollback** needs staging (G-01, still open). (5) **A-11's last item** needs a real mailbox to confirm a reset email arrives. (6) **2FA on the shared admin account** — the real answer to H-04, untouched. (7) **D-11 — one Render instance only**; scale up, never out, until rate limits and caches move to Postgres.
+  - **STILL OPEN, in the order that matters.** (1) **Swap Paystack back to live keys.** (2) **Own-stock mode (STEP 10, 10 checks)** — deliberately left for last; it changes how the shop treats inventory and `deduct_stock` is currently OFF, which is the supplier model the shop actually runs on. (3) ~~**F-06 catalogue-on-resume**~~ — **closed 2026-09-03 on the installed PWA**; see the v97 entry above. (4) **G-06 migration rollback** needs staging (G-01, still open). (5) **A-11's last item** needs a real mailbox to confirm a reset email arrives. (6) **2FA on the shared admin account** — the real answer to H-04, untouched. (7) **D-11 — one Render instance only**; scale up, never out, until rate limits and caches move to Postgres.
 
 ## ▶️ HOW TO CONTINUE IN A NEW SESSION
 
@@ -110,16 +110,16 @@ leftover orders sit in `queued` and fire SLA alerts.
 
 ### What is left, and what unblocks each
 
-**9 items — none of them code.** Every one is blocked on something physical: a phone, a mailbox, a Google account, or staging. STEP 10 (10 of the original 20) was completed against the **live** database on 2026-09-03 at the owner’s direction, and Google sign-in and push notifications were confirmed on a real account and device. **Staging now gates only G-06 rollback (3 items).** `TEST-CHECKLIST.md` is the board; its section headers roll up from their children, so
+**6 items — none of them code.** Every one is blocked on something physical: a phone, a mailbox, or staging. STEP 10 (10 of the original 20) was completed against the **live** database on 2026-09-03 at the owner’s direction, and Google sign-in and push notifications were confirmed on a real account and device. **Staging now gates only G-06 rollback (3 items).** `TEST-CHECKLIST.md` is the board; its section headers roll up from their children, so
 `grep -c '^- ☐'` is the honest count.
 
 | Blocker | Items | Notes |
 |---|---|---|
 | ~~**Own-stock mode (STEP 10)**~~ | ~~10~~ → 0 | **DONE 2026-09-03**, against the live database. 14/14, self-cleaning, verified after the fact. See `scripts/checks/step10-stock-reservations.js`. |
-| **A phone** | 3 | F-06 catalogue-on-resume (never genuinely tested — see below), plus outdoor GPS accuracy |
+| **A phone** | 2 | Outdoor GPS accuracy, plus the `accuracy`/`source` fields on the resulting order row. (F-06 catalogue-on-resume was closed on the installed PWA, 2026-09-03.) |
 | **Staging** | 3 | G-06 migration rollback. Needs G-01, still open — see `STAGING-SETUP.md`, whose step 3 was **wrong until v97** (13 files listed, 22 exist) and now uses `node scripts/migrate.js up` |
 | **A real mailbox** | 1 | Confirm a password-reset email actually arrives |
-| **Optional / judgement** | 2 | The squad bonus rate; 2FA on the admin account. (B-03’s own-stock toggle was covered by the STEP 10 run.) |
+| **Optional / judgement** | 0 | Both settled. The squad bonus rate was decided by the owner on 2026-09-03 (tier and leaderboard prize retired). B-03’s own-stock toggle was exercised by the STEP 10 run. 2FA remains open, but it is a build, not a check — see below. |
 
 ### Three things a new session should NOT re-litigate
 
@@ -130,14 +130,20 @@ leftover orders sit in `queued` and fire SLA alerts.
 3. **`deduct_stock` being OFF is correct**, not a bug. The shop sells from suppliers and must keep
    selling from `stock: 0`. `npm test` order-flow section D exists to keep that true.
 
-### Two open judgement calls for the owner, not the assistant
+### Two judgement calls that WERE open — both settled 2026-09-03
 
-- **The squad bonus rate.** A member of a full active squad now earns ~10% back (5% tier + 5%
-  squad). That is steep for groceries at 10–25% gross margin. Changing it is one line in
-  `database.js` plus the Squad page copy — but it is a pricing decision, not a bug.
-- **F-06 is genuinely untested.** The "deleted product still visible" symptom turned out to be the
-  admin write-confirmation bug, not caching. A real catalogue change has still never been watched
-  propagating to a backgrounded PWA. Worth retrying now that deletes actually work.
+Kept in full rather than deleted, because each records a decision and why it went the way it did.
+
+- ~~**The squad bonus rate.**~~ **Decided by the owner 2026-09-03.** The GHS 50-per-1,000 tier and
+  the GHS 15 leaderboard prize are retired; the squad goal, the GHS 5 referral and both delivery
+  perks stay. The two kept both pay for a customer who was not there before. Credit already granted
+  was deliberately NOT clawed back, and `lifetime_spent` is still maintained — it just no longer pays.
+- ~~**F-06 is genuinely untested.**~~ **Closed 2026-09-03.** The owner edited a product’s name and
+  price in Admin, reopened the **installed PWA** from the background, and both had already changed.
+  The name is the stronger half: `refreshCatalog()` replaces `window.PRODUCTS` wholesale rather than
+  patching prices, so a changed name proves the whole row propagated. First time a real catalogue
+  change has been watched reaching a backgrounded PWA — the v96 attempt was invalidated because the
+  “deleted product still visible” symptom was the admin write-confirmation bug, not caching.
 
 ### Habits worth keeping
 

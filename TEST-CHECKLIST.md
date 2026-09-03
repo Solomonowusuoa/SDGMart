@@ -943,12 +943,16 @@ With `RESEND_API_KEY` blank (as on staging), `POST /api/auth/forgot-password`:
       `qty: 0` line falls through to "Your cart is empty.", not a 1-unit order
 - ☑ Negative qty (`-5`) is likewise dropped, not absolutised
 
-### ☐ Stock is still ignored while sourcing from suppliers (B-03)
+### ☑ Stock is still ignored while sourcing from suppliers (B-03)
 **This is the regression check for your operating model.**
 - ☑ Admin → Settings → "Own-stock mode" is **OFF** — `deduct_stock` unset, verified 2026-09-01.
 - ☑ Order a product with `stock: 0` → places normally — **verified live**: order created 201 and
       the shelf count was not touched. The supplier model is intact.
-- ☐ *(Optional)* Turn the toggle ON → the same order is now rejected → turn it back OFF
+- ☑ *(Optional)* Turn the toggle ON → the same order is now rejected → turn it back OFF
+      — **done 2026-09-03 as part of the STEP 10 run** (`step10-stock-reservations.js 38`), not as a
+      separate exercise. With `deduct_stock` ON and one unit on the shelf, two simultaneous orders
+      produced one 201 and one 400 reading *"Those items are no longer available."*; with the toggle
+      restored to OFF a `stock: 0` product sold again (201). Toggle ended absent, as it began.
       *(deliberately left for the own-stock session; see STEP 10)*
 
 ---
@@ -1174,9 +1178,18 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
       than a stale copy, and total = subtotal + delivery − discount − loyalty with no unexplained
       difference.
 
-### ☐ Catalogue refreshes on resume (F-06)
-- ☐ Install the PWA, background it for a few minutes, reopen → prices and stock are current
-- ☐ Change a price in Admin while a phone has the app backgrounded → it appears on resume
+### ☑ Catalogue refreshes on resume (F-06)
+- ☑ Install the PWA, background it for a few minutes, reopen → prices and stock are current
+      — **verified by the owner 2026-09-03 on the INSTALLED PWA**, which is the case this section
+      existed for. Backgrounded, reopened, catalogue current.
+- ☑ Change a price in Admin while a phone has the app backgrounded → it appears on resume
+      — **verified by the owner 2026-09-03**: a product’s **name and price** were both edited in
+      Admin, and both had already changed when the backgrounded app was reopened. The name is the
+      stronger signal of the two — `refreshCatalog()` replaces `window.PRODUCTS` wholesale rather
+      than patching prices, so a changed name proves the whole row propagated, not just a number.
+      This is the first time a real catalogue change has been watched reaching a backgrounded PWA:
+      the v96 attempt was invalidated because the "deleted product still visible" symptom turned
+      out to be the admin write-confirmation bug, not caching.
 
 ### ☑ Payment options fail honestly (F-05)
 - ☑ Block `/api/paystack/config` → checkout says it couldn't check, offers "Try again", and cash
