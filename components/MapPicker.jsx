@@ -246,7 +246,9 @@ const MapPicker = ({ value, onChange, height = 240, allowGeolocate = true, defau
       {!geoErr && accuracy != null && accuracy > 100 && (
         <div style={{ fontSize: 11, color: '#7A5A00', background: '#FFF4E0', padding: '6px 9px', marginBottom: 6, lineHeight: 1.45 }}>
           This pin is only accurate to about {accuracy >= 1000 ? (accuracy / 1000).toFixed(1) + ' km' : accuracy + ' m'} — your phone
-          used the network rather than GPS. <strong>Drag the pin</strong> to your exact gate so the rider isn't left guessing.
+          used the network rather than GPS. <strong>Drag the pin</strong> to your exact gate so the rider isn't left guessing,
+          or <strong>step outside</strong> and tap “Use my current location” again — GPS needs a clear view of the sky, so it
+          rarely gets a good fix indoors.
         </div>
       )}
       {!geoErr && accuracy != null && accuracy <= 100 && source === 'gps' && (

@@ -386,9 +386,11 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     const isGuest = !currentUser || !currentUser.id || currentUser.role === 'guest';
     if (isGuest && serverId != null && trackToken) {
       try {
-        const list = JSON.parse(localStorage.getItem('sdgmart_guest_orders') || '[]');
-        list.unshift({ id: serverId, code, token: trackToken, total: snap.total, at: new Date().toISOString() });
-        localStorage.setItem('sdgmart_guest_orders', JSON.stringify(list.slice(0, 10)));
+        window.rememberGuestOrder(serverId, trackToken, {
+          total: snap.total,
+          placedAt: new Date().toISOString(),   // the order was placed just now
+          status: 'queued',
+        });
       } catch (_) {}
     }
     if (downloadReceipt) generateReceipt(snap, code);
@@ -785,10 +787,9 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                 </div>
                 )}
                 {!compactAddress && (
-                <>
+                // CheckoutField already renders `error` under its input, so the
+                // extra copy that used to sit here printed the same warning twice.
                 <CheckoutField {...fieldProps('address')} label="Delivery Address / Landmark" placeholder="e.g. Blue gate opposite Lamashegu market" />
-                {errors.address && <div style={{ fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--accent)', marginTop: -6, marginBottom: 8 }}>{errors.address}</div>}
-                </>
                 )}
               </div>
 
@@ -879,7 +880,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
               <div style={{ marginTop: 20, padding: '16px 18px', border: '1px solid var(--rule-2)', borderLeft: '2px solid var(--ink)', background: 'var(--surface-warm)' }}>
                 <div style={{ fontFamily: 'var(--f-label)', fontSize: 11.5, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--rd-muted)', marginBottom: 8 }}>Delivering to</div>
                 <div style={{ fontSize: 13.5, color: 'var(--rd-body)' }}>
-                  <strong style={{ color: 'var(--ink)' }}>{familyMode ? form.recipientName : form.name}</strong> · {form.neighborhood}
+                  <strong style={{ color: 'var(--ink)' }}>{familyMode ? form.recipientName : form.name}</strong> · {effectiveNeighborhood}
                   {familyMode && form.giftMessage && <div style={{ marginTop: 6, fontFamily: 'var(--f-serif)', fontStyle: 'italic', fontSize: 15, color: 'var(--ink)' }}>"{form.giftMessage}"</div>}
                   {scheduleLater && scheduledDate && <div style={{ marginTop: 6, fontFamily: 'var(--f-mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--ink)' }}>Scheduled: {scheduledDate}{scheduledSlot ? ` · ${scheduledSlot}` : ''}</div>}
                 </div>
@@ -975,9 +976,9 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                   <strong>ORDER #{orderId}</strong><br/>
                   Items: {cart.slice(0,3).map(i=>`${i.name} x${i.qty}`).join(', ')}{cart.length > 3 ? '...' : ''}<br/>
                   Total: GHS {total.toFixed(2)}<br/>
-                  Neighborhood: {form.neighborhood || '[neighborhood]'}<br/>
+                  Neighborhood: {effectiveNeighborhood || '[neighborhood]'}<br/>
                   Recipient: {familyMode ? (form.recipientName || '[name]') : (form.name || '[name]')} / {familyMode ? (form.recipientPhone || '[phone]') : (form.phone || '[phone]')}<br/>
-                  Location: {form.mapsPin || form.address || form.neighborhood || '[location]'}
+                  Location: {form.mapsPin || form.address || effectiveNeighborhood || '[location]'}
                 </div>
               </div>
 

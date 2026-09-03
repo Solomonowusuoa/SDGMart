@@ -148,3 +148,79 @@ function useOnline() {
 }
 
 Object.assign(window, { useMobile, useOnline, apiFetch, subscribeToPush, unsubscribeFromPush });
+
+// ── Guest order list (localStorage: sdgmart_guest_orders) ────────────────
+// The Track Your Order screen lists the orders this device knows about. It was
+// written once and never refreshed, and the three places that wrote it did not
+// agree on the fields:
+//
+//   checkout        → { id, code, token, total, at }
+//   track-by-code   → { id, code, token, at }          ← no total
+//   shared link     → { id, code, token, at }          ← no total
+//
+// so an order first seen by code or by a shared link listed as "GHS 0.00", and
+// `at` was the moment this device happened to save it rather than when the
+// order was placed — which is why the list and the tracking screen disagreed on
+// both the time and the amount for the same order.
+//
+// These keep one shape (placedAt + total, from the server where we have it),
+// and refresh() re-reads each order so entries already saved the old way heal
+// themselves instead of staying wrong forever.
+const GUEST_ORDERS_KEY = 'sdgmart_guest_orders';
+const GUEST_ORDERS_MAX = 10;
+
+function readGuestOrders() {
+  try {
+    const list = JSON.parse(localStorage.getItem(GUEST_ORDERS_KEY) || '[]');
+    return Array.isArray(list) ? list : [];
+  } catch (_) { return []; }
+}
+
+function writeGuestOrders(list) {
+  try { localStorage.setItem(GUEST_ORDERS_KEY, JSON.stringify(list.slice(0, GUEST_ORDERS_MAX))); }
+  catch (_) { /* private mode / quota — the list is a convenience, not the record */ }
+}
+
+// Upsert one order. `fields` may carry total/placedAt/status; anything absent
+// keeps whatever was stored before rather than blanking it.
+function rememberGuestOrder(id, token, fields) {
+  const list = readGuestOrders();
+  const i = list.findIndex(o => String(o.id) === String(id));
+  const prev = i >= 0 ? list[i] : {};
+  const merged = {
+    ...prev,
+    id: Number(id),
+    code: window.orderCode(id),
+    token: token || prev.token || '',
+    at: prev.at || new Date().toISOString(),   // when THIS device saved it
+    ...Object.fromEntries(Object.entries(fields || {}).filter(([, v]) => v != null)),
+  };
+  if (i >= 0) list.splice(i, 1);
+  list.unshift(merged);
+  writeGuestOrders(list);
+  return merged;
+}
+
+// Pull the current total/placed time/status for every remembered order.
+// Silent on failure: an offline device keeps showing what it already had.
+async function refreshGuestOrders() {
+  const list = readGuestOrders();
+  if (!list.length) return list;
+  await Promise.all(list.map(async (o) => {
+    if (!o || !o.token) return;
+    try {
+      const r = await fetch(`/api/orders/${o.id}/tracking?t=${encodeURIComponent(o.token)}`);
+      if (!r.ok) return;                       // 401/404/410 — leave the entry alone
+      const t = await r.json();
+      const ord = t && t.order;
+      if (!ord) return;
+      if (ord.total != null) o.total = ord.total;
+      if (ord.createdAt) o.placedAt = ord.createdAt;
+      if (ord.status) o.status = ord.status;
+    } catch (_) { /* offline — keep the cached values */ }
+  }));
+  writeGuestOrders(list);
+  return list;
+}
+
+Object.assign(window, { readGuestOrders, writeGuestOrders, rememberGuestOrder, refreshGuestOrders });

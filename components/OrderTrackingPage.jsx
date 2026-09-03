@@ -3,7 +3,7 @@
 //  - queued (no rider yet) → "Waiting for the 12 PM dispatch / your priority slot"
 //  - assigned + queueAhead > 0 → "Completing another delivery nearby" + position
 //  - assigned + queueAhead === 0 → "You are NEXT — ETA based on distance"
-//  - in_transit → live map with rider's blinking position
+//  - in_transit → "Out for delivery" + distance-based ETA
 //  - delivered → success state
 const OrderTrackingPage = ({ orderId, currentUser, setPage, setCart }) => {
   const isMobile = useMobile();
@@ -13,23 +13,13 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage, setCart }) => {
   const wasNextRef = React.useRef(false);
   const wasInTransitRef = React.useRef(false);
 
-  // Map refs
-  const mapContainerRef = React.useRef(null);
-  const mapRef = React.useRef(null);
-  const customerMarkerRef = React.useRef(null);
-  const riderMarkerRef = React.useRef(null);
-  const routeLineRef = React.useRef(null);
-
   const poll = React.useCallback(async () => {
     try {
       // Guests authenticate with the signed track token — from localStorage
       // (saved at checkout / code entry) or from a shared ?track=..&t=.. link.
       let token = '';
-      try {
-        const g = JSON.parse(localStorage.getItem('sdgmart_guest_orders') || '[]');
-        const mine = g.find(o => String(o.id) === String(orderId));
-        if (mine && mine.token) token = mine.token;
-      } catch (_) {}
+      const mine = window.readGuestOrders().find(o => String(o.id) === String(orderId));
+      if (mine && mine.token) token = mine.token;
       if (!token) {
         const urlT = new URLSearchParams(window.location.search).get('t');
         if (urlT && new URLSearchParams(window.location.search).get('track') === String(orderId)) token = urlT;
@@ -37,18 +27,18 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage, setCart }) => {
       const r = await apiFetch(`/api/orders/${orderId}/tracking${token ? `?t=${encodeURIComponent(token)}` : ''}`);
       if (r.status === 410) { setErr('This tracking code has expired (order delivered more than 7 days ago).'); return; }
       if (!r.ok) { setErr('Could not load tracking info.'); return; }
-      // Arrived via a shared link on a new device → remember the order here too.
-      if (token) {
-        try {
-          const list = JSON.parse(localStorage.getItem('sdgmart_guest_orders') || '[]');
-          if (!list.some(o => String(o.id) === String(orderId))) {
-            list.unshift({ id: Number(orderId), code: window.orderCode(orderId), token, at: new Date().toISOString() });
-            localStorage.setItem('sdgmart_guest_orders', JSON.stringify(list.slice(0, 10)));
-          }
-        } catch (_) {}
-      }
       const t = await r.json();
       setData(t);
+      // Arrived via a shared link on a new device → remember the order here too.
+      // Recorded AFTER parsing, so the entry carries the real total and
+      // placement time instead of a zero and the moment the link was opened.
+      if (token) {
+        window.rememberGuestOrder(orderId, token, {
+          total: t && t.order ? t.order.total : null,
+          placedAt: t && t.order ? t.order.createdAt : null,
+          status: t && t.order ? t.order.status : null,
+        });
+      }
       // Trigger notifications on transitions
       const nowNext = t.queueAhead === 0 && t.order.status === 'assigned';
       if (nowNext && !wasNextRef.current) {
@@ -99,49 +89,12 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage, setCart }) => {
     return () => clearInterval(t);
   }, [poll]);
 
-  // Init/update map when we have data
-  React.useEffect(() => {
-    if (!data || !mapContainerRef.current || !window.L) return;
-    const customerLoc = data.order.location;
-    const riderLoc = data.rider && data.rider.lat != null ? { lat: data.rider.lat, lng: data.rider.lng } : null;
-    if (!customerLoc) return;
-    if (!mapRef.current) {
-      mapRef.current = window.L.map(mapContainerRef.current).setView([customerLoc.lat, customerLoc.lng], 15);
-      window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap', maxZoom: 19 }).addTo(mapRef.current);
-    }
-    // Customer marker (house pin)
-    if (!customerMarkerRef.current) {
-      customerMarkerRef.current = window.L.marker([customerLoc.lat, customerLoc.lng])
-        .addTo(mapRef.current).bindPopup('Your delivery spot');
-    }
-    // Rider marker (motorcycle)
-    if (riderLoc) {
-      const riderIcon = window.L.divIcon({
-        className: 'rider-marker',
-        html: '<div style="background:#111;width:16px;height:16px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 1px #111,0 2px 6px rgba(0,0,0,.4);"></div>',
-        iconSize: [22, 22], iconAnchor: [11, 11],
-      });
-      if (!riderMarkerRef.current) {
-        riderMarkerRef.current = window.L.marker([riderLoc.lat, riderLoc.lng], { icon: riderIcon })
-          .addTo(mapRef.current).bindPopup(`${data.rider.name}`);
-      } else {
-        riderMarkerRef.current.setLatLng([riderLoc.lat, riderLoc.lng]);
-      }
-      // Draw a line between rider and customer
-      if (routeLineRef.current) routeLineRef.current.remove();
-      routeLineRef.current = window.L.polyline(
-        [[riderLoc.lat, riderLoc.lng], [customerLoc.lat, customerLoc.lng]],
-        { color: '#1A1A1A', weight: 2, dashArray: '6,8', opacity: .7 }
-      ).addTo(mapRef.current);
-      // Fit bounds to include both
-      mapRef.current.fitBounds([
-        [riderLoc.lat, riderLoc.lng], [customerLoc.lat, customerLoc.lng],
-      ], { padding: [40, 40], maxZoom: 16 });
-    }
-  }, [data]);
-
-  // Cleanup map on unmount
-  React.useEffect(() => () => { if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; } }, []);
+  // The live map used to live here. It never drew on a cold load: only
+  // MapPicker lazy-loads Leaflet, so arriving from a push notification or a
+  // shared tracking link left window.L undefined and this effect returned at
+  // its first line — and on an order with no pinned location it returned
+  // anyway. Either way the customer got an empty bordered box. That space now
+  // shows what is actually in the order, which is useful on every order.
 
   // Rough straight-line ETA assuming 25 km/h average (Tamale traffic)
   const estimatedMinutes = (() => {
@@ -223,6 +176,7 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage, setCart }) => {
   ];
 
   const footLbl = { fontFamily: 'var(--f-label)', fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--rd-muted)' };
+  const orderItems = Array.isArray(o.items) ? o.items : [];
   return (
     <div style={{ maxWidth: 760, margin: '0 auto', padding: isMobile ? '20px 16px' : '32px 24px', fontFamily: 'var(--f-ui)', color: 'var(--ink)', background: 'var(--panel)', minHeight: '60vh' }}>
       <button onClick={() => setPage('home')}
@@ -266,7 +220,68 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage, setCart }) => {
         </div>
       ) : (
         <div style={{ marginTop: 18 }}>
-          <div ref={mapContainerRef} style={{ aspectRatio: '2.1', width: '100%', minHeight: 240, overflow: 'hidden', border: '1px solid var(--rule-2)' }} />
+          <div style={{ border: '1px solid var(--rule-2)', background: '#fff' }}>
+            <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--rule-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
+              <span style={footLbl}>Your order</span>
+              <span style={{ fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--rd-muted)' }}>
+                {orderItems.length} {orderItems.length === 1 ? 'item' : 'items'}
+              </span>
+            </div>
+            {orderItems.length === 0 ? (
+              <div style={{ padding: '16px', fontSize: 13, color: 'var(--rd-muted)' }}>
+                We couldn't load the item list for this order. Your order total is shown below.
+              </div>
+            ) : (
+              <div>
+                {orderItems.map((it, n) => (
+                  <div key={n} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '11px 16px', borderBottom: '1px solid var(--rule-2)' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13.5, color: 'var(--ink)' }}>
+                        {it.name}{it.birthdayGift ? ' 🎁' : ''}
+                      </div>
+                      {it.unit && <div style={{ fontSize: 11.5, color: 'var(--rd-muted)', marginTop: 2 }}>{it.unit}</div>}
+                    </div>
+                    <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <div style={{ fontFamily: 'var(--f-mono)', fontSize: 12, color: 'var(--rd-muted)' }}>×{it.qty || 1}</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, marginTop: 2 }}>
+                        {Number(it.price) === 0 ? 'Free' : `GHS ${(Number(it.price || 0) * (it.qty || 1)).toFixed(2)}`}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 5 }}>
+              {o.subtotal != null && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--rd-body)' }}>
+                  <span>Subtotal</span><span>GHS {Number(o.subtotal).toFixed(2)}</span>
+                </div>
+              )}
+              {Number(o.discount) > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--rd-body)' }}>
+                  <span>Discount</span><span>− GHS {Number(o.discount).toFixed(2)}</span>
+                </div>
+              )}
+              {Number(o.loyaltyUsed) > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--rd-body)' }}>
+                  <span>Loyalty applied</span><span>− GHS {Number(o.loyaltyUsed).toFixed(2)}</span>
+                </div>
+              )}
+              {o.deliveryFee != null && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--rd-body)' }}>
+                  <span>Delivery</span><span>{Number(o.deliveryFee) === 0 ? 'Free' : `GHS ${Number(o.deliveryFee).toFixed(2)}`}</span>
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderTop: '1px solid var(--rule-2)', marginTop: 4, paddingTop: 8 }}>
+                <span style={footLbl}>Total</span>
+                <span style={{ fontFamily: 'var(--f-display)', fontSize: 18, fontWeight: 800, letterSpacing: '-.02em' }}>GHS {Number(o.total || 0).toFixed(2)}</span>
+              </div>
+              <div style={{ fontSize: 11.5, color: 'var(--rd-muted)' }}>
+                {o.paid ? 'Paid online' : 'Pay the rider on delivery'}
+                {o.paymentMethod ? ` · ${o.paymentMethod}` : ''}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

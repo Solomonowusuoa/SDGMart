@@ -6,8 +6,16 @@ const GuestOrdersView = ({ setPage, openTracking }) => {
   const [codeInput, setCodeInput] = React.useState('');
   const [codeErr, setCodeErr] = React.useState('');
   const [checking, setChecking] = React.useState(false);
-  let guestOrders = [];
-  try { guestOrders = JSON.parse(localStorage.getItem('sdgmart_guest_orders') || '[]'); } catch (_) {}
+  // Read what this device has, then re-read each order from the server. The
+  // list is a cache and was never refreshed, so an entry saved before the
+  // fields were consistent stayed wrong for good — this heals those, and keeps
+  // the totals honest if an order is later cancelled or adjusted.
+  const [guestOrders, setGuestOrders] = React.useState(() => window.readGuestOrders());
+  React.useEffect(() => {
+    let alive = true;
+    window.refreshGuestOrders().then(list => { if (alive) setGuestOrders(list.slice()); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   // Accept a portable tracking code ("SDG-00030-<token>", with or without the
   // full link around it), verify it against the server, remember it on this
@@ -23,11 +31,17 @@ const GuestOrdersView = ({ setPage, openTracking }) => {
       const r = await fetch(`/api/orders/${id}/tracking?t=${encodeURIComponent(token)}`);
       if (r.status === 410) { setCodeErr('This tracking code has expired (order delivered more than 7 days ago).'); return; }
       if (!r.ok) { setCodeErr('Tracking code not recognised — check for typos, or WhatsApp us for help.'); return; }
-      try {
-        const list = JSON.parse(localStorage.getItem('sdgmart_guest_orders') || '[]').filter(o => String(o.id) !== String(id));
-        list.unshift({ id, code: window.orderCode(id), token, at: new Date().toISOString() });
-        localStorage.setItem('sdgmart_guest_orders', JSON.stringify(list.slice(0, 10)));
-      } catch (_) {}
+      // The response we just checked the code against carries the real total
+      // and placement time. It used to be thrown away, so the order landed in
+      // the list below as "GHS 0.00", stamped with the moment the code was
+      // typed rather than when the order was placed.
+      const t = await r.json().catch(() => null);
+      const ord = t && t.order;
+      window.rememberGuestOrder(id, token, {
+        total: ord ? ord.total : null,
+        placedAt: ord ? ord.createdAt : null,
+        status: ord ? ord.status : null,
+      });
       openTracking(id);
     } catch (_) { setCodeErr('Network error — please try again.'); }
     finally { setChecking(false); }
@@ -74,7 +88,13 @@ const GuestOrdersView = ({ setPage, openTracking }) => {
               <div key={o.id} style={{ border: '1px solid var(--rule-2)', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                 <div style={{ flex: 1, minWidth: 140 }}>
                   <div style={{ fontFamily: 'var(--f-mono)', fontWeight: 500, fontSize: 13.5 }}>{o.code}</div>
-                  <div style={{ fontSize: 12, color: 'var(--rd-muted)', marginTop: 2 }}>{new Date(o.at).toLocaleString()} · GHS {Number(o.total || 0).toFixed(2)}</div>
+                  {/* placedAt is when the order was placed; `at` is only when
+                      this device saved it, which is what used to be shown. */}
+                  <div style={{ fontSize: 12, color: 'var(--rd-muted)', marginTop: 2 }}>
+                    {new Date(o.placedAt || o.at).toLocaleString()}
+                    {o.total != null ? ` · GHS ${Number(o.total).toFixed(2)}` : ''}
+                    {o.status === 'cancelled' ? ' · Cancelled' : ''}
+                  </div>
                 </div>
                 <button onClick={() => copyCode(o)} title="Copy tracking code (use it on any device)"
                   style={{ background: '#fff', color: 'var(--ink)', border: '1px solid var(--border-input)', cursor: 'pointer', padding: '8px 14px', fontFamily: 'var(--f-label)', fontSize: 11.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase' }}>Copy code</button>
