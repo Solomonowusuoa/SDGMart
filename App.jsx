@@ -145,6 +145,9 @@ const App = () => {
       window.PRODUCTS = d.products;
       window.SHOW_FRESHNESS = !!d.showFreshness;
       window.SHOW_STOCK = !!d.showStock;
+      // /api/catalog is the second way in. If the <script> failed but this
+      // worked, the shop is whole again — clear the flag so the banner goes.
+      window.CATALOG_LOAD_FAILED = false;
       catalogFetchedAtRef.current = Date.now();
       setCatalogVersion(v => v + 1);   // re-render screens that read window.PRODUCTS
       repriceCart();
@@ -594,6 +597,18 @@ class AppErrorBoundary extends React.Component {
                 Sign out &amp; restart
               </button>
             </div>
+            {/* Neither button above touches the service worker, and a cached bad
+                response is precisely the failure that lands people here — one
+                device stuck on the error screen while another works fine, with
+                no way out from inside the app. This is that way out. */}
+            <button onClick={async () => {
+              try { const rs = await navigator.serviceWorker.getRegistrations(); for (const r of rs) await r.unregister(); } catch (_) {}
+              try { if (window.caches) { const ks = await caches.keys(); for (const k of ks) await caches.delete(k); } } catch (_) {}
+              location.reload();
+            }}
+              style={{ marginTop: 14, background: 'none', color: 'var(--warm-gray)', border: 'none', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}>
+              Still broken? Clear this device's cached copy
+            </button>
           </div>
         </div>
       );

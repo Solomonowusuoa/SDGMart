@@ -47,10 +47,31 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Public, non-personal payloads stay network-first with a cache fallback.
+  //
+  // The status check is the whole point of this branch and it was missing. This
+  // handler used to cache whatever came back — including the 500 body that
+  // /data/products.js returns when the catalogue query fails ("// error loading
+  // products", which defines no globals at all). Once that was in the cache,
+  // every later load on a flaky connection fell through to it, `window.PRODUCTS`
+  // was undefined, and the first screen to touch it took the whole app to the
+  // error boundary. The login page rendered fine because it does not read the
+  // catalogue; signing in did not. It self-heals only if the network is good
+  // enough to win the race, which on a bad connection is exactly when it is not.
+  //
+  // Never store a non-200, and never serve a stored error: a real failure must
+  // surface as a failure, not as a poisoned cache entry that outlives it.
   if (url.pathname === '/data/products.js' || isCode) {
     event.respondWith(
       fetch(request)
-        .then(res => { try { const clone = res.clone(); caches.open(CACHE_NAME).then(c => c.put(request, clone)); } catch (_) {} return res; })
+        .then(res => {
+          if (res && res.status === 200 && res.type !== 'opaque') {
+            try { const clone = res.clone(); caches.open(CACHE_NAME).then(c => c.put(request, clone)); } catch (_) {}
+            return res;
+          }
+          // Upstream is answering, but with an error. Prefer the last good copy
+          // if we have one; otherwise pass the error through.
+          return caches.match(request).then(cached => cached || res);
+        })
         .catch(() => caches.match(request))
     );
     return;

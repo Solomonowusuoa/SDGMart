@@ -580,6 +580,12 @@ async function getOrderItemCounts() {
 // Supabase (products + app_config) each time — the #1 hot path under traffic.
 // Cache the generated JS in memory for CATALOG_TTL_MS; admin product/settings
 // mutations call invalidateCatalog() so edits still appear immediately.
+// Shared by the success and the failure path of /data/products.js, so a
+// degraded catalogue still offers the same categories and delivery areas — and
+// so the two lists cannot drift apart.
+const CATALOG_CATEGORIES = ["Rice & Grains","Cooking Oil","Canned & Sauces","Spices & Seasoning","Dairy & Eggs","Drinks","Snacks & Biscuits","Breakfast & Cereals","Baking & Sugar","Coffee, Tea & Cocoa","Fruits & Vegetables","Staples (Tubers & Fufu)","Meat, Poultry & Seafood","Toiletries & Personal Care"];
+const CATALOG_NEIGHBORHOODS = ["Tamale Central","Kalpohin","Lamashegu","Sagnarigu","Nyohini","Choggu","Vittin","Tishigu","Gumbihini","Jisonayili"];
+
 const CATALOG_TTL_MS = 60 * 1000;
 let _catalogCache = { js: null, at: 0 };
 let _catalogJsonCache = { data: null, at: 0 };
@@ -594,9 +600,9 @@ app.get('/data/products.js', async (req, res) => {
     const productsList = (await db.products.listForCatalog()).map(p => ({ ...p, bestseller: !!p.bestseller, img: p.img || null }));
     const counts = await getOrderItemCounts();
     const TOP_IDS_BY_ORDERS = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => Number(id));
-    const categories = ["Rice & Grains","Cooking Oil","Canned & Sauces","Spices & Seasoning","Dairy & Eggs","Drinks","Snacks & Biscuits","Breakfast & Cereals","Baking & Sugar","Coffee, Tea & Cocoa","Fruits & Vegetables","Staples (Tubers & Fufu)","Meat, Poultry & Seafood","Toiletries & Personal Care"];
+    const categories = CATALOG_CATEGORIES;
     const essentials = [46, 45, 37, 132, 79, 140, 141, 78, 99];
-    const neighborhoods = ["Tamale Central","Kalpohin","Lamashegu","Sagnarigu","Nyohini","Choggu","Vittin","Tishigu","Gumbihini","Jisonayili"];
+    const neighborhoods = CATALOG_NEIGHBORHOODS;
     // Customer-facing freshness/expiry display is off by default; admin can flip it on.
     const showFreshness = !!(await db.appConfig.get('show_freshness'));
     // Own-stock mode (admin toggle 'deduct_stock'): when ON we hold our own
@@ -632,7 +638,29 @@ if (typeof window !== 'undefined') {
     res.send(js);
   } catch (e) {
     console.error('products.js failed:', e);
-    res.status(500).send('// error loading products');
+    // This used to answer `// error loading products` — a script that parses
+    // cleanly and defines NOTHING. Every screen then read window.PRODUCTS as
+    // undefined and died on .map/.filter, so one bad catalogue query took the
+    // entire app down rather than one section of it. Emit the same globals with
+    // empty values plus a flag the client can show a retry banner for, and mark
+    // it no-store so neither the browser nor the service worker can keep it.
+    try { await db.errorLog.record({ message: 'products.js failed: ' + (e && e.message), path: '/data/products.js', method: 'GET', status: 500 }); } catch (_) {}
+    res.setHeader('Content-Type', 'application/javascript');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(`
+if (typeof window !== 'undefined') {
+  window.PRODUCTS = [];
+  window.CATEGORIES = ${JSON.stringify(CATALOG_CATEGORIES)};
+  window.ESSENTIALS = [];
+  window.NEIGHBORHOODS = ${JSON.stringify(CATALOG_NEIGHBORHOODS)};
+  window.TOP_IDS_BY_ORDERS = [];
+  window.SHOW_FRESHNESS = false;
+  window.TERMS_VERSION = ${JSON.stringify(TERMS_VERSION)};
+  window.SHOW_STOCK = false;
+  window.LOCATIONIQ_KEY = '';
+  window.PAYSTACK_PUBLIC_KEY = '';
+  window.CATALOG_LOAD_FAILED = true;
+}`);
   }
 });
 

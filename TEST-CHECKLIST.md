@@ -1012,7 +1012,7 @@ Things that were working and must still work.
 
 - ☑ Sign up, sign in, sign out — **verified live 2026-09-01**, including sign-out invalidating the
       token (reuse → 401) and a wrong password being refused
-- ☐ Google sign-in — **SKIPPED, not tested**: needs a real Google account and consent screen
+- ☑ Google sign-in — **verified by the owner 2026-09-03** on a real Google account
 - ☑ Browse, search, add to cart, cart persists across reload — **verified live 2026-08-31**
       as a guest: 14 categories and the full catalogue render, "rice" returns results, Add
       updates the badge to "Cart, 1 item", and the cart survives a full page reload. Search
@@ -1024,8 +1024,8 @@ Things that were working and must still work.
 - ☑ Admin: create product, upload photo, assign rider — **verified live** (test product deleted)
 - ☑ Rider: go online, see assigned orders, mark in transit then delivered — **verified live**,
       with `delivered_at` correctly stamped
-- ☐ Push notifications arrive — **SKIPPED, not tested**: needs a real device holding the
-      subscription
+- ☑ Push notifications arrive — **verified by the owner 2026-09-03** on a real device holding
+      the subscription
 - ☑ Recurring orders still place via the daily job — **verified live 2026-09-01**: a due row
       placed a real order and `next_run_at` advanced 2026-09-01 → 2026-09-08
 - ☑ Squad and referral pages render — squad endpoint returns the account's squad and the GHS 500

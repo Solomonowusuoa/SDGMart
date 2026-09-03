@@ -25,6 +25,25 @@ function reportClientError(what, err) {
   } catch (_) { /* reporting must never throw */ }
 }
 
+// ── Catalogue globals must always exist ──────────────────────────────────
+// /data/products.js is a separate <script>. If it fails to load — a 500 from a
+// bad catalogue query, a dropped connection, a blocked request, or a service
+// worker replaying a cached error — every global it defines is undefined, and
+// the first screen to call window.PRODUCTS.map/.filter takes the WHOLE app to
+// the error boundary. That is what "Something hiccuped after signing in, but
+// the login page was fine" was: the login screen is the one that never reads
+// the catalogue.
+//
+// hooks.js is the first file in the bundle, so these run before any component.
+// An empty shop is a bad screen; a dead app is a worse one.
+if (typeof window !== 'undefined') {
+  if (!Array.isArray(window.PRODUCTS)) { window.PRODUCTS = []; window.CATALOG_LOAD_FAILED = true; }
+  if (!Array.isArray(window.CATEGORIES)) window.CATEGORIES = [];
+  if (!Array.isArray(window.ESSENTIALS)) window.ESSENTIALS = [];
+  if (!Array.isArray(window.NEIGHBORHOODS)) window.NEIGHBORHOODS = [];
+  if (!Array.isArray(window.TOP_IDS_BY_ORDERS)) window.TOP_IDS_BY_ORDERS = [];
+}
+
 // Global hooks — loaded before any component, available on window
 
 // Human-friendly order code derived from the real DB order id, e.g. SDG-00017.

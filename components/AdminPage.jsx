@@ -54,7 +54,10 @@ const StatCard = ({ label, value, sub, accent }) => (
 const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   const [adminTab, setAdminTab] = React.useState('overview');
   const isMobile = useMobile();
-  const [products, setProducts] = React.useState(window.PRODUCTS.map(p => ({ ...p })));
+  // Defensive even though hooks.js guarantees the array: this line is the exact
+  // one that threw "Cannot read properties of undefined (reading 'map')" and
+  // white-screened the whole admin console.
+  const [products, setProducts] = React.useState(() => (window.PRODUCTS || []).map(p => ({ ...p })));
   const [orders, setOrders] = React.useState([]);
   const [ordersLoading, setOrdersLoading] = React.useState(false);
   const [newProduct, setNewProduct] = React.useState({ name:'', category: window.CATEGORIES[0], price:'', unit:'', bestBefore:'', stock:'', description:'', img:'' });
