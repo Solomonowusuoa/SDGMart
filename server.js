@@ -584,6 +584,7 @@ async function getOrderItemCounts() {
 // degraded catalogue still offers the same categories and delivery areas — and
 // so the two lists cannot drift apart.
 const CATALOG_CATEGORIES = ["Rice & Grains","Cooking Oil","Canned & Sauces","Spices & Seasoning","Dairy & Eggs","Drinks","Snacks & Biscuits","Breakfast & Cereals","Baking & Sugar","Coffee, Tea & Cocoa","Fruits & Vegetables","Staples (Tubers & Fufu)","Meat, Poultry & Seafood","Toiletries & Personal Care"];
+const CATALOG_ESSENTIALS = [46, 45, 37, 132, 79, 140, 141, 78, 99];
 const CATALOG_NEIGHBORHOODS = ["Tamale Central","Kalpohin","Lamashegu","Sagnarigu","Nyohini","Choggu","Vittin","Tishigu","Gumbihini","Jisonayili"];
 
 const CATALOG_TTL_MS = 60 * 1000;
@@ -601,7 +602,7 @@ app.get('/data/products.js', async (req, res) => {
     const counts = await getOrderItemCounts();
     const TOP_IDS_BY_ORDERS = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => Number(id));
     const categories = CATALOG_CATEGORIES;
-    const essentials = [46, 45, 37, 132, 79, 140, 141, 78, 99];
+    const essentials = CATALOG_ESSENTIALS;
     const neighborhoods = CATALOG_NEIGHBORHOODS;
     // Customer-facing freshness/expiry display is off by default; admin can flip it on.
     const showFreshness = !!(await db.appConfig.get('show_freshness'));
@@ -651,7 +652,7 @@ if (typeof window !== 'undefined') {
 if (typeof window !== 'undefined') {
   window.PRODUCTS = [];
   window.CATEGORIES = ${JSON.stringify(CATALOG_CATEGORIES)};
-  window.ESSENTIALS = [];
+  window.ESSENTIALS = ${JSON.stringify(CATALOG_ESSENTIALS)};
   window.NEIGHBORHOODS = ${JSON.stringify(CATALOG_NEIGHBORHOODS)};
   window.TOP_IDS_BY_ORDERS = [];
   window.SHOW_FRESHNESS = false;
@@ -676,8 +677,28 @@ app.get('/api/catalog', async (req, res) => {
     }
     const products = (await db.products.listForCatalog())
       .map(p => ({ ...p, bestseller: !!p.bestseller, img: p.img || null }));
+    // This is the recovery path for a device whose /data/products.js never
+    // loaded, so it has to carry EVERYTHING that script defines — not just the
+    // products. Returning products alone left such a device with a full
+    // catalogue and an empty window.CATEGORIES: the category strip in the
+    // header and the "Shop by category" tiles both vanished while every product
+    // still rendered, which is exactly what the owner reported. Whatever
+    // /data/products.js sets, this must be able to set too.
+    // Bestseller ranking is a nicety; this endpoint is a lifeline. Never let
+    // the orders query take down the one route a device with no catalogue has
+    // left — it is not worth a 500 here.
+    let topIds = [];
+    try {
+      const counts = await getOrderItemCounts();
+      topIds = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => Number(id));
+    } catch (e) { console.warn('/api/catalog: order counts unavailable, serving without them:', e.message); }
     const payload = {
       products,
+      categories: CATALOG_CATEGORIES,
+      neighborhoods: CATALOG_NEIGHBORHOODS,
+      essentials: CATALOG_ESSENTIALS,
+      topIdsByOrders: topIds,
+      termsVersion: TERMS_VERSION,
       showFreshness: !!(await db.appConfig.get('show_freshness')),
       showStock: !!(await db.appConfig.get('deduct_stock')),
     };

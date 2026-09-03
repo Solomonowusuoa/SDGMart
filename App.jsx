@@ -145,8 +145,19 @@ const App = () => {
       window.PRODUCTS = d.products;
       window.SHOW_FRESHNESS = !!d.showFreshness;
       window.SHOW_STOCK = !!d.showStock;
-      // /api/catalog is the second way in. If the <script> failed but this
-      // worked, the shop is whole again — clear the flag so the banner goes.
+      // /api/catalog is the second way in, and on a device whose
+      // /data/products.js never loaded it is the ONLY way in. Restoring only
+      // the products left such a device with all 132 items and an empty
+      // window.CATEGORIES — the header strip and the "Shop by category" tiles
+      // both gone while everything else looked normal. Restore whatever the
+      // response actually carries; older servers do not send these fields, so
+      // each is guarded rather than assumed.
+      if (Array.isArray(d.categories) && d.categories.length) window.CATEGORIES = d.categories;
+      if (Array.isArray(d.neighborhoods) && d.neighborhoods.length) window.NEIGHBORHOODS = d.neighborhoods;
+      if (Array.isArray(d.essentials) && d.essentials.length) window.ESSENTIALS = d.essentials;
+      if (Array.isArray(d.topIdsByOrders)) window.TOP_IDS_BY_ORDERS = d.topIdsByOrders;
+      if (d.termsVersion) window.TERMS_VERSION = d.termsVersion;
+      // The shop is whole again — clear the flag so the banner goes.
       window.CATALOG_LOAD_FAILED = false;
       catalogFetchedAtRef.current = Date.now();
       setCatalogVersion(v => v + 1);   // re-render screens that read window.PRODUCTS
@@ -158,6 +169,11 @@ const App = () => {
     // Re-price once on mount: the cart may have been sitting in localStorage
     // since a previous session, against a catalogue that has since moved.
     repriceCart();
+    // If /data/products.js never loaded, /api/catalog is the only way this
+    // device gets a catalogue at all — and waiting for the staleness window
+    // and a focus event means it sits empty until the customer happens to tab
+    // away and back. Go straight for it instead.
+    if (window.CATALOG_LOAD_FAILED) refreshCatalog();
     const maybeRefresh = () => {
       if (Date.now() - catalogFetchedAtRef.current < CATALOG_STALE_MS) return;
       refreshCatalog();
