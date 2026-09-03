@@ -201,19 +201,38 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   };
   const STATUS_OPTIONS = ['queued','assigned','in_transit','delivered','cancelled'];
 
+  // Both of these used to update the table without checking the response.
+  // `fetch` does not reject on 4xx/5xx, so a failed write still moved the row
+  // on screen — showing an order as Delivered that the database still has as
+  // Queued, or hiding one that was never deleted. Same shape as B-01: the
+  // screen reporting success it never confirmed.
   const updateOrderStatus = async (id, status) => {
+    let ok = false, message = '';
     try {
-      await apiFetch(`/api/orders/${id}`, { method: 'PUT', body: JSON.stringify({ status }) });
-      setOrders(prev => prev.map(o => o.id === id ? { ...o, status } : o));
-    } catch (_) {}
+      const res = await apiFetch(`/api/orders/${id}`, { method: 'PUT', body: JSON.stringify({ status }) });
+      ok = res.ok;
+      if (!ok) { try { message = (await res.json()).error || ''; } catch (_) {} }
+    } catch (e) { message = 'Could not reach the server.'; }
+    if (!ok) {
+      alert('Could not update this order — it is unchanged.\n\n' + (message || 'Please try again.'));
+      return;
+    }
+    setOrders(prev => prev.map(o => o.id === id ? { ...o, status } : o));
   };
 
   const deleteOrder = async (id) => {
     if (!window.confirm(`Permanently delete order ${window.orderCode(id)}? This cannot be undone.`)) return;
+    let ok = false, message = '';
     try {
-      await apiFetch(`/api/orders/${id}`, { method: 'DELETE' });
-      setOrders(prev => prev.filter(o => o.id !== id));
-    } catch (_) {}
+      const res = await apiFetch(`/api/orders/${id}`, { method: 'DELETE' });
+      ok = res.ok;
+      if (!ok) { try { message = (await res.json()).error || ''; } catch (_) {} }
+    } catch (e) { message = 'Could not reach the server.'; }
+    if (!ok) {
+      alert('Could not delete this order — it is still there.\n\n' + (message || 'Please try again.'));
+      return;
+    }
+    setOrders(prev => prev.filter(o => o.id !== id));
   };
 
   // Orders tab filter + search state
@@ -251,12 +270,24 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
         }),
       });
       const saved = await res.json();
+      // res.ok was never checked. A rejected product ("Price looks wrong — over
+      // GHS 100,000") came back as {error: "..."} with NO id, and was added to
+      // the table anyway. Pressing Remove on that row then sent
+      // DELETE /api/products/undefined — which is exactly what turned up in the
+      // error log, and why a product the owner believed they had removed was
+      // still on sale.
+      if (!res.ok || !saved || saved.id == null) {
+        alert('Could not save this product.\n\n' + ((saved && saved.error) || 'The server did not accept it.'));
+        return;
+      }
       setProducts(prev => [...prev, saved]);
       window.PRODUCTS = [...window.PRODUCTS, saved];
     } catch (_) {
-      // Fallback: local state only
-      const p = { ...newProduct, id: Date.now(), price: parseFloat(newProduct.price), stock: parseInt(newProduct.stock)||0, bestseller: false };
-      setProducts(prev => [...prev, p]);
+      // No local fallback. It used to fabricate a row with `id: Date.now()` —
+      // a product that existed only in this browser, looked saved, and was
+      // invisible to the shop and to every other device. Say it failed instead.
+      alert('Could not reach the server, so the product was NOT saved. Check your connection and try again.');
+      return;
     }
     setNewProduct({ name:'', category: window.CATEGORIES[0], price:'', unit:'', bestBefore:'', stock:'', description:'', img:'' });
   };
@@ -311,9 +342,25 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   };
 
   const removeProduct = async (id) => {
+    // This used to swallow every failure and remove the row anyway. `fetch` does
+    // not reject on 4xx/5xx, so even a 500 sailed past the catch and the product
+    // vanished from this table while remaining on sale in the shop — the admin
+    // had no way to know. Exactly the B-01 failure ("it said the order was
+    // placed when it was not"), on the inventory screen.
+    if (id == null) {
+      alert('This row has no id, so it was never saved to the server. Reload the page — it should not be here.');
+      return;
+    }
+    let ok = false, message = '';
     try {
-      await apiFetch(`/api/products/${id}`, { method: 'DELETE' });
-    } catch (_) {}
+      const res = await apiFetch(`/api/products/${id}`, { method: 'DELETE' });
+      ok = res.ok;
+      if (!ok) { try { message = (await res.json()).error || ''; } catch (_) {} }
+    } catch (e) { message = 'Could not reach the server.'; }
+    if (!ok) {
+      alert('Could not remove this product — it is still on sale.\n\n' + (message || 'Please try again.'));
+      return;   // leave the row visible: it reflects what the shop actually has
+    }
     setProducts(prev => prev.filter(p => p.id !== id));
     window.PRODUCTS = window.PRODUCTS.filter(p => p.id !== id);
   };
