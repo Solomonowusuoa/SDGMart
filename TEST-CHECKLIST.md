@@ -1260,6 +1260,15 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 The SQL functions have never executed. Run these on **staging** first — they are
 section 9 of `supabase-schema-stock-holds.sql`.
 
+> **Blocked on staging (G-01), and until 2026-09-03 it was blocked twice over.**
+> `STAGING-SETUP.md` step 3 listed 13 migration files to paste by hand; there are 22, and
+> `supabase-schema-stock-holds.sql` was one of the nine missing. A staging database built from
+> that list would not have had `stock_available`, `hold_stock`, `release_stock_hold`,
+> `commit_stock_hold` or `restock_items` at all, so every check below would have failed with
+> "function does not exist" and looked like a code bug. Step 3 now runs
+> `node scripts/migrate.js up` instead, which reads the one canonical order in the script.
+> **Set staging up first, then this whole section can be done in one sitting.**
+
 ```sql
 select * from stock_available(array[1]);                     -- note `available`
 select hold_stock('[{"id":1,"qty":2}]'::jsonb, 'chk', 15);   -- {"ok": true}

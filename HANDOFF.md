@@ -4,7 +4,34 @@ A same-day grocery web app for Tamale, Ghana. This doc lets a new chat (or you) 
 
 ---
 
-## ⭐ LATEST STATE — resume here (updated 2026-09-03)
+## ⭐ LATEST STATE — resume here (updated 2026-09-03, later)
+
+- **(2026-09-03) v97 — bugs the owner found by using the shop, plus one doc bug that was silently blocking a third of the test plan.** Not committed yet. `npm test` 66 → 80 assertions (`tests/inventory-edit.test.js` is new and wired into `npm test`).
+
+  - **⚠️ PAYSTACK IS STILL ON TEST KEYS.** Unchanged from v96 and still the most urgent thing. See that entry.
+
+  - **⭐ ADMIN INVENTORY: SAVING A PRODUCT BLANKED THE ROW — and this is B-01 for the fourth time.** `best_before` is a Postgres `date`; an `<input type="date">` that was never filled in submits `''`, and the route passed it straight through. Postgres answered `invalid input syntax for type date: ""`, the catch turned that into a **404 `{error: …}`**, and `saveEdit` — the one admin write `76b4818` did not fix — wrote that error object into the row. The product's name went blank, its price rendered **GHS NaN**, and its missing `stock` read as 0, which set off the low-stock banner. **Every product with no Best Before date was unsaveable.** Server now normalises empty → `NULL` and refuses a malformed date with a 400 that says so, instead of a database error dressed as "not found"; `saveEdit` checks `res.ok` and a returned `id`, and on any failure says so and leaves the row exactly as the shop has it. Nothing was ever corrupted in the database — the write always failed, so no repair is needed.
+
+  - **⭐ LOW-STOCK ALERTS FIRED WITH OWN-STOCK MODE OFF.** With `deduct_stock` OFF nothing decrements these counts and the shop sells from `stock: 0` on purpose, so every product sat at or below its threshold and the banner cried wolf about all of them. Banner, the red ⚠ and "(sold out)" are now gated on `settings.deductStock`, and the table header explains why the counts are inert. **This needed a second fix to be correct at all:** `settings` was only loaded when the Settings *tab* was opened, so Inventory would have seen the `false` default forever and suppressed the alerts even for a shop that does hold stock. It now loads on mount.
+
+  - **⭐ THE TRACK-ORDER LIST DISAGREED WITH THE TRACKING SCREEN ON BOTH TIME AND AMOUNT.** `sdgmart_guest_orders` in localStorage was written by three places that did not agree on the fields — checkout stored `total`, track-by-code and shared-link did not — and `at` was *when this device saved the entry*, not when the order was placed. So an order first seen by code or by a shared link listed as **"GHS 0.00"** stamped with today's date, while opening tracking showed the real figures from the server. Reported on orders 115 and 116. One shape now (`placedAt` + `total` + `status`, taken from the tracking response both of those paths were already fetching and throwing away), helpers live in `hooks.js`, and **`refreshGuestOrders()` re-reads every remembered order when the list opens**, so entries already saved the old way heal themselves rather than staying wrong for good.
+
+  - **⭐ THE LIVE MAP ON THE TRACKING PAGE HAD NEVER WORKED ON A COLD LOAD.** Only `MapPicker` lazy-loads Leaflet; `OrderTrackingPage` just checked `window.L` and returned. Arriving from a push notification or a shared tracking link — the two normal ways to reach that page — left `window.L` undefined, so the map bailed on its first line and the customer got an empty bordered box. It only ever drew if they had opened the checkout map picker earlier in the same page session, and never at all on an order with no pinned location. **Removed**, and that space now shows the order itself: items with units, quantities and line totals, then subtotal / discount / loyalty / delivery / total and whether they are paying online or the rider. **Open decision:** live rider position is gone from the customer's view (the distance-based ETA in the heading still updates every 25s). Restoring it is ~10 lines of the lazy-loader borrowed from `MapPicker` — see "how the live tracker actually works" below before deciding.
+
+  - **Four smaller fixes.** (1) The checkout **"Add a landmark OR pin your location" warning printed twice** — `CheckoutField` renders its own `error` and the address field rendered `errors.address` again underneath. (2) Choosing **"Other" for the neighbourhood and typing an area showed the raw `__other__`** on the review step and in the WhatsApp preview; `effectiveNeighborhood` already existed and was used for submission, but three display sites still read `form.neighborhood`. (3) **Inventory search** — matches name, category, unit and id; the row being edited stays visible even when it stops matching, so a half-finished edit cannot vanish. (4) The **map accuracy warning** now tells the customer to step outside as well as to drag the pin, because GPS rarely gets a good fix indoors.
+
+  - **Feedback and issue reports arrived with no way to answer them.** The push said only what was wrong, and Admin → Issues showed name and email but not the phone — which is the number you would actually call in Tamale. Notifications now carry name · phone; `issueReports.listAll` joins `phone`; the Issues tab shows it as a tap-to-call link plus a WhatsApp link. Same change applied to order-issue reports.
+
+  - **One crash found while testing, worth keeping fixed.** A `/api/admin/issue-reports` response that was not an array reached `issues.length` and took the **whole admin console** to the "Something hiccuped" screen, not just that tab. Real `listAll` always returns an array so it is not reachable today, but the guard is one line and a whole-console white-screen is a bad failure mode to leave armed. The same guard was added to the products loader.
+
+  - **⭐ STAGING-SETUP.md WAS BLOCKING 13 OF THE 20 REMAINING TEST ITEMS, AND NOBODY COULD HAVE SEEN WHY.** Step 3 listed **13** migration files to paste by hand. There are **22**. The nine missing included `supabase-schema-stock-holds.sql` — so a staging database built by following that guide would not have had `stock_available`, `hold_stock`, `release_stock_hold`, `commit_stock_hold` or `restock_items`, and **every check in STEP 10 would have failed with "function does not exist" and looked like a code bug**. Also missing: `lifetime-spend` and `rider-tokens` (the v96 squad and rider-password fixes), both `constraints` files, `updated-at`, `aggregates`, `consent`, `indexes-and-email`. Step 3 now runs `node scripts/migrate.js up`, which reads the single canonical `ORDER` in the script, plus `verify-migrations.js` to prove the objects genuinely exist rather than trusting the record. This is the same class of failure as `supabase-schema-cart.sql` being ticked in prose when it had never run.
+
+  - **How the live tracker actually works** (asked this session; recorded so it is not re-derived). It is the rider's **real GPS**, not a simulation, but it is coarser than "live" suggests: `RiderPage` runs `navigator.geolocation.watchPosition` with `enableHighAccuracy` **only while the rider has toggled themselves online**, and throttles to one POST per ~14s plus a forced ping every 15s. The server keeps **one current position** per rider (`riders.lat/lng/last_location_at`) — it is overwritten, so there is no trail or route history. `getTrackingCached` caches the tracking response 5s, and the customer's page polls every 25s. **Worst case the customer sees a position ~45 seconds old.** The important caveat: `watchPosition` is suspended when a phone backgrounds the browser or locks the screen, so the position goes stale the moment the rider pockets the phone, and nothing surfaces `last_location_at` — a stale fix looks exactly as live as a fresh one. If rider position comes back to the customer's view, show the fix age with it.
+
+  - **STILL OPEN.** Unchanged from v96 except that the staging blocker is now genuinely actionable. **All 20 remaining checklist items are blocked on something physical, not on code:** a phone (3), a real mailbox (1), a Google account and a real device (2), and **staging (13 — STEP 10's 9, G-06's 3, and the optional own-stock toggle)**. Staging is the one that unblocks most, it is ~20 minutes, and its guide is now correct — but it needs a Supabase project created by hand in the dashboard, which only the owner can do.
+
+
+## v96 — 2026-09-03 (superseded by v97 above; kept in full)
 
 - **(2026-08-31 → 2026-09-03) v96 — THE TEST PLAN WAS ACTUALLY RUN. 27 commits, `main` at `76b4818`, all deployed.** v95 built the fixes and verified them against stubs; this session executed them against the live shop and **found eleven real bugs the audit had missed**. Every one is fixed, deployed and covered by a re-runnable check. `npm test` went **42 → 66 assertions**.
 
@@ -46,7 +73,7 @@ Everything below is what that session needs to know.
 ```bash
 cd /c/Users/Solo/Downloads/SDGMart
 git log --oneline -5                              # where main is
-npm test                                          # expect 66 assertions, 0 failures
+npm test                                          # expect 80 assertions, 0 failures
 node scripts/checks/verify-migrations.js          # expect 22/22 present
 node scripts/checks/step2-api-checks.js           # expect 29/29, writes nothing
 curl -s https://sdg-mart.com/api/paystack/config  # ⚠️ pk_live_ or pk_test_?
@@ -79,14 +106,14 @@ leftover orders sit in `queued` and fire SLA alerts.
 
 ### What is left, and what unblocks each
 
-**20 items.** `TEST-CHECKLIST.md` is the board; its section headers roll up from their children, so
+**20 items — none of them code.** Every one is blocked on something physical: a phone, a mailbox, a Google account, or staging. **Staging alone gates 13 of the 20**, takes ~20 minutes, and its guide is correct as of v97 — it is the highest-leverage thing the owner can do. `TEST-CHECKLIST.md` is the board; its section headers roll up from their children, so
 `grep -c '^- ☐'` is the honest count.
 
 | Blocker | Items | Notes |
 |---|---|---|
-| **Own-stock mode (STEP 10)** | 10 | Deliberately last. `deduct_stock` is OFF and that is the supplier model the shop runs on. Turning it ON makes the shop start refusing orders it cannot fill. Do it in one sitting and turn it back OFF. |
+| **Own-stock mode (STEP 10)** | 10 | **Needs staging too** — the SQL functions it tests only exist there once G-01 is done. Deliberately last: `deduct_stock` is OFF and that is the supplier model the shop runs on. Turning it ON makes the shop start refusing orders it cannot fill. Do it in one sitting and turn it back OFF. |
 | **A phone** | 3 | F-06 catalogue-on-resume (never genuinely tested — see below), plus outdoor GPS accuracy |
-| **Staging** | 3 | G-06 migration rollback. Needs G-01, still open — see `STAGING-SETUP.md` |
+| **Staging** | 3 | G-06 migration rollback. Needs G-01, still open — see `STAGING-SETUP.md`, whose step 3 was **wrong until v97** (13 files listed, 22 exist) and now uses `node scripts/migrate.js up` |
 | **A real mailbox** | 1 | Confirm a password-reset email actually arrives |
 | **Optional / judgement** | 3 | The own-stock toggle in B-03; the squad bonus rate; 2FA on the admin account |
 

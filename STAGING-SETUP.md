@@ -49,46 +49,81 @@ Keep this tab open — you'll paste both in Step 4.
 
 ## Step 3 — Create the schema
 
-Open **SQL Editor → New query** in the staging project. Run these files **in this order**, one
-at a time, pasting the contents of each and clicking **Run**. They're all in the project folder.
+⚠️ **This step used to list 13 files to paste by hand. There are now 22, and the list had gone
+stale — it was missing `stock-holds`, `lifetime-spend`, `rider-tokens`, both `constraints` files,
+`updated-at`, `aggregates`, `consent` and `indexes-and-email`.** A staging database built from
+that list could not run STEP 10 of `TEST-CHECKLIST.md` at all, because the stock-reservation
+functions STEP 10 exists to test were never created. Hand-maintained lists in prose are exactly
+what `scripts/migrate.js` was written to replace — use it, and this cannot drift again.
 
+### 3a — Paste the migration helper once
+
+`migrate.js` needs somewhere to record what it has applied, and a way to execute SQL. Open
+**SQL Editor → New query** in the staging project and run this once:
+
+```sql
+create table if not exists schema_migrations (
+  filename    text primary key,
+  applied_at  timestamptz not null default now(),
+  checksum    text
+);
+
+create or replace function exec_sql(sql text) returns void
+language plpgsql security definer as $$ begin execute sql; end $$;
+
+revoke all on function exec_sql(text) from public, anon, authenticated;
 ```
- 1. supabase-schema.sql
- 2. supabase-schema-additions.sql
- 3. supabase-schema-requests.sql
- 4. supabase-schema-ops.sql
- 5. supabase-rls-fix.sql
- 6. supabase-schema-paystack.sql
- 7. supabase-schema-referrals.sql
- 8. supabase-schema-feedback.sql
- 9. supabase-schema-delivered-at.sql
-10. supabase-schema-order-reviews.sql
-11. supabase-schema-cart.sql
-12. supabase-schema-tweaks.sql
-13. supabase-schema-order-idempotency.sql     ← new, from the B-02 fix
+
+`exec_sql` is callable only with the `service_role` key, which never reaches a browser. If you
+would rather not have it in the database at all, run `status` below to see what is pending and
+paste those files by hand in the order it prints — you still get the record.
+
+### 3b — Apply every migration, in order
+
+⚠️ **Finish Step 4 first.** `migrate.js` reads `SUPABASE_URL` from `.env`, so running it before
+you repoint `.env` aims it at *production*. Confirm the target before every run — the project ref
+it prints must be the staging one:
+
+```bash
+node -e "require('dotenv').config(); console.log(process.env.SUPABASE_URL)"
 ```
 
-Order matters: later files add columns to tables the earlier ones create. Every file is
-idempotent, so re-running one is harmless if you lose your place.
+Then:
 
-**Check it worked.** Run this — you should get 19 rows, all `rowsecurity = true`:
+```bash
+node scripts/migrate.js status
+```
+
+On a fresh project every file reads `PENDING`. Then:
+
+```bash
+node scripts/migrate.js up
+```
+
+It applies them in the one canonical order (`ORDER` in `scripts/migrate.js`), stops at the first
+failure without applying anything after it, and records a checksum per file so a migration edited
+after being applied shows up as `CHANGED`.
+
+**Check it worked.** All 22 should read `applied`:
+
+```bash
+node scripts/migrate.js status
+node scripts/checks/verify-migrations.js     # expect 22/22 — probes for the objects, not the record
+```
+
+`verify-migrations.js` is the stronger check of the two: it looks for the 46+ tables, columns and
+functions the migrations create, so it catches a file that was marked applied but never really ran
+— which is how `supabase-schema-cart.sql` once left the cross-device cart silently broken.
+
+And confirm RLS is on everywhere — every row should read `true`:
 
 ```sql
 select tablename, rowsecurity from pg_tables
 where schemaname = 'public' order by tablename;
 ```
 
-And confirm the newest migration landed:
-
-```sql
-select column_name from information_schema.columns
-where table_name = 'orders' and column_name = 'client_request_id';
-```
-
-One row means duplicate-order protection is active. No rows means step 13 didn't run — go back
-and run it, or the server will warn at startup and run without that protection.
-
 ---
+
 
 ## Step 4 — Point your laptop at staging
 
