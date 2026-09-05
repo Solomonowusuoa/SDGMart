@@ -2,6 +2,11 @@
 
 A same-day grocery web app for Tamale, Ghana. This doc lets a new chat (or you) pick up exactly where we left off. Read this top-to-bottom once, then keep it as reference.
 
+> **Two companion docs, added 2026-09-05.** [ARCHITECTURE.md](ARCHITECTURE.md) explains how the
+> system fits together — read it first if you have never seen the code. [DECISIONS.md](DECISIONS.md)
+> records why it is shaped that way and what each choice cost, including the open questions.
+> HANDOFF stays what it has always been: where the work currently stands.
+
 ---
 
 ## ⭐ LATEST STATE — resume here (updated 2026-09-05)
