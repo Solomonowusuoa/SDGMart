@@ -20,7 +20,7 @@ A same-day grocery web app for Tamale, Ghana. This doc lets a new chat (or you) 
 
   - **⭐ CATEGORIES ARE NOW ADMIN-EDITABLE (Admin → Settings → Categories).** They were a hardcoded array, so every change was a code edit and a deploy. They live in `app_config` now; `DEFAULT_CATEGORIES` survives only as the fallback for a shop that has never saved a list. **The list was never the hard part.** A product stores its category as PLAIN TEXT, not a foreign key, so dropping a name orphans every product carrying it — gone from the nav and every category page, reachable only by search, exactly like the Geisha row. So the **server** enforces it: removing a category that still holds products is a 409 naming the count with nothing written; a rename is `{from, to}` and MOVES the products with it (renaming "Drinks" without that would orphan 19); a rename to a name absent from the saved list is a 400; blank, duplicate, non-string, over-length and empty lists are all refused with the previously saved list intact. `GET /api/admin/categories` also reports categories that hold products but are missing from the list, so an orphaned row surfaces by itself. Two failure modes deliberately not introduced while removing one: a junk value in `app_config` is validated, logged and fallen back from rather than served; and the degraded `/data/products.js` path reuses the last good list from memory, because a path that runs precisely when reads are failing must not need a read. 33 new assertions, and driven in a real browser — renaming "Cooking Oil" to "Oils & Fats" moved both products and left none behind.
 
-  - **⭐ SUPABASE ADVISORS TRIAGED — most of them should be ignored, three should not.** New migration `supabase-schema-advisors.sql` (in `scripts/migrate.js` ORDER, reversible). **Not yet applied — the owner runs it.**
+  - **⭐ SUPABASE ADVISORS TRIAGED — most of them should be ignored, three should not.** New migration `supabase-schema-advisors.sql` (in `scripts/migrate.js` ORDER, reversible). **Applied to production 2026-09-05**, and `verify-migrations.js` was extended to cover it — 23/23. Verified after the run that nothing broke: the three tables still read with the service key, every stock function still executes, the `set_updated_at` trigger still fires, and `exec_sql` survived being pinned while it was itself executing the migration.
     - **3 CRITICAL, real:** `schema_migrations`, `stock_holds` and `order_events` have RLS **disabled**, so they are the only tables readable *and writable* with the public anon key. `supabase-rls-fix.sql` covered what existed when it was written; these three arrived in later migrations and were missed. Consequences if abused: marking a migration applied that never ran (migrate.js would skip it forever), holding every unit of every product so the shop cannot sell, and writing to the append-only audit log — an audit trail anyone can write to is not an audit trail.
     - **~12 "Function Search Path Mutable", worth fixing:** only `exec_sql` genuinely matters — it is SECURITY DEFINER and executes arbitrary SQL. The rest are SECURITY INVOKER and lower risk. Fixed with a **loop over `pg_proc`, not a hand-written list**: writing signatures by hand means getting every argument type and DEFAULT right, and a wrong signature is not an error, it is a function silently left unpinned. (I had `search_top_queries(int)`; it is `(int, int)`.)
     - **~20 "RLS Enabled No Policy" — IGNORE. These are correct.** RLS on with no policy means anon and authenticated get nothing, which is exactly right when the server holds the `service_role` key and the browser never talks to Supabase. Do not write twenty policies to silence them.
@@ -105,7 +105,7 @@ Everything below is what that session needs to know.
 cd /c/Users/Solo/Downloads/SDGMart
 git log --oneline -5                              # where main is
 npm test                                          # expect 111 assertions, 0 failures
-node scripts/checks/verify-migrations.js          # expect 22/22 (23 once -advisors is applied)
+node scripts/checks/verify-migrations.js          # expect 23/23 present
 node scripts/checks/step2-api-checks.js           # expect 29/29, writes nothing
 curl -s https://sdg-mart.com/api/paystack/config  # ⚠️ pk_live_ or pk_test_?
 ```
@@ -119,7 +119,7 @@ cannot pay while it does.
 
 | Script | What it proves | Cost |
 |---|---|---|
-| `verify-migrations.js` | All 22 migrations genuinely applied, by probing for the 46+ objects they create | read-only |
+| `verify-migrations.js` | All 23 migrations genuinely applied, by probing for the 50+ objects they create | read-only |
 | `step2-api-checks.js` | Headers, `.git` lockdown, compression, consent, order validation, enumeration | read-only |
 | `step2b-safe-checks.js` | Index plans, retention, admin flags, Accra dating, the daily-job claim marker | read-only |
 | `step2d-account-checks.js` | Mixed-case sign-in, address tenancy, cancelling others' orders, recurring bounds | ⚠️ one throwaway account |
