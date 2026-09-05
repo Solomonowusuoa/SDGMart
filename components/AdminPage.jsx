@@ -573,6 +573,83 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
     setTimeout(() => setSettingsSaved(''), 3000);
   };
 
+  // ── Category editor ──
+  // `rows` are the working copy: each carries the name it had when loaded, so a
+  // rename can be sent as {from, to} and the server can move the products too.
+  // Editing only the visible list would leave every product on the old string.
+  const [catRows, setCatRows] = React.useState([]);
+  const [catOrphans, setCatOrphans] = React.useState([]);
+  const [catBusy, setCatBusy] = React.useState(false);
+  const [catMsg, setCatMsg] = React.useState(null);   // {type:'ok'|'err', text}
+  const [newCat, setNewCat] = React.useState('');
+  const loadCategories = React.useCallback(() => {
+    apiFetch('/api/admin/categories').then(r => r.ok ? r.json() : null).then(d => {
+      if (!d || !Array.isArray(d.categories)) return;
+      setCatRows(d.categories.map(c => ({ was: c.name, name: c.name, count: c.count })));
+      setCatOrphans(Array.isArray(d.orphans) ? d.orphans : []);
+    }).catch(() => {});
+  }, []);
+  React.useEffect(() => { if (adminTab === 'settings') loadCategories(); }, [adminTab, loadCategories]);
+
+  const catDirty = catRows.some(r => r.was !== r.name || r.was == null)
+    || catRows.length !== catRows.filter(r => r.was != null).length;
+  const moveCat = (i, delta) => setCatRows(rows => {
+    const j = i + delta;
+    if (j < 0 || j >= rows.length) return rows;
+    const next = rows.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    return next;
+  });
+  const addCat = () => {
+    const name = newCat.replace(/\s+/g, ' ').trim();
+    if (!name) return;
+    if (catRows.some(r => r.name.toLowerCase() === name.toLowerCase())) {
+      setCatMsg({ type: 'err', text: '"' + name + '" is already there.' });
+      return;
+    }
+    setCatRows(rows => [...rows, { was: null, name, count: 0 }]);
+    setNewCat('');
+    setCatMsg(null);
+  };
+  const removeCat = (i) => {
+    const row = catRows[i];
+    if (row.count > 0) {
+      // The server refuses this too. Saying it here costs the admin nothing and
+      // explains WHY, rather than letting them discover it on save.
+      setCatMsg({ type: 'err', text: '"' + row.name + '" still holds ' + row.count + ' product' + (row.count === 1 ? '' : 's') + '. Move them in Inventory first, or rename this category instead of deleting it.' });
+      return;
+    }
+    setCatRows(rows => rows.filter((_, j) => j !== i));
+    setCatMsg(null);
+  };
+  const saveCategories = async () => {
+    setCatBusy(true);
+    setCatMsg(null);
+    // A row whose name changed and that existed before is a rename: the server
+    // moves its products. A brand-new row is not.
+    const renames = catRows.filter(r => r.was && r.was !== r.name).map(r => ({ from: r.was, to: r.name }));
+    let body = null, ok = false;
+    try {
+      const res = await apiFetch('/api/admin/categories', {
+        method: 'POST',
+        body: JSON.stringify({ categories: catRows.map(r => r.name), renames }),
+      });
+      try { body = await res.json(); } catch (_) {}
+      ok = res.ok;
+    } catch (_) { body = { error: 'Could not reach the server.' }; }
+    setCatBusy(false);
+    if (!ok) {
+      setCatMsg({ type: 'err', text: (body && body.error) || 'The server did not accept the change.' });
+      return;   // leave the editor exactly as typed so nothing is lost
+    }
+    const moved = (body && body.productsMoved) || 0;
+    setCatMsg({ type: 'ok', text: 'Saved.' + (moved ? ' ' + moved + ' product' + (moved === 1 ? '' : 's') + ' moved to the new name.' : '') });
+    loadCategories();
+    // The storefront reads window.CATEGORIES; refresh it so the admin's own
+    // product dropdowns show the new list without a reload.
+    if (body && Array.isArray(body.categories)) window.CATEGORIES = body.categories;
+  };
+
   // ── Birthday gifts tab state ──
   const [birthdayCfg, setBirthdayCfg] = React.useState({ enabled: false, productIds: [] });
   const [birthdaySaved, setBirthdaySaved] = React.useState('');
@@ -1932,6 +2009,71 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
           <div>
             <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginBottom: 6 }}>Store Settings</h1>
             <p style={{ color: 'var(--warm-gray)', fontSize: 14, marginBottom: 24 }}>Site-wide options. Changes apply after customers reload the storefront.</p>
+
+            {/* CATEGORIES — the shop nav, in the order shown here */}
+            <div style={{ background: 'var(--white)', borderRadius: 12, padding: '20px 22px', boxShadow: 'var(--shadow)', maxWidth: 620, marginBottom: 20 }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>Categories</div>
+              <div style={{ fontSize: 13, color: 'var(--warm-gray)', marginTop: 4, marginBottom: 14, lineHeight: 1.5 }}>
+                These are the categories customers browse, in this order. Rename one and every product in it
+                moves with it. A category holding products cannot be deleted — move them in Inventory first.
+              </div>
+
+              {catOrphans.length > 0 && (
+                <div style={{ background: '#FFF4E0', border: '1px solid #F0C674', borderRadius: 10, padding: '11px 14px', marginBottom: 14 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: '#7A5A00' }}>Products filed under a category that is not on this list</div>
+                  <div style={{ fontSize: 12, color: '#7A5A00', marginTop: 4, opacity: .9, lineHeight: 1.5 }}>
+                    {catOrphans.map(o => o.name + ' (' + o.count + ')').join(' · ')} — customers cannot reach {catOrphans.length === 1 ? 'it' : 'them'} by browsing,
+                    only by search. Add the name below to bring {catOrphans.length === 1 ? 'it' : 'them'} back, or re-file those products in Inventory.
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {catRows.map((row, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                      <button onClick={() => moveCat(i, -1)} disabled={i === 0} title="Move up"
+                        style={{ lineHeight: 1, fontSize: 10, padding: '1px 5px', borderRadius: 4, border: '1px solid var(--cream-dark)', background: 'var(--cream)', cursor: i === 0 ? 'default' : 'pointer', opacity: i === 0 ? .35 : 1 }}>▲</button>
+                      <button onClick={() => moveCat(i, 1)} disabled={i === catRows.length - 1} title="Move down"
+                        style={{ lineHeight: 1, fontSize: 10, padding: '1px 5px', borderRadius: 4, border: '1px solid var(--cream-dark)', background: 'var(--cream)', cursor: i === catRows.length - 1 ? 'default' : 'pointer', opacity: i === catRows.length - 1 ? .35 : 1 }}>▼</button>
+                    </div>
+                    <input value={row.name} maxLength={40}
+                      onChange={e => setCatRows(rows => rows.map((r, j) => j === i ? { ...r, name: e.target.value } : r))}
+                      style={{ flex: 1, padding: '7px 10px', borderRadius: 7, border: '1.5px solid ' + (row.was && row.was !== row.name ? 'var(--accent-gold)' : 'var(--cream-dark)'), fontSize: 13, outline: 'none', background: 'var(--white)' }} />
+                    <span title={row.count + ' product' + (row.count === 1 ? '' : 's')}
+                      style={{ fontSize: 11, fontWeight: 700, minWidth: 34, textAlign: 'center', color: row.count ? 'var(--warm-black)' : 'var(--warm-gray)', background: 'var(--cream)', borderRadius: 999, padding: '3px 8px' }}>
+                      {row.count}
+                    </span>
+                    <button onClick={() => removeCat(i)} title={row.count ? 'Has products — move them first' : 'Remove'}
+                      style={{ fontSize: 11, fontWeight: 700, color: row.count ? 'var(--warm-gray)' : 'var(--accent-red)', background: 'none', border: 'none', cursor: 'pointer', opacity: row.count ? .45 : 1 }}>Remove</button>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                <input value={newCat} maxLength={40} placeholder="New category name"
+                  onChange={e => setNewCat(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCat(); } }}
+                  style={{ flex: 1, padding: '8px 10px', borderRadius: 7, border: '1.5px solid var(--cream-dark)', fontSize: 13, outline: 'none' }} />
+                <button onClick={addCat}
+                  style={{ background: 'var(--cream)', color: 'var(--sage-dark)', borderRadius: 8, padding: '8px 14px', fontWeight: 700, fontSize: 12, border: 'none', cursor: 'pointer' }}>+ Add</button>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14 }}>
+                <button onClick={saveCategories} disabled={catBusy}
+                  style={{ background: 'var(--sage)', color: '#fff', borderRadius: 9, padding: '9px 20px', fontWeight: 700, fontSize: 13, border: 'none', cursor: catBusy ? 'default' : 'pointer', opacity: catBusy ? .6 : 1 }}>
+                  {catBusy ? 'Saving…' : 'Save categories'}
+                </button>
+                <button onClick={() => { loadCategories(); setCatMsg(null); }} disabled={catBusy}
+                  style={{ background: 'none', border: 'none', color: 'var(--warm-gray)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Discard changes</button>
+              </div>
+
+              {catMsg && (
+                <div style={{ marginTop: 12, fontSize: 12.5, lineHeight: 1.5, color: catMsg.type === 'ok' ? 'var(--sage)' : 'var(--accent-red)' }}>
+                  {catMsg.type === 'ok' ? '✓ ' : '⚠ '}{catMsg.text}
+                </div>
+              )}
+            </div>
 
             <div style={{ background: 'var(--white)', borderRadius: 12, padding: '20px 22px', boxShadow: 'var(--shadow)', maxWidth: 620 }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>

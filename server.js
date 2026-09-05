@@ -583,7 +583,49 @@ async function getOrderItemCounts() {
 // Shared by the success and the failure path of /data/products.js, so a
 // degraded catalogue still offers the same categories and delivery areas — and
 // so the two lists cannot drift apart.
-const CATALOG_CATEGORIES = ["Rice & Grains","Cooking Oil","Canned & Sauces","Spices & Seasoning","Dairy & Eggs","Drinks","Snacks & Biscuits","Breakfast & Cereals","Baking & Sugar","Coffee, Tea & Cocoa","Fruits & Vegetables","Staples (Tubers & Fufu)","Meat, Poultry & Seafood","Toiletries & Personal Care","Household & Cleaning"];
+// The category list is admin-editable and lives in app_config under
+// 'categories'. This constant is the FALLBACK — what the shop shows before the
+// admin has ever saved a list, and what it falls back to if the config read
+// fails. It is not the source of truth any more; Admin → Settings is.
+const DEFAULT_CATEGORIES = ["Rice & Grains","Cooking Oil","Canned & Sauces","Spices & Seasoning","Dairy & Eggs","Drinks","Snacks & Biscuits","Breakfast & Cereals","Baking & Sugar","Coffee, Tea & Cocoa","Fruits & Vegetables","Staples (Tubers & Fufu)","Meat, Poultry & Seafood","Toiletries & Personal Care","Household & Cleaning"];
+const CATEGORY_MAX = 40;        // entries
+const CATEGORY_NAME_MAX = 40;   // characters
+
+// Last list we successfully read. The degraded /data/products.js path runs
+// precisely when the database is unhappy, so it must not need a second read.
+let _lastCategories = null;
+
+// Returns a clean string[] or an error message. Shared by the save routes and
+// the reader, so a bad value that somehow reached app_config is ignored rather
+// than served.
+function validateCategoryList(v) {
+  if (!Array.isArray(v)) return 'Categories must be a list.';
+  if (!v.length) return 'Keep at least one category.';
+  if (v.length > CATEGORY_MAX) return 'No more than ' + CATEGORY_MAX + ' categories.';
+  const clean = [], seen = new Set();
+  for (const raw of v) {
+    if (typeof raw !== 'string') return 'Every category must be text.';
+    const s = raw.replace(/\s+/g, ' ').trim();
+    if (!s) return 'A category name cannot be blank.';
+    if (s.length > CATEGORY_NAME_MAX) return '"' + s.slice(0, 20) + '…" is too long (max ' + CATEGORY_NAME_MAX + ' characters).';
+    const key = s.toLowerCase();
+    if (seen.has(key)) return '"' + s + '" appears twice.';
+    seen.add(key);
+    clean.push(s);
+  }
+  return { clean };
+}
+async function getCategories() {
+  try {
+    const stored = await db.appConfig.get('categories');
+    if (stored != null) {
+      const v = validateCategoryList(stored);
+      if (typeof v !== 'string') { _lastCategories = v.clean; return v.clean; }
+      console.warn('app_config.categories is not a valid list, ignoring it: ' + v);
+    }
+  } catch (e) { console.warn('could not read categories from app_config: ' + e.message); }
+  return _lastCategories || DEFAULT_CATEGORIES;
+}
 const CATALOG_ESSENTIALS = [46, 45, 37, 132, 79, 140, 141, 78, 99];
 const CATALOG_NEIGHBORHOODS = ["Tamale Central","Kalpohin","Lamashegu","Sagnarigu","Nyohini","Choggu","Vittin","Tishigu","Gumbihini","Jisonayili"];
 
@@ -601,7 +643,7 @@ app.get('/data/products.js', async (req, res) => {
     const productsList = (await db.products.listForCatalog()).map(p => ({ ...p, bestseller: !!p.bestseller, img: p.img || null }));
     const counts = await getOrderItemCounts();
     const TOP_IDS_BY_ORDERS = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => Number(id));
-    const categories = CATALOG_CATEGORIES;
+    const categories = await getCategories();
     const essentials = CATALOG_ESSENTIALS;
     const neighborhoods = CATALOG_NEIGHBORHOODS;
     // Customer-facing freshness/expiry display is off by default; admin can flip it on.
@@ -651,7 +693,7 @@ if (typeof window !== 'undefined') {
     res.send(`
 if (typeof window !== 'undefined') {
   window.PRODUCTS = [];
-  window.CATEGORIES = ${JSON.stringify(CATALOG_CATEGORIES)};
+  window.CATEGORIES = ${JSON.stringify(_lastCategories || DEFAULT_CATEGORIES)};
   window.ESSENTIALS = ${JSON.stringify(CATALOG_ESSENTIALS)};
   window.NEIGHBORHOODS = ${JSON.stringify(CATALOG_NEIGHBORHOODS)};
   window.TOP_IDS_BY_ORDERS = [];
@@ -694,7 +736,7 @@ app.get('/api/catalog', async (req, res) => {
     } catch (e) { console.warn('/api/catalog: order counts unavailable, serving without them:', e.message); }
     const payload = {
       products,
-      categories: CATALOG_CATEGORIES,
+      categories: await getCategories(),
       neighborhoods: CATALOG_NEIGHBORHOODS,
       essentials: CATALOG_ESSENTIALS,
       topIdsByOrders: topIds,
@@ -3147,6 +3189,83 @@ app.post('/api/admin/settings', requireAdmin, async (req, res) => {
     }
     invalidateCatalog(); // show_freshness is baked into /data/products.js
     res.json({ ok: true });
+  } catch (e) { fail(res, e, req); }
+});
+
+// ── Categories (admin-editable) ──────────────────────────────────────────
+// Categories used to be a hardcoded array, so every change was a code edit and
+// a deploy. They now live in app_config; DEFAULT_CATEGORIES is only the
+// fallback for a shop that has never saved a list.
+//
+// The whole difficulty is that a product stores its category as PLAIN TEXT, not
+// a foreign key. Drop a name from the list and every product carrying it keeps
+// a string that matches nothing: it disappears from the nav and from every
+// category page while still sitting in the shop, reachable only through search
+// and All Products. That is not hypothetical — Geisha Black Soap spent weeks
+// filed under "Rice & Grains" and nobody could find it. So removals and renames
+// are checked against live product counts here, not left to the UI.
+app.get('/api/admin/categories', requireAdmin, async (req, res) => {
+  try {
+    const categories = await getCategories();
+    const counts = await db.products.countByCategory();
+    // Categories holding products but missing from the list — already-orphaned
+    // rows. Surfacing them is how the admin discovers the Geisha case.
+    const known = new Set(categories);
+    const orphans = Object.keys(counts).filter(c => c && !known.has(c)).map(c => ({ name: c, count: counts[c] }));
+    res.json({
+      categories: categories.map(c => ({ name: c, count: counts[c] || 0 })),
+      orphans,
+      usingDefaults: (await db.appConfig.get('categories')) == null,
+      limits: { max: CATEGORY_MAX, nameMax: CATEGORY_NAME_MAX },
+    });
+  } catch (e) { fail(res, e, req); }
+});
+
+app.post('/api/admin/categories', requireAdmin, async (req, res) => {
+  const { categories, renames } = req.body || {};
+  try {
+    const v = validateCategoryList(categories);
+    if (typeof v === 'string') return res.status(400).json({ error: v });
+    const next = v.clean;
+    const before = await getCategories();
+    const counts = await db.products.countByCategory();
+
+    // A rename is {from, to}: the name changes AND every product carrying the
+    // old one is moved. Without the move, renaming "Drinks" orphans 19 products
+    // — the list looks right and the shop quietly loses a category's worth of
+    // stock from its nav.
+    const moves = Array.isArray(renames) ? renames : [];
+    for (const r of moves) {
+      const from = String((r && r.from) || '').trim();
+      const to = String((r && r.to) || '').trim();
+      if (!from || !to) return res.status(400).json({ error: 'Each rename needs both a "from" and a "to".' });
+      if (!next.includes(to)) return res.status(400).json({ error: 'Renaming "' + from + '" to "' + to + '", but "' + to + '" is not in the saved list.' });
+    }
+
+    // Anything dropped from the list must be empty first, or be renamed into
+    // something that survives. Refuse rather than orphan.
+    const renamedAway = new Set(moves.map(r => String(r.from).trim()));
+    const removed = before.filter(c => !next.includes(c) && !renamedAway.has(c));
+    const blocked = removed.filter(c => (counts[c] || 0) > 0).map(c => ({ name: c, count: counts[c] }));
+    if (blocked.length) {
+      return res.status(409).json({
+        error: blocked.map(b => '"' + b.name + '" still has ' + b.count + ' product' + (b.count === 1 ? '' : 's'))
+          .join(', ') + '. Move them to another category first, or rename this one instead of removing it.',
+        code: 'CATEGORY_IN_USE',
+        blocked,
+      });
+    }
+
+    let moved = 0;
+    for (const r of moves) {
+      const from = String(r.from).trim(), to = String(r.to).trim();
+      if (from === to) continue;
+      moved += await db.products.moveCategory(from, to);
+    }
+    await db.appConfig.set('categories', next);
+    _lastCategories = next;
+    invalidateCatalog();
+    res.json({ ok: true, categories: next, productsMoved: moved });
   } catch (e) { fail(res, e, req); }
 });
 

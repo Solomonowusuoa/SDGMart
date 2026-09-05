@@ -278,6 +278,24 @@ const products = {
     if (error) throw error;
     return rowsOut(data).filter((p) => p.stock <= (p.lowStockThreshold ?? 5));
   },
+  // Categories live on each product as plain text, so the admin category editor
+  // needs two things the list alone cannot tell it: which categories still have
+  // products in them (a category in use must not be removed from the nav — its
+  // products would keep a string nothing matches and vanish from every
+  // category page while still being in the shop), and a way to move every
+  // product from one category name to another in one statement.
+  async countByCategory() {
+    const { data, error } = await sb.from('products').select('category');
+    if (error) throw error;
+    const out = {};
+    for (const r of data || []) { const k = r.category || ''; out[k] = (out[k] || 0) + 1; }
+    return out;
+  },
+  async moveCategory(from, to) {
+    const { data, error } = await sb.from('products').update({ category: to }).eq('category', from).select('id');
+    if (error) throw error;
+    return (data || []).length;
+  },
   // decrementStock was removed (audit C-10). It read stock, subtracted, and
   // wrote it back, so two concurrent orders both read the same number and both
   // wrote the same decrement — one sale vanished. It also ran after the commit
