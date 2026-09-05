@@ -4,7 +4,34 @@ A same-day grocery web app for Tamale, Ghana. This doc lets a new chat (or you) 
 
 ---
 
-## ⭐ LATEST STATE — resume here (updated 2026-09-03, later)
+## ⭐ LATEST STATE — resume here (updated 2026-09-05)
+
+- **(2026-09-05) v98 — the catalogue got its photos, its missing products, and an editable category list; plus the Supabase advisors triaged.** All pushed. `npm test` **80 → 111 assertions** (`tests/categories.test.js` is new). Shop is **133 products, 125 with a photo, 15 categories**.
+
+  - **⚠️ PAYSTACK IS STILL ON TEST KEYS.** Unchanged for three sessions and still the single most urgent thing. Real customers cannot pay. Swap `PAYSTACK_PUBLIC_KEY`/`PAYSTACK_SECRET_KEY` back to the `pk_live_`/`sk_live_` pair on Render and confirm with `curl -s https://sdg-mart.com/api/paystack/config`.
+
+  - **⭐ RECOVERING FROM A DEAD CATALOGUE RESTORED THE PRODUCTS BUT NOT THE CATEGORIES.** The owner reported every product present but the category strip and the "Shop by category" tiles gone. This was a gap in the v97 fix, not a new bug: `hooks.js` now defaults `window.CATEGORIES` to `[]` so a failed `/data/products.js` cannot crash the app, and `refreshCatalog()` then repopulated **products only** — `/api/catalog` returned `{products, showFreshness, showStock}` and nothing else. So a device whose catalogue script never loaded ended up with 132 products and zero categories: everything rendered except the way to browse it. `/api/catalog` now carries categories, neighbourhoods, essentials, top-ids and terms version, and `App.jsx` restores each one it actually receives. The lesson worth keeping: **a recovery path has to carry everything the thing it replaces carried**, or it converts a total failure into a subtle one, which is harder to spot.
+
+  - **⭐ PRODUCT PHOTOS: 93 → 125 of 133.** From a folder of 45 images with names that only approximately matched. Fuzzy scoring got two pairs wrong — Cadbury Richoco tied with Quaker White Oats on the shared "500g" token, and the two St Louis sugar cubes nearly swapped — so the mapping was frozen as an explicit id→file table and the images opened by eye before uploading. 26 fills (products that had no photo), then 12 replacements of existing photos, each with the previous URL snapshotted first and the old storage objects left in place so a rollback restores a link that still resolves. The two malt files were decided by looking, not by filename: both are Malta Guinness (can and plastic bottle), **not** Beta Malt, which is what the scorer had guessed.
+
+  - **⭐ SEVEN PRODUCTS THE SHOP DID NOT HAVE, AND A NEW CATEGORY FOR THREE OF THEM.** The image folder turned out to contain items with no product at all — 3 Flora paper goods, 2 Geisha soap variants, Indomie Hungry Man, and an Ideal 410g tin. Added as #183–#188, plus **`Household & Cleaning`**, which ships with its three paper products so it was never on the nav empty. The Ideal tin says "NOW 410g", i.e. Nestlé's upsized pack, so **#89 was updated from 390ml rather than a near-duplicate created** — price deliberately left at GHS 25, because repricing a live product is a commercial decision. **A correction I had to make mid-task:** I proposed creating the unpriced Flora items at `stock: 0` "so they cannot sell". That is wrong, and STEP 10 item 1291 had already proved it that morning — with `deduct_stock` OFF a `stock: 0` product still sells (201). Stock is advisory in the supplier model. They were held back until the owner priced them instead.
+
+  - **⭐ A BAR OF SOAP WAS FILED UNDER "RICE & GRAINS".** Geisha Black Soap (#176), found while checking categories. Nobody browsing Toiletries could reach it and anyone browsing rice was shown soap. Moved. This one row is the argument for everything in the next entry: a wrong category is invisible until someone goes looking.
+
+  - **⭐ CATEGORIES ARE NOW ADMIN-EDITABLE (Admin → Settings → Categories).** They were a hardcoded array, so every change was a code edit and a deploy. They live in `app_config` now; `DEFAULT_CATEGORIES` survives only as the fallback for a shop that has never saved a list. **The list was never the hard part.** A product stores its category as PLAIN TEXT, not a foreign key, so dropping a name orphans every product carrying it — gone from the nav and every category page, reachable only by search, exactly like the Geisha row. So the **server** enforces it: removing a category that still holds products is a 409 naming the count with nothing written; a rename is `{from, to}` and MOVES the products with it (renaming "Drinks" without that would orphan 19); a rename to a name absent from the saved list is a 400; blank, duplicate, non-string, over-length and empty lists are all refused with the previously saved list intact. `GET /api/admin/categories` also reports categories that hold products but are missing from the list, so an orphaned row surfaces by itself. Two failure modes deliberately not introduced while removing one: a junk value in `app_config` is validated, logged and fallen back from rather than served; and the degraded `/data/products.js` path reuses the last good list from memory, because a path that runs precisely when reads are failing must not need a read. 33 new assertions, and driven in a real browser — renaming "Cooking Oil" to "Oils & Fats" moved both products and left none behind.
+
+  - **⭐ SUPABASE ADVISORS TRIAGED — most of them should be ignored, three should not.** New migration `supabase-schema-advisors.sql` (in `scripts/migrate.js` ORDER, reversible). **Not yet applied — the owner runs it.**
+    - **3 CRITICAL, real:** `schema_migrations`, `stock_holds` and `order_events` have RLS **disabled**, so they are the only tables readable *and writable* with the public anon key. `supabase-rls-fix.sql` covered what existed when it was written; these three arrived in later migrations and were missed. Consequences if abused: marking a migration applied that never ran (migrate.js would skip it forever), holding every unit of every product so the shop cannot sell, and writing to the append-only audit log — an audit trail anyone can write to is not an audit trail.
+    - **~12 "Function Search Path Mutable", worth fixing:** only `exec_sql` genuinely matters — it is SECURITY DEFINER and executes arbitrary SQL. The rest are SECURITY INVOKER and lower risk. Fixed with a **loop over `pg_proc`, not a hand-written list**: writing signatures by hand means getting every argument type and DEFAULT right, and a wrong signature is not an error, it is a function silently left unpinned. (I had `search_top_queries(int)`; it is `(int, int)`.)
+    - **~20 "RLS Enabled No Policy" — IGNORE. These are correct.** RLS on with no policy means anon and authenticated get nothing, which is exactly right when the server holds the `service_role` key and the browser never talks to Supabase. Do not write twenty policies to silence them.
+    - **~9 unindexed foreign keys — cheap, do it:** immaterial on 26 orders, but deleting a parent row scans the whole child table, so this bites later, not now.
+    - **"Unused Index" — IGNORE for now.** On 133 products the planner prefers sequential scans, so an index legitimately reads as unused. Revisit under real traffic.
+    - **Worth a decision:** `exec_sql` is a permanent arbitrary-SQL function sitting in production so `scripts/migrate.js` can run. It is revoked from `public`/`anon`/`authenticated`, so only the service key can call it — but it could be dropped between migrations and recreated when needed.
+
+  - **Board unchanged at 6 items**, all still blocked on a phone (2), staging for G-06 (3), or a real mailbox (1). Nothing this session touched them.
+
+
+## v97 — 2026-09-03 (superseded by v98 above; kept in full)
 
 - **(2026-09-03) v97 — bugs the owner found by using the shop, plus one doc bug that was silently blocking a third of the test plan.** Not committed yet. `npm test` 66 → 80 assertions (`tests/inventory-edit.test.js` is new and wired into `npm test`).
 
@@ -67,7 +94,7 @@ A same-day grocery web app for Tamale, Ghana. This doc lets a new chat (or you) 
 
 Paste this as your first message:
 
-> Read HANDOFF.md and TEST-CHECKLIST.md. We are at v96 and part-way through the test plan.
+> Read HANDOFF.md and TEST-CHECKLIST.md. We are at v98 and part-way through the test plan.
 > Tell me the current state, then let's continue.
 
 Everything below is what that session needs to know.
@@ -77,8 +104,8 @@ Everything below is what that session needs to know.
 ```bash
 cd /c/Users/Solo/Downloads/SDGMart
 git log --oneline -5                              # where main is
-npm test                                          # expect 80 assertions, 0 failures
-node scripts/checks/verify-migrations.js          # expect 22/22 present
+npm test                                          # expect 111 assertions, 0 failures
+node scripts/checks/verify-migrations.js          # expect 22/22 (23 once -advisors is applied)
 node scripts/checks/step2-api-checks.js           # expect 29/29, writes nothing
 curl -s https://sdg-mart.com/api/paystack/config  # ⚠️ pk_live_ or pk_test_?
 ```
