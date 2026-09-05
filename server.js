@@ -583,7 +583,7 @@ async function getOrderItemCounts() {
 // Shared by the success and the failure path of /data/products.js, so a
 // degraded catalogue still offers the same categories and delivery areas — and
 // so the two lists cannot drift apart.
-const CATALOG_CATEGORIES = ["Rice & Grains","Cooking Oil","Canned & Sauces","Spices & Seasoning","Dairy & Eggs","Drinks","Snacks & Biscuits","Breakfast & Cereals","Baking & Sugar","Coffee, Tea & Cocoa","Fruits & Vegetables","Staples (Tubers & Fufu)","Meat, Poultry & Seafood","Toiletries & Personal Care"];
+const CATALOG_CATEGORIES = ["Rice & Grains","Cooking Oil","Canned & Sauces","Spices & Seasoning","Dairy & Eggs","Drinks","Snacks & Biscuits","Breakfast & Cereals","Baking & Sugar","Coffee, Tea & Cocoa","Fruits & Vegetables","Staples (Tubers & Fufu)","Meat, Poultry & Seafood","Toiletries & Personal Care","Household & Cleaning"];
 const CATALOG_ESSENTIALS = [46, 45, 37, 132, 79, 140, 141, 78, 99];
 const CATALOG_NEIGHBORHOODS = ["Tamale Central","Kalpohin","Lamashegu","Sagnarigu","Nyohini","Choggu","Vittin","Tishigu","Gumbihini","Jisonayili"];
 
