@@ -24,7 +24,7 @@ A same-day grocery web app for Tamale, Ghana. This doc lets a new chat (or you) 
     - **3 CRITICAL, real:** `schema_migrations`, `stock_holds` and `order_events` have RLS **disabled**, so they are the only tables readable *and writable* with the public anon key. `supabase-rls-fix.sql` covered what existed when it was written; these three arrived in later migrations and were missed. Consequences if abused: marking a migration applied that never ran (migrate.js would skip it forever), holding every unit of every product so the shop cannot sell, and writing to the append-only audit log — an audit trail anyone can write to is not an audit trail.
     - **~12 "Function Search Path Mutable", worth fixing:** only `exec_sql` genuinely matters — it is SECURITY DEFINER and executes arbitrary SQL. The rest are SECURITY INVOKER and lower risk. Fixed with a **loop over `pg_proc`, not a hand-written list**: writing signatures by hand means getting every argument type and DEFAULT right, and a wrong signature is not an error, it is a function silently left unpinned. (I had `search_top_queries(int)`; it is `(int, int)`.)
     - **~20 "RLS Enabled No Policy" — IGNORE. These are correct.** RLS on with no policy means anon and authenticated get nothing, which is exactly right when the server holds the `service_role` key and the browser never talks to Supabase. Do not write twenty policies to silence them.
-    - **~9 unindexed foreign keys — cheap, do it:** immaterial on 26 orders, but deleting a parent row scans the whole child table, so this bites later, not now.
+    - **~9 unindexed foreign keys — cheap, do it:** immaterial on 26 orders, but deleting a parent row scans the whole child table, so this bites later, not now. **I over-corrected here and had to walk it back in `supabase-schema-advisors-2.sql`:** Supabase flags a TABLE, not a column, so indexing every FK on a flagged table created three indexes that an existing composite already covered — one of them (`referrals_referrer_id_idx`) an exact duplicate of `referrals_referrer_idx`. Ten were genuinely missing and stay. The check that matters when doing this: the covering index must be NON-PARTIAL, because a partial index cannot stand in for a full one — which is why `addresses_user_id_idx` and `orders_paystack_ref_idx` look redundant by column list and are not.
     - **"Unused Index" — IGNORE for now.** On 133 products the planner prefers sequential scans, so an index legitimately reads as unused. Revisit under real traffic.
     - **Worth a decision:** `exec_sql` is a permanent arbitrary-SQL function sitting in production so `scripts/migrate.js` can run. It is revoked from `public`/`anon`/`authenticated`, so only the service key can call it — but it could be dropped between migrations and recreated when needed.
 
@@ -105,7 +105,7 @@ Everything below is what that session needs to know.
 cd /c/Users/Solo/Downloads/SDGMart
 git log --oneline -5                              # where main is
 npm test                                          # expect 111 assertions, 0 failures
-node scripts/checks/verify-migrations.js          # expect 23/23 present
+node scripts/checks/verify-migrations.js          # expect 24/24 present
 node scripts/checks/step2-api-checks.js           # expect 29/29, writes nothing
 curl -s https://sdg-mart.com/api/paystack/config  # ⚠️ pk_live_ or pk_test_?
 ```
@@ -119,7 +119,7 @@ cannot pay while it does.
 
 | Script | What it proves | Cost |
 |---|---|---|
-| `verify-migrations.js` | All 23 migrations genuinely applied, by probing for the 50+ objects they create | read-only |
+| `verify-migrations.js` | All 24 migrations genuinely applied, by probing for the 50+ objects they create | read-only |
 | `step2-api-checks.js` | Headers, `.git` lockdown, compression, consent, order validation, enumeration | read-only |
 | `step2b-safe-checks.js` | Index plans, retention, admin flags, Accra dating, the daily-job claim marker | read-only |
 | `step2d-account-checks.js` | Mixed-case sign-in, address tenancy, cancelling others' orders, recurring bounds | ⚠️ one throwaway account |
