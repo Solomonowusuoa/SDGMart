@@ -83,9 +83,28 @@ const LoginPage = ({ onAuth, onGuest }) => {
     try {
       const r = await fetch('/api/auth/forgot-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: form.email }) });
       const data = await r.json();
-      if (data.emailSent) setInfo(`If an account exists for ${form.email}, a reset link has been emailed. Check your inbox.`);
-      else if (data.resetLink) { const open = window.confirm(`If an account exists for ${form.email}, a reset link has been generated:\n\n${data.resetLink}\n\nClick OK to open it now (also logged to server console).`); if (open) window.location.href = data.resetLink; }
-      else setInfo(`If an account exists for ${form.email}, a reset link has been sent.`);
+      // This used to branch on `data.emailSent` and `data.resetLink`. The
+      // server has sent neither since `resetLink` was removed for being an
+      // unauthenticated reset oracle for any address, admin included — so both
+      // branches were dead and every reply fell through to the reassuring
+      // "a reset link has been sent".
+      //
+      // That is the one lie the generic wording was never meant to tell. When
+      // Resend is failing, the server says so with `mailDegraded`, and a
+      // customer told the link is on its way waits for an email that is not
+      // coming — on the only path back into a locked account.
+      //
+      // Reading this flag does NOT reopen A-11: `mailDegraded` is a property of
+      // the mail system, not of this address (server.js, forgotPasswordBody),
+      // so it reads identically for an address that is not registered. Both
+      // branches below keep the "if an account exists" framing for that reason
+      // — neither confirms the address, and the two differ only in what they
+      // say about our own mail.
+      if (data.mailDegraded) {
+        setInfo(`Our email is having trouble sending right now, so a reset link may not arrive. If an account exists for ${form.email} we have tried. Please try again in a few minutes, or message us on WhatsApp and we will get you back in.`);
+      } else {
+        setInfo(`If an account exists for ${form.email}, a reset link has been sent. Check your inbox, and your spam folder.`);
+      }
     } catch (_) { setErr('Network error — please try again'); }
     finally { setLoading(false); }
   };

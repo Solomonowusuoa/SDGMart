@@ -1,5 +1,5 @@
 // OrderTrackingPage — live order tracking for customers.
-// Polls /api/orders/:id/tracking every 8s. Shows:
+// Polls /api/orders/:id/tracking every 25s (D-03). Shows:
 //  - queued (no rider yet) → "Waiting for the 12 PM dispatch / your priority slot"
 //  - assigned + queueAhead > 0 → "Completing another delivery nearby" + position
 //  - assigned + queueAhead === 0 → "You are NEXT — ETA based on distance"
@@ -89,16 +89,37 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage, setCart }) => {
     return () => clearInterval(t);
   }, [poll]);
 
-  // The live map used to live here. It never drew on a cold load: only
-  // MapPicker lazy-loads Leaflet, so arriving from a push notification or a
-  // shared tracking link left window.L undefined and this effect returned at
-  // its first line — and on an order with no pinned location it returned
-  // anyway. Either way the customer got an empty bordered box. That space now
-  // shows what is actually in the order, which is useful on every order.
+  // The live map is back, below the order summary heading, as <LiveTrackMap>.
+  //
+  // It was removed once because it never drew on a cold load: it only checked
+  // `window.L` and returned, so arriving from a push notification or a shared
+  // tracking link — the two normal ways to reach this page — left the customer
+  // an empty bordered box. Both halves of that are fixed now. Leaflet is loaded
+  // by the shared ensureLeafletReady() in MapPicker.jsx rather than assumed,
+  // and the map renders nothing at all when it has nothing to draw, so the
+  // order summary simply moves up instead of sitting under a blank frame.
+
+  // How old the rider's last GPS fix is.
+  //
+  // `watchPosition` is suspended the moment the rider's phone backgrounds or
+  // the screen locks, so a position can be many minutes old while looking
+  // exactly as live as a fresh one. Everything derived from it — the map and
+  // the ETA both — is gated on this, because a confident "ETA ~4 min" computed
+  // from a half-hour-old fix is worse than saying nothing.
+  const FIX_STALE_MS = 10 * 60 * 1000;
+  const fixAgeMs = (data && data.rider && data.rider.lastLocationAt)
+    ? Date.now() - new Date(data.rider.lastLocationAt).getTime()
+    : null;
+  // A negative age means the rider's phone clock runs ahead of ours; treat it
+  // as fresh rather than as thirty years stale.
+  const fixUsable = fixAgeMs != null && fixAgeMs < FIX_STALE_MS;
+  const fixLabel = !fixUsable ? '' :
+    (fixAgeMs < 90000 ? 'Live' : `Updated ${Math.max(1, Math.round(fixAgeMs / 60000))} min ago`);
 
   // Rough straight-line ETA assuming 25 km/h average (Tamale traffic)
   const estimatedMinutes = (() => {
     if (!data || !data.rider || !data.order.location || data.rider.lat == null) return null;
+    if (!fixUsable) return null;
     const R = 6371, toRad = d => d * Math.PI / 180;
     const a = data.rider, b = data.order.location;
     const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
@@ -154,10 +175,12 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage, setCart }) => {
     primaryMsg = `${data.queueAhead} ${data.queueAhead === 1 ? 'delivery' : 'deliveries'} ahead of you`;
     secondaryMsg = `${data.rider?.name || 'Your rider'} is completing another delivery nearby — you're #${data.queuePosition} in their route.`;
   } else if (status === 'assigned' && data.queueAhead === 0) {
-    primaryMsg = `You're next — ETA ~${estimatedMinutes || '?'} min`;
+    // No fix, no number. This used to read "ETA ~? min", which is a worse
+    // answer than simply not mentioning an ETA.
+    primaryMsg = estimatedMinutes ? `You're next — ETA ~${estimatedMinutes} min` : "You're next";
     secondaryMsg = `${data.rider?.name || 'Your rider'} is heading to you now.`;
   } else if (status === 'in_transit') {
-    primaryMsg = `Out for delivery — ETA ~${estimatedMinutes || '?'} min`;
+    primaryMsg = estimatedMinutes ? `Out for delivery — ETA ~${estimatedMinutes} min` : 'Out for delivery';
     secondaryMsg = `${data.rider?.name || 'Your rider'} is on the way.`;
   } else if (status === 'delivered') {
     primaryMsg = 'Delivered';
@@ -175,6 +198,11 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage, setCart }) => {
     { label: 'Delivered', time: o.deliveredAt ? fmtT(o.deliveredAt) : '', done: status === 'delivered' },
   ];
 
+  // Draw the map only with a rider position AND a fresh fix. LiveTrackMap can
+  // cope with a destination alone, but a static pin on the customer's own
+  // address is not tracking and does not earn the space.
+  const showLiveMap = !!(data.rider && data.rider.lat != null && fixUsable && typeof LiveTrackMap !== 'undefined');
+
   const footLbl = { fontFamily: 'var(--f-label)', fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--rd-muted)' };
   const orderItems = Array.isArray(o.items) ? o.items : [];
   return (
@@ -185,6 +213,26 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage, setCart }) => {
       <div style={{ fontFamily: 'var(--f-mono)', fontSize: 11.5, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--rd-muted)' }}>Order {window.orderCode(o.id)}</div>
       <h1 style={{ fontFamily: 'var(--f-display)', fontSize: isMobile ? 28 : 36, fontWeight: 700, letterSpacing: '-.028em', margin: '6px 0 4px', color: accent }}>{primaryMsg}</h1>
       <div style={{ fontSize: 14, color: 'var(--rd-body)', lineHeight: 1.5, maxWidth: 560 }}>{secondaryMsg}</div>
+
+      {/* Rider contact. The server sends a phone number ONLY while this order is
+          the one actually being delivered (in_transit, or assigned and next), so
+          this block appears exactly then and disappears afterwards without the
+          page having to reason about status itself. A shared tracking link keeps
+          working for 7 days after delivery, and a rider's personal number should
+          not still be readable at the end of it. */}
+      {data.rider && data.rider.phone && (
+        <div style={{ marginTop: 16, border: '1px solid var(--rule-2)', background: 'var(--surface-warm)', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={footLbl}>Your rider</div>
+            <div style={{ fontSize: 14, color: 'var(--ink)', marginTop: 3 }}>
+              {data.rider.name}
+              <span style={{ fontFamily: 'var(--f-mono)', fontSize: 12.5, color: 'var(--rd-muted)', marginLeft: 8 }}>{data.rider.phone}</span>
+            </div>
+          </div>
+          <a href={`tel:${data.rider.phone}`}
+            style={{ background: 'var(--ink)', color: '#fff', textDecoration: 'none', padding: '9px 16px', fontFamily: 'var(--f-label)', fontSize: 12, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase' }}>Call rider</a>
+        </div>
+      )}
 
       {/* 4-step status strip */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 1, background: 'var(--rule-2)', border: '1px solid var(--rule-2)', marginTop: 24 }}>
@@ -220,6 +268,19 @@ const OrderTrackingPage = ({ orderId, currentUser, setPage, setCart }) => {
         </div>
       ) : (
         <div style={{ marginTop: 18 }}>
+          {/* Live rider position. Rendered only when there is a fresh fix to
+              draw — the server sends coordinates just for the order actually
+              being delivered, and a stale fix is filtered out above. When there
+              is nothing to show this renders nothing and the order summary
+              simply moves up, rather than leaving the empty bordered box that
+              got the previous map deleted. */}
+          {showLiveMap && (
+            <div style={{ marginBottom: 18 }}>
+              <LiveTrackMap rider={data.rider} destination={o.location} height={isMobile ? 200 : 240}
+                caption={`${data.rider.name}'s position, updated as they travel.`}
+                statusLabel={fixLabel} />
+            </div>
+          )}
           <div style={{ border: '1px solid var(--rule-2)', background: '#fff' }}>
             <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--rule-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
               <span style={footLbl}>Your order</span>

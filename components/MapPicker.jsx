@@ -26,6 +26,64 @@ function sdgGeocoder() {
   };
 }
 
+// ── Leaflet loader ────────────────────────────────────────────────────────
+// ONE loader, shared by every map on the site.
+//
+// This used to be copy-pasted per component, and the copies were not in the
+// same places as the maps. The tracking page's map only ever checked
+// `window.L` and gave up if it was missing — it never injected anything — so it
+// drew only for someone who had already opened the checkout picker earlier in
+// the same page session. Arriving cold, which is how that page is actually
+// reached (a push notification, a shared tracking link), left `window.L`
+// undefined and the customer got an empty bordered box. The map was removed
+// rather than fixed.
+//
+// So: any map component calls this and waits on the promise. Nothing assumes
+// Leaflet is already there, and there is no second copy to drift.
+let _leafletPromise = null;
+function ensureLeafletReady({ timeoutMs = 12000 } = {}) {
+  if (typeof window !== 'undefined' && window.L) return Promise.resolve(true);
+  if (_leafletPromise) return _leafletPromise;
+
+  _leafletPromise = new Promise((resolve) => {
+    if (!document.getElementById('leaflet-css')) {
+      const link = document.createElement('link');
+      link.id = 'leaflet-css';
+      link.rel = 'stylesheet';
+      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      document.head.appendChild(link);
+    }
+    let script = document.getElementById('leaflet-js');
+    if (!script) {
+      script = document.createElement('script');
+      script.id = 'leaflet-js';
+      script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+      document.head.appendChild(script);
+    }
+
+    // Resolve on the real load event, but keep polling too: the tag may already
+    // have been in the document from an earlier mount, in which case its load
+    // event has been and gone and a listener added now would never fire.
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      clearInterval(poll);
+      clearTimeout(bail);
+      // A failed load must not be cached as a permanent "no". Tamale mobile
+      // connections drop; the next mount should get a fresh attempt.
+      if (!ok) _leafletPromise = null;
+      resolve(ok);
+    };
+    const poll = setInterval(() => { if (window.L) finish(true); }, 60);
+    const bail = setTimeout(() => finish(!!window.L), timeoutMs);
+    script.addEventListener('load', () => finish(!!window.L));
+    script.addEventListener('error', () => finish(false));
+    if (window.L) finish(true);
+  });
+  return _leafletPromise;
+}
+
 // MapPicker — Leaflet location picker (LocationIQ or OpenStreetMap).
 // Props: value={lat,lng}|null, onChange({lat,lng,address}), height=240, allowGeolocate=true
 const MapPicker = ({ value, onChange, height = 240, allowGeolocate = true, defaultCenter }) => {
@@ -123,22 +181,9 @@ const MapPicker = ({ value, onChange, height = 240, allowGeolocate = true, defau
 
   // Lazy-load Leaflet (CSS + JS) the first time a map is actually shown.
   // Keeps it out of the initial page load for the ~majority who never open it.
-  const ensureLeaflet = () => {
-    if (window.L) return;
-    if (!document.getElementById('leaflet-css')) {
-      const link = document.createElement('link');
-      link.id = 'leaflet-css';
-      link.rel = 'stylesheet';
-      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-      document.head.appendChild(link);
-    }
-    if (!document.getElementById('leaflet-js')) {
-      const s = document.createElement('script');
-      s.id = 'leaflet-js';
-      s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-      document.head.appendChild(s);
-    }
-  };
+  // The injection itself lives in ensureLeafletReady above — this component
+  // keeps its existing poll-until-ready init below, so behaviour is unchanged.
+  const ensureLeaflet = () => { ensureLeafletReady(); };
 
   // Init map once Leaflet is ready
   React.useEffect(() => {
@@ -275,22 +320,7 @@ const DestinationMap = ({ location, height = 180 }) => {
   React.useEffect(() => {
     if (!ref.current || !location || location.lat == null) return;
     let cancelled = false;
-    // Reuse MapPicker's Leaflet loader by triggering the same CDN injection
-    const ensure = () => {
-      if (window.L) return;
-      if (!document.getElementById('leaflet-css')) {
-        const link = document.createElement('link');
-        link.id = 'leaflet-css'; link.rel = 'stylesheet';
-        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-        document.head.appendChild(link);
-      }
-      if (!document.getElementById('leaflet-js')) {
-        const s = document.createElement('script');
-        s.id = 'leaflet-js'; s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-        document.head.appendChild(s);
-      }
-    };
-    ensure();
+    ensureLeafletReady();
     const init = () => {
       if (cancelled) return;
       if (!window.L) { setTimeout(init, 100); return; }
@@ -308,4 +338,107 @@ const DestinationMap = ({ location, height = 180 }) => {
   return <div ref={ref} style={{ height, width: '100%', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--cream-dark)' }} />;
 };
 
-Object.assign(window, { MapPicker, DestinationMap });
+// ── Live rider tracking map ───────────────────────────────────────────────
+// The customer's view while an order is on its way: their destination, and the
+// rider moving towards it.
+//
+// Three things this gets right that the removed version did not:
+//
+//   1. COLD LOAD. It waits on ensureLeafletReady() rather than testing
+//      `window.L` and giving up. This page is normally reached from a push
+//      notification or a shared link, with no map ever opened before it.
+//   2. IT DOES NOT RE-CREATE ITSELF. The map is built once; later polls only
+//      move the rider marker. Rebuilding every 25s would throw away the
+//      customer's pan and zoom and flash the tiles each time.
+//   3. IT NEVER RENDERS AN EMPTY BOX. If Leaflet cannot load, or there is
+//      nothing to plot, it renders nothing at all and the page falls back to
+//      the order summary — which is what made the old empty bordered box such
+//      a bad failure.
+const LiveTrackMap = ({ rider, destination, height = 220, caption = '', statusLabel = '' }) => {
+  const ref = React.useRef(null);
+  const mapRef = React.useRef(null);
+  const riderMarkerRef = React.useRef(null);
+  const [failed, setFailed] = React.useState(false);
+
+  const hasRider = !!(rider && rider.lat != null && rider.lng != null);
+  const hasDest = !!(destination && destination.lat != null && destination.lng != null);
+
+  // The async loader resolves a tick or two after mount, by which time props
+  // may have moved on. Read them through a ref so the map is built from what is
+  // current, not from the render that happened to kick the load off.
+  const latest = React.useRef({ rider, destination });
+  latest.current = { rider, destination };
+
+  React.useEffect(() => {
+    if (!ref.current || (!hasRider && !hasDest)) return;
+    let cancelled = false;
+    ensureLeafletReady().then((ok) => {
+      if (cancelled) return;
+      if (!ok) { setFailed(true); return; }
+      if (mapRef.current || !ref.current) return;
+      const L = window.L;
+      const { rider: r, destination: d } = latest.current;
+      const map = L.map(ref.current, { zoomControl: true, attributionControl: false });
+      mapRef.current = map;
+      sdgMapTileLayer(L).addTo(map);
+
+      const pts = [];
+      if (d && d.lat != null) {
+        L.marker([d.lat, d.lng], {
+          icon: L.divIcon({
+            className: '', iconSize: [18, 18], iconAnchor: [9, 9],
+            html: '<div style="width:14px;height:14px;background:#1a1a1a;border:3px solid #fff;box-shadow:0 0 0 1px #1a1a1a"></div>',
+          }),
+        }).addTo(map);
+        pts.push([d.lat, d.lng]);
+      }
+      if (r && r.lat != null) {
+        riderMarkerRef.current = L.marker([r.lat, r.lng], {
+          icon: L.divIcon({
+            className: '', iconSize: [22, 22], iconAnchor: [11, 11],
+            html: '<div style="width:16px;height:16px;border-radius:50%;background:#c9591f;border:3px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.25)"></div>',
+          }),
+        }).addTo(map);
+        pts.push([r.lat, r.lng]);
+      }
+
+      // Frame both on the FIRST draw only. Re-fitting on every poll would yank
+      // the view back each time the customer tried to look around.
+      if (pts.length > 1) map.fitBounds(pts, { padding: [34, 34], maxZoom: 16 });
+      else if (pts.length === 1) map.setView(pts[0], 15);
+
+      // Leaflet measures its container on creation; inside a panel that is
+      // still settling that measurement is wrong and the tiles come out grey.
+      setTimeout(() => { if (mapRef.current) mapRef.current.invalidateSize(); }, 200);
+    });
+    return () => {
+      cancelled = true;
+      if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; riderMarkerRef.current = null; }
+    };
+    // Built once. Movement is handled by the effect below.
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Move the rider, do not rebuild the map.
+  React.useEffect(() => {
+    if (!mapRef.current || !riderMarkerRef.current || !hasRider) return;
+    try { riderMarkerRef.current.setLatLng([rider.lat, rider.lng]); } catch (_) {}
+  }, [hasRider, rider && rider.lat, rider && rider.lng]);
+
+  // Caption included, deliberately. Held by the page instead, it outlived a
+  // failed load and labelled a map that had not rendered — "Yakubu's position,
+  // updated as they travel. LIVE" sitting above no map at all.
+  if ((!hasRider && !hasDest) || failed) return null;
+  return (
+    <div>
+      <div ref={ref} style={{ height, width: '100%', border: '1px solid var(--rule-2)', background: 'var(--surface-warm)' }} />
+      {(caption || statusLabel) && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', padding: '8px 2px 0' }}>
+          <span style={{ fontSize: 11.5, color: 'var(--rd-muted)' }}>{caption}</span>
+          <span style={{ fontFamily: 'var(--f-mono)', fontSize: 11, letterSpacing: '.04em', textTransform: 'uppercase', color: statusLabel === 'Live' ? 'var(--accent)' : 'var(--rd-faint)' }}>{statusLabel}</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
+Object.assign(window, { MapPicker, DestinationMap, LiveTrackMap, ensureLeafletReady });

@@ -382,6 +382,36 @@ to reason about. Worth it: they are the only way to stop an exploit in minutes.
 
 ---
 
+### Rider position on the tracking page — restored (2026-09-05)
+
+**Decision.** The live map is back, gated on the age of the rider's GPS fix.
+
+**Why it was gone.** It never worked on a cold load. It only tested `window.L`
+and returned; nothing on that page ever injected Leaflet. Reached the normal way
+— a push notification, a shared tracking link — it drew an empty bordered box.
+
+**What is different now.** One shared `ensureLeafletReady()` in `MapPicker.jsx`
+does the injecting, and every map waits on its promise, so there is no longer a
+copy of the loader in some components and not others. `LiveTrackMap` builds the
+map once and afterwards only moves the rider marker, so a poll cannot reset the
+customer's pan and zoom. When there is nothing to draw — no fix, a fix older
+than 10 minutes, or Leaflet unreachable — it renders **nothing**, caption
+included, and the order summary moves up. The empty box cannot come back.
+
+**The fix age is surfaced**, as the open question asked: "Live" under 90
+seconds, "Updated N min ago" beyond it, and past 10 minutes the map is not drawn
+and the ETA is not claimed. `watchPosition` is suspended when the rider's phone
+backgrounds or locks, so this distinction is the difference between a real
+position and a plausible-looking old one.
+
+**Scope.** The server sends coordinates and the rider's phone number only for
+the order actually being delivered (`in_transit`, or `assigned` and next), not
+to everyone queued behind it. Polling is unchanged at 25s — the rider only pings
+every ~15s and the response is cached 5s, so a faster poll would mostly buy
+duplicate reads.
+
+---
+
 ## Open questions
 
 Decisions not yet made, recorded so they are not mistaken for settled.
@@ -390,6 +420,5 @@ Decisions not yet made, recorded so they are not mistaken for settled.
 |---|---|
 | **Drop `exec_sql` between migrations?** | Standing arbitrary-SQL power in production, revoked from all roles but the service key. Only exists for `migrate.js`. |
 | **2FA on the admin account** | The real answer to audit H-04. Worth deciding *first* whether admin should be one shared account at all — 2FA on a shared login means sharing the seed, which gives up most of the benefit. |
-| **Rider position on the tracking page** | Removed when the map turned out never to have worked on a cold load. If it returns it should show the fix age: `watchPosition` stops when the phone backgrounds, and a stale position currently looks exactly as live as a fresh one. |
 | **Staging environment (G-01)** | Blocks the last migration-rollback checks. The guide is correct as of v97; it needs a Supabase project created by hand. |
 | **When to scale out** | See §4. Needs rate limits and caches in Postgres first. |

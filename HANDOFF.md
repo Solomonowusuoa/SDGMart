@@ -9,11 +9,17 @@ A same-day grocery web app for Tamale, Ghana. This doc lets a new chat (or you) 
 
 ---
 
-## ⭐ LATEST STATE — resume here (updated 2026-09-05)
+## ⭐ LATEST STATE — resume here (updated 2026-09-06)
+
+- **(2026-09-06) Three long-running items closed on Render, recorded here because none of them is visible in the code.** All three were done by the owner in the dashboard; the repo already supported every one of them, which is exactly why they could sit undone for weeks without a test failing.
+
+  - **✅ PAYSTACK IS ON LIVE KEYS.** Swapped by the owner 2026-09-06, after three sessions on `pk_test_`. Re-confirm any time with `curl -s https://sdg-mart.com/api/paystack/config` — it must report a `pk_live_` key. **Every payment test from here moves real money.**
+
+  - **✅ `TRACK_TOKEN_SECRET` IS SET ON RENDER.** Guest tracking tokens no longer derive from `SUPABASE_SERVICE_KEY` (`server.js:2657`), so rotating the service key no longer invalidates every saved tracking link and every code printed on a receipt. The startup warning at `server.js:2658` is the check: if it is absent from the boot log, the variable is set. ⚠️ **Tokens minted before the swap are now invalid** — `orderTrackToken()` is a deterministic HMAC over the secret, so any link a guest saved earlier returns 401. Nothing to fix; just do not read old-link reports as a bug. This closes the item still listed as outstanding in the v95 entry and in the §11 deferred backlog below; both are left as written.
+
+  - **✅ THE GHS 50-PER-1,000 TIER IS GONE, AND THE CODE HAS SAID SO SINCE 2026-09-03.** Verified this session: `squads.recordSpend` hardcodes `earned = 0` (`database.js:520`), checkout promises `loyaltyPending: 0` (`server.js:1472`), and the leaderboard prize is a deliberate no-op (`database.js:1904`). **`lifetime_spent` is still maintained** — it is the honest spend record and reporting wants it; it just no longer pays. **⚠️ The v96 entry below still says a full-squad member earns "~10% back (5% tier + 5% squad)" and calls it an open pricing decision. That line is superseded and wrong.** The real figure is **5%, from the squad goal alone**, and the decision was made, not deferred. The v96 text is kept verbatim per the convention in this file — read this bullet, not that one.
 
 - **(2026-09-05) v98 — the catalogue got its photos, its missing products, and an editable category list; plus the Supabase advisors triaged.** All pushed. `npm test` **80 → 111 assertions** (`tests/categories.test.js` is new). Shop is **133 products, 125 with a photo, 15 categories**.
-
-  - **⚠️ PAYSTACK IS STILL ON TEST KEYS.** Unchanged for three sessions and still the single most urgent thing. Real customers cannot pay. Swap `PAYSTACK_PUBLIC_KEY`/`PAYSTACK_SECRET_KEY` back to the `pk_live_`/`sk_live_` pair on Render and confirm with `curl -s https://sdg-mart.com/api/paystack/config`.
 
   - **⭐ RECOVERING FROM A DEAD CATALOGUE RESTORED THE PRODUCTS BUT NOT THE CATEGORIES.** The owner reported every product present but the category strip and the "Shop by category" tiles gone. This was a gap in the v97 fix, not a new bug: `hooks.js` now defaults `window.CATEGORIES` to `[]` so a failed `/data/products.js` cannot crash the app, and `refreshCatalog()` then repopulated **products only** — `/api/catalog` returned `{products, showFreshness, showStock}` and nothing else. So a device whose catalogue script never loaded ended up with 132 products and zero categories: everything rendered except the way to browse it. `/api/catalog` now carries categories, neighbourhoods, essentials, top-ids and terms version, and `App.jsx` restores each one it actually receives. The lesson worth keeping: **a recovery path has to carry everything the thing it replaces carried**, or it converts a total failure into a subtle one, which is harder to spot.
 
