@@ -1069,8 +1069,7 @@ const orders = {
   async getWithTracking(orderId) {
     const o = await orders.get(orderId);
     if (!o) return null;
-    let rider = null;
-    if (o.riderId) rider = await riders.get(o.riderId);
+    const row = o.riderId ? await riders.get(o.riderId) : null;
     // Position in this rider's route (1 = next, 2 = after that, etc.)
     let queuePosition = null;
     if (o.riderId && o.status === 'assigned') {
@@ -1083,7 +1082,35 @@ const orders = {
         .lt('created_at', o.createdAt);
       queuePosition = (count || 0) + 1;
     }
-    return { order: o, rider, queuePosition };
+    // How many deliveries come BEFORE this one. The tracking page has always
+    // read `queueAhead`; only `queuePosition` was ever sent, so `undefined > 0`
+    // and `undefined === 0` were both false and an assigned order fell through
+    // to the fallback branch — the customer's heading read the raw word
+    // "assigned", and the "You are next!" notification could never fire.
+    const queueAhead = queuePosition == null ? null : queuePosition - 1;
+
+    // Rider details are LIVE only while this order is the one actually being
+    // delivered. A rider's position and phone number should not be readable by
+    // every customer sitting in their queue all afternoon, and a dot six stops
+    // away is misleading rather than useful. The queueAhead > 0 branch shows a
+    // queue position, never an ETA, so withholding coordinates there costs the
+    // page nothing.
+    const live = o.status === 'in_transit' || (o.status === 'assigned' && queueAhead === 0);
+    // NEVER spread the rider row. `riders.get` is `select('*')`, so it carries
+    // password_hash — and this response is reachable with nothing but a signed
+    // ?t= token, no sign-in at all. Project only what the page needs.
+    const rider = row ? {
+      name: row.name,
+      phone: live ? (row.phone || null) : null,
+      lat: live ? row.lat : null,
+      lng: live ? row.lng : null,
+      // The fix age. `watchPosition` stops when the rider's phone backgrounds
+      // or locks, so without this a stale position looks exactly as live as a
+      // fresh one (DECISIONS.md, "Rider position on the tracking page").
+      lastLocationAt: live ? (row.lastLocationAt || null) : null,
+    } : null;
+
+    return { order: o, rider, queuePosition, queueAhead };
   },
   // `order` and `onlineRiders` may be passed in by a caller that already has
   // them, which is what turns assignQueuedForToday from 3 round-trips per order
