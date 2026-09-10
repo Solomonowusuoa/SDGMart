@@ -150,7 +150,20 @@ const app = express();
 // outside this repo and does not cover the onrender.com origin.
 app.use(compression());
 const PORT = process.env.PORT || 3000;
-app.set('trust proxy', 1);
+// Only accept forwarding headers from proxies we explicitly operate or trust.
+// A numeric setting (for example `1`) makes a public origin vulnerable to a
+// forged X-Forwarded-For header, because any request arriving through one hop
+// can choose its apparent client IP. `req.ip` below uses this allowlist.
+//
+// Local development needs only loopback. Production must set
+// TRUSTED_PROXY_CIDRS to the actual, comma-separated IPs/CIDRs of every
+// trusted proxy hop; see STAGING-SETUP.md before enabling it.
+const TRUSTED_PROXY_CIDRS = String(process.env.TRUSTED_PROXY_CIDRS || 'loopback')
+  .split(',').map((value) => value.trim()).filter(Boolean);
+app.set('trust proxy', TRUSTED_PROXY_CIDRS);
+if (!process.env.TRUSTED_PROXY_CIDRS && process.env.NODE_ENV === 'production') {
+  console.warn('TRUSTED_PROXY_CIDRS is unset: client-IP rate limits use the immediate peer until trusted proxies are configured.');
+}
 // CORS locked to our known web origins. Same-origin app calls and
 // server-to-server requests (no Origin header — curl, webhooks) are allowed.
 const ALLOWED_ORIGINS = ['https://sdg-mart.com', 'https://www.sdg-mart.com', 'https://sdgmart.onrender.com'];
@@ -272,9 +285,11 @@ function customerOnly(req, res, next) {
   next();
 }
 function clientIp(req) {
-  const xff = req.headers['x-forwarded-for'];
-  if (xff) return String(xff).split(',')[0].trim();
-  return req.ip || req.socket.remoteAddress || 'unknown';
+  // Express evaluates X-Forwarded-For only after the `trust proxy` allowlist
+  // above has verified each proxy hop. Never parse this user-controlled header
+  // directly for a rate-limit identity.
+  if (req.ip) return req.ip;
+  return req.socket.remoteAddress || 'unknown';
 }
 
 // Per-IP throttle for endpoints that accept anonymous writes (audit A-15).
@@ -1361,12 +1376,16 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
       compensate.push(() => db.stock.restock(itemsList));
     } catch (e) {
       if (e && e.status) throw e;
-      // Own-stock mode is on but we cannot account for stock. Let the order
-      // through rather than refusing a real customer over bookkeeping, and
-      // make sure somebody knows the count is now wrong.
-      console.error('STOCK CONSUME FAILED, order proceeding unaccounted:', e.message);
-      alertAdmins('stock-consume-failed', '⚠️ Stock not deducted',
-        'Own-stock mode is on but stock could not be deducted for a cash order. Inventory counts will drift until this is fixed.');
+      // We cannot prove this stock was consumed. Do not create an unaccounted
+      // cash order; restore every earlier loyalty/discount reservation so the
+      // customer can retry without losing value.
+      for (const undo of compensate.reverse()) {
+        try { await undo(); } catch (u) { console.error('COMPENSATION FAILED after stock consume error:', u.message); }
+      }
+      console.error('STOCK CONSUME FAILED, cash order refused:', e.message);
+      await alertAdmins('stock-consume-failed', '⚠️ Cash order stopped: stock not confirmed',
+        'Own-stock mode is on but stock consumption failed. No cash order was created; investigate inventory before retrying.');
+      throw new HttpError(503, 'We could not confirm stock just now. Please try again in a moment. Nothing has been charged.');
     }
   }
 

@@ -22,6 +22,12 @@ const availableFor = (id) => Math.max((shelf[id] || 0) - heldFor(id), 0);
 let migrationPresent = true;
 const PENDING = {};   // reference -> { draft } for the webhook test in section F
 const LOGGED = [];    // everything written to error_logs, for section G
+const RATE_KEYS = []; // rate-limit identities, for the trusted-proxy regression
+let stockConsumeFailure = null;
+const ACCOUNT = {
+  id: 1, role: 'admin', mustChangePassword: false, name: 'A', email: 'a@b.c',
+  firstOrderDone: true, loyaltyBalance: 0, discountPending: false,
+};
 
 const RPC = {
   stock_available: ({ p_ids }) => {
@@ -47,12 +53,12 @@ const SAMPLE = [
   { id: 2, name: 'Cooking Oil 1L', category: 'Cooking Oil', price: 10, unit: '1L', stock: 5, bestseller: false, img: null },
 ];
 let created = [];
-const CONFIG = { deduct_stock: true };
+const CONFIG = { deduct_stock: true, loyalty_redemption_enabled: true };
 
 const noop = new Proxy(function () {}, { get: (t, k) => (k === 'then' ? undefined : noop), apply: () => Promise.resolve(null) });
 const stubDb = {
   ADMIN_EMAIL: 'a@b.c',
-  rateCheck: () => ({ allowed: true }),
+  rateCheck: (key) => { RATE_KEYS.push(key); return { allowed: true }; },
   rateClear: () => {},
   bootstrap: async () => {},
   checkSchema: async () => ({ ok: true, missing: [] }),
@@ -76,9 +82,27 @@ const stubDb = {
   promotions: { listActive: async () => [], activeMap: async () => ({}) },
   orders: { create: async (o) => { const row = { id: created.length + 1, ...o }; created.push(row); return row; }, findByPaystackRef: async () => null, list: async () => [], get: async () => null },
   sessions: { get: async () => ({ userId: 1, userType: 'user' }), create: async () => 'tok', destroy: async () => {} },
-  users: { get: async () => ({ id: 1, role: 'admin', mustChangePassword: false, name: 'A', email: 'a@b.c', firstOrderDone: true, loyaltyBalance: 0, discountPending: false }) },
+  users: { get: async () => ({ ...ACCOUNT }) },
   errorLog: { record: async (r) => { LOGGED.push(r); } },
-  squads: noop, addresses: noop, carts: noop, stats: noop, searchLog: noop, pushSubs: noop,
+  squads: {
+    consumeDiscount: async () => {
+      if (!ACCOUNT.discountPending) return false;
+      ACCOUNT.discountPending = false;
+      return true;
+    },
+    restoreDiscount: async () => { ACCOUNT.discountPending = true; },
+    consumeLoyalty: async (_userId, amount) => {
+      const used = Math.min(ACCOUNT.loyaltyBalance, Number(amount) || 0);
+      ACCOUNT.loyaltyBalance -= used;
+      return used;
+    },
+    addLoyalty: async (_userId, amount) => { ACCOUNT.loyaltyBalance += Number(amount) || 0; },
+    claimFirstOrder: async () => false,
+    releaseFirstOrder: async () => {},
+    claimBirthdayGift: async () => false,
+    releaseBirthdayGift: async () => {},
+  },
+  addresses: noop, carts: noop, stats: noop, searchLog: noop, pushSubs: noop,
   dataRequests: noop, issueReports: noop, productRequests: noop, recurring: noop, metrics: noop,
   leaderboard: noop, reviews: noop, riders: noop, retention: { sweep: async () => ({}) },
   // Section F drives the webhook, which looks a draft up by reference.
@@ -117,7 +141,11 @@ const realStock = {
   },
   ready: async () => { try { RPC.stock_available({ p_ids: [] }); return true; } catch (_) { return false; } },
   available: async (ids) => { const out = {}; for (const r of RPC.stock_available({ p_ids: ids.map(Number) })) out[r.product_id] = { onShelf: r.on_shelf, held: r.held, available: r.available }; return out; },
-  consume: async (items) => { const l = realStock.lines(items); return l.length ? RPC.consume_stock({ p_items: l }) : { ok: true }; },
+  consume: async (items) => {
+    if (stockConsumeFailure) throw stockConsumeFailure;
+    const l = realStock.lines(items);
+    return l.length ? RPC.consume_stock({ p_items: l }) : { ok: true };
+  },
   restock: async (items) => { const l = realStock.lines(items); return l.length ? RPC.restock_items({ p_items: l }) : { ok: true }; },
   hold: async () => ({ ok: true }), release: async () => 0, commitHold: async () => ({ ok: true, lines: 1 }), expireHolds: async () => 0,
 };
@@ -128,6 +156,9 @@ require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: s
 // A fake Paystack secret, set BEFORE server.js reads it, so section F can sign a
 // webhook the way Paystack does. Nothing here talks to Paystack.
 process.env.PAYSTACK_SECRET_KEY = 'sk_test_orderflow_fake';
+// The test process is not a trusted proxy, so a header supplied by a client
+// must not choose the rate-limit identity.
+process.env.TRUSTED_PROXY_CIDRS = '203.0.113.0/24';
 process.env.PORT = process.env.PORT || '4010';
 require(path.join(ROOT, 'server.js'));
 
@@ -172,28 +203,45 @@ setTimeout(async () => {
   check('shelf untouched', shelf[1], 5);
   holds = [];
 
-  console.log('\n=== D. With own-stock mode OFF, stock is ignored entirely ===');
+  console.log('\n=== D. A stock-accounting failure refuses cash and restores customer value ===');
+  shelf = { 1: 5 }; created = []; LOGGED.length = 0;
+  ACCOUNT.loyaltyBalance = 7;
+  ACCOUNT.discountPending = true;
+  stockConsumeFailure = new Error('stock RPC unavailable');
+  const r4 = await post('/api/orders', { ...order([{ id: 1, qty: 1 }]), loyaltyUsed: 5 });
+  stockConsumeFailure = null;
+  check('retryable stock failure returned', r4.status, 503);
+  check('no cash order row created', created.length, 0);
+  check('shelf untouched when consumption is unconfirmed', shelf[1], 5);
+  check('consumed loyalty is restored', ACCOUNT.loyaltyBalance, 7);
+  check('consumed discount reservation is restored', ACCOUNT.discountPending, true);
+  check('admins are alerted that the cash order was stopped',
+    LOGGED.filter((l) => /ALERT stock-consume-failed/.test(l.message || '')).length, 1);
+  ACCOUNT.loyaltyBalance = 0;
+  ACCOUNT.discountPending = false;
+
+  console.log('\n=== E. With own-stock mode OFF, stock is ignored entirely ===');
   CONFIG.deduct_stock = false;
   shelf = { 1: 0 };
-  const r4 = await post('/api/orders', order([{ id: 1, qty: 3 }]));
-  check('sold from zero stock (supplier model)', r4.status, 201);
+  const r5 = await post('/api/orders', order([{ id: 1, qty: 3 }]));
+  check('sold from zero stock (supplier model)', r5.status, 201);
   check('shelf not touched', shelf[1], 0);
   CONFIG.deduct_stock = true;
 
-  console.log('\n=== E. The toggle refuses to turn on without the migration ===');
+  console.log('\n=== F. The toggle refuses to turn on without the migration ===');
   CONFIG.deduct_stock = false;
   migrationPresent = false;
-  const r5 = await post('/api/admin/settings', { deductStock: true });
-  check('refused', r5.status, 409);
-  check('says which migration', /stock-holds/.test(r5.body.error || ''), true);
+  const r6 = await post('/api/admin/settings', { deductStock: true });
+  check('refused', r6.status, 409);
+  check('says which migration', /stock-holds/.test(r6.body.error || ''), true);
   check('toggle still off', !!CONFIG.deduct_stock, false);
 
   migrationPresent = true;
-  const r6 = await post('/api/admin/settings', { deductStock: true });
-  check('accepted once the migration is present', r6.status, 200);
+  const r7 = await post('/api/admin/settings', { deductStock: true });
+  check('accepted once the migration is present', r7.status, 200);
   check('toggle now on', !!CONFIG.deduct_stock, true);
 
-  console.log('\n=== F. An ALREADY-PAID order still completes while ordering is off (G-03) ===');
+  console.log('\n=== G. An ALREADY-PAID order still completes while ordering is off (G-03) ===');
   // The kill switch must stop NEW orders without stranding money already taken.
   // The guard is `!extra.paid && !switchOn('ordering_enabled')`, and only the
   // Paystack verify/webhook paths set paid — so this cannot be reached from
@@ -232,7 +280,7 @@ setTimeout(async () => {
 
   CONFIG.ordering_enabled = true;
 
-  console.log('\n=== G. A charge that does not match its order raises the alarm (C-07) ===');
+  console.log('\n=== H. A charge that does not match its order raises the alarm (C-07) ===');
   // "Zero PAYMENT MISMATCH rows in production" only means something if the
   // detector actually fires. This proves both directions. The webhook path is
   // used because it is the one that had NO amount check at all until this
@@ -278,6 +326,20 @@ setTimeout(async () => {
     /charged GHS 50\.00.*totals GHS 30\.00/.test((raised[0] || {}).message || ''), true);
   check('it is attributed to the webhook path, not verify',
     (raised[0] || {}).path, '/api/paystack/webhook');
+
+  console.log('\n=== I. An untrusted X-Forwarded-For cannot choose a rate-limit bucket ===');
+  RATE_KEYS.length = 0;
+  const searchLog = async (ip) => fetch(BASE + '/api/search/log', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip },
+    body: JSON.stringify({ query: 'rice' }),
+  });
+  const [ipOne, ipTwo] = await Promise.all([searchLog('198.51.100.11'), searchLog('198.51.100.12')]);
+  const searchBuckets = RATE_KEYS.filter((key) => key.startsWith('searchlog:'));
+  check('both requests are accepted', [ipOne.status, ipTwo.status], [200, 200]);
+  check('the forged headers share the server-derived bucket', searchBuckets[0], searchBuckets[1]);
+  check('neither forged address is used as the identity',
+    searchBuckets.some((key) => /198\.51\.100\.(11|12)/.test(key)), false);
 
   console.log('');
   // Shut the listener down rather than exiting under it.

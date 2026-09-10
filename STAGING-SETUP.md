@@ -196,6 +196,30 @@ To confirm the separation is real, compare the project ref in Render → Environ
 `SUPABASE_URL` against your local `.env`. **They should now differ.** If they still match, `.env`
 didn't save.
 
+## Production proxy configuration for client-IP rate limits
+
+Before deploying the rate-limit update, configure the production service's
+`TRUSTED_PROXY_CIDRS` environment variable. Set it to a comma-separated list of
+the exact IP addresses or CIDR ranges for **every reverse-proxy hop** between a
+visitor and this Node process. Use the current published ranges from each
+provider you operate (for example, your CDN/WAF and hosting ingress); do not
+guess or copy a stale list.
+
+Do **not** use a hop count, `*`, or `0.0.0.0/0`. A trusted proxy must overwrite
+forwarding headers from clients, and the public origin must reject direct
+traffic that can bypass that proxy. Otherwise an attacker can send a request to
+the origin with a forged `X-Forwarded-For` value and evade per-IP limits.
+
+If the hosting platform cannot restrict or authenticate direct-origin traffic,
+leave `TRUSTED_PROXY_CIDRS` unset. The app will then safely rate-limit the
+immediate peer instead of trusting a client-provided address; this is less
+precise, so arrange origin protection before enabling per-visitor limits.
+
+After setting the variable, verify from the production proxy path that normal
+visitors receive distinct rate-limit buckets, and verify that the direct origin
+is inaccessible or cannot influence the forwarded-client header. Keep webhook
+providers on a controlled, documented route while making that change.
+
 ---
 
 ## Step 7 — Test the fixes that couldn't be tested before
