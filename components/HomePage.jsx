@@ -241,6 +241,7 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
     'Baking & Sugar': '/icons/categories/baking.jpg', 'Coffee, Tea & Cocoa': '/icons/categories/coffee.jpg',
     'Fruits & Vegetables': '/icons/categories/fruits-veg.jpg', 'Staples (Tubers & Fufu)': '/icons/categories/staples.jpg',
     'Meat, Poultry & Seafood': '/icons/categories/meat.jpg', 'Toiletries & Personal Care': '/icons/categories/toiletries.jpg',
+    'Household & Cleaning': '/icons/categories/household-cleaning.jpg',
   };
   const DARK_STRIPES = 'repeating-linear-gradient(135deg,#1c1c19 0 8px,#141412 8px 16px)';
 
