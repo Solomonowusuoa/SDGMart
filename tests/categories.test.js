@@ -14,9 +14,9 @@ const origLoad = Module._load;
 const path = require('path');
 const ROOT = path.join(__dirname, '..');
 
-const DEFAULTS = ['Rice & Grains', 'Cooking Oil', 'Drinks', 'Toiletries & Personal Care'];
+const DEFAULTS = ['Rice & Noodles', 'Cooking Oil', 'Drinks', 'Toiletries & Personal Care'];
 let PRODUCTS = [
-  { id: 1, name: 'Rice 5kg', category: 'Rice & Grains', price: 20, stock: 10 },
+  { id: 1, name: 'Rice 5kg', category: 'Rice & Noodles', price: 20, stock: 10 },
   { id: 2, name: 'Frytol 1L', category: 'Cooking Oil', price: 30, stock: 10 },
   { id: 3, name: 'Coke 1L', category: 'Drinks', price: 10, stock: 10 },
   { id: 4, name: 'Fanta 1L', category: 'Drinks', price: 10, stock: 10 },
@@ -118,17 +118,17 @@ setTimeout(async () => {
 
   console.log('\n=== B. Adding and reordering ===');
   const b = await call('POST', '/api/admin/categories', {
-    categories: ['Drinks', 'Rice & Grains', 'Cooking Oil', 'Toiletries & Personal Care', 'Household & Cleaning'],
+    categories: ['Drinks', 'Rice & Noodles', 'Cooking Oil', 'Toiletries & Personal Care', 'Household & Cleaning'],
   });
   check('accepted', b.status, 200);
   check('order is kept as sent', await catNames(),
-    ['Drinks', 'Rice & Grains', 'Cooking Oil', 'Toiletries & Personal Care', 'Household & Cleaning']);
+    ['Drinks', 'Rice & Noodles', 'Cooking Oil', 'Toiletries & Personal Care', 'Household & Cleaning']);
   const cat = await call('GET', '/api/catalog');
   check('the shopper catalogue serves the saved list', cat.body.categories[0], 'Drinks');
 
   console.log('\n=== C. Removing a category that still holds products is REFUSED ===');
   const c = await call('POST', '/api/admin/categories', {
-    categories: ['Rice & Grains', 'Cooking Oil', 'Toiletries & Personal Care', 'Household & Cleaning'],
+    categories: ['Rice & Noodles', 'Cooking Oil', 'Toiletries & Personal Care', 'Household & Cleaning'],
   });
   check('409, not a silent orphaning', c.status, 409);
   check('names the category and the count', /Drinks.*2 products/.test(c.body.error || ''), true);
@@ -137,14 +137,14 @@ setTimeout(async () => {
 
   console.log('\n=== D. Removing an EMPTY category is allowed ===');
   const d = await call('POST', '/api/admin/categories', {
-    categories: ['Drinks', 'Rice & Grains', 'Cooking Oil', 'Toiletries & Personal Care'],
+    categories: ['Drinks', 'Rice & Noodles', 'Cooking Oil', 'Toiletries & Personal Care'],
   });
   check('accepted', d.status, 200);
   check('gone from the list', (await catNames()).includes('Household & Cleaning'), false);
 
   console.log('\n=== E. A rename moves the products with it ===');
   const e = await call('POST', '/api/admin/categories', {
-    categories: ['Beverages', 'Rice & Grains', 'Cooking Oil', 'Toiletries & Personal Care'],
+    categories: ['Beverages', 'Rice & Noodles', 'Cooking Oil', 'Toiletries & Personal Care'],
     renames: [{ from: 'Drinks', to: 'Beverages' }],
   });
   check('accepted', e.status, 200);
@@ -156,11 +156,11 @@ setTimeout(async () => {
 
   console.log('\n=== F. A rename to a name that was not saved is refused ===');
   const f = await call('POST', '/api/admin/categories', {
-    categories: ['Beverages', 'Rice & Grains', 'Cooking Oil', 'Toiletries & Personal Care'],
-    renames: [{ from: 'Rice & Grains', to: 'Grains' }],   // "Grains" is not in the list
+    categories: ['Beverages', 'Rice & Noodles', 'Cooking Oil', 'Toiletries & Personal Care'],
+    renames: [{ from: 'Rice & Noodles', to: 'Grains' }],   // "Grains" is not in the list
   });
   check('400', f.status, 400);
-  check('products untouched', PRODUCTS.filter(p => p.category === 'Rice & Grains').length, 1);
+  check('products untouched', PRODUCTS.filter(p => p.category === 'Rice & Noodles').length, 1);
 
   console.log('\n=== G. Rubbish lists are refused ===');
   check('empty list', (await call('POST', '/api/admin/categories', { categories: [] })).status, 400);
@@ -170,7 +170,7 @@ setTimeout(async () => {
   check('a non-string', (await call('POST', '/api/admin/categories', { categories: ['Drinks', 7] })).status, 400);
   check('over the length cap', (await call('POST', '/api/admin/categories', { categories: ['x'.repeat(41)] })).status, 400);
   check('the saved list survived every one of those', await catNames(),
-    ['Beverages', 'Rice & Grains', 'Cooking Oil', 'Toiletries & Personal Care']);
+    ['Beverages', 'Rice & Noodles', 'Cooking Oil', 'Toiletries & Personal Care']);
 
   console.log('\n=== H. A junk value in app_config does not take the shop down ===');
   CONFIG.categories = 'not a list at all';

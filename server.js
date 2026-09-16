@@ -602,7 +602,7 @@ async function getOrderItemCounts() {
 // 'categories'. This constant is the FALLBACK — what the shop shows before the
 // admin has ever saved a list, and what it falls back to if the config read
 // fails. It is not the source of truth any more; Admin → Settings is.
-const DEFAULT_CATEGORIES = ["Rice & Grains","Cooking Oil","Canned & Sauces","Spices & Seasoning","Dairy & Eggs","Drinks","Snacks & Biscuits","Breakfast & Cereals","Baking & Sugar","Coffee, Tea & Cocoa","Fruits & Vegetables","Staples (Tubers & Fufu)","Meat, Poultry & Seafood","Toiletries & Personal Care","Household & Cleaning"];
+const DEFAULT_CATEGORIES = ["Rice & Noodles","Breakfast, Tea & Coffee","Dairy & Eggs","Drinks","Snacks & Biscuits","Cooking Oil","Canned Foods & Sauces","Spices & Seasoning","Fruits & Vegetables","Meat & Poultry","Toiletries & Personal Care","Household & Cleaning"];
 const CATEGORY_MAX = 40;        // entries
 const CATEGORY_NAME_MAX = 40;   // characters
 

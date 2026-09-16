@@ -234,6 +234,10 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
   }, []);
 
   const CAT_IMAGES = {
+    'Rice & Noodles': '/icons/categories/rice.jpg',
+    'Breakfast, Tea & Coffee': '/icons/categories/cereals.jpg',
+    'Canned Foods & Sauces': '/icons/categories/canned.jpg',
+    'Meat & Poultry': '/icons/categories/meat.jpg',
     'Rice & Grains': '/icons/categories/rice.jpg', 'Cooking Oil': '/icons/categories/cooking-oil.jpg',
     'Canned & Sauces': '/icons/categories/canned.jpg', 'Dairy & Eggs': '/icons/categories/dairy.jpg',
     'Drinks': '/icons/categories/drinks.jpg', 'Snacks & Biscuits': '/icons/categories/snacks.jpg',
