@@ -208,7 +208,6 @@ const SignedInOrdersView = ({ setPage, openTracking, setCart }) => {
       location: (o.location && o.location.address) || o.address || '',
       payMethod: o.paymentMethod,
       surpriseExtra: o.surpriseExtra,
-      orderNotes: o.orderNotes,
     });
   };
 

@@ -2,7 +2,7 @@
 // Accepts a normalized order object:
 //   { orderId, date, items:[{name,qty,price}], subtotal, discount, loyaltyUsed,
 //     delivery, total, neighborhood, recipient, phone, location, payMethod,
-//     giftMessage, surpriseExtra, orderNotes }
+//     giftMessage, surpriseExtra }
 (function () {
   const BLACK = [17, 17, 17];
   const GRAY = [120, 120, 120];
@@ -167,19 +167,6 @@
       doc.setFontSize(8.5);
       doc.text(noteLines, M + 4, y + 4);
       y += boxH + 4;
-    }
-
-    // Freeform instructions can span pages; keep them above the footer.
-    if (o.orderNotes && o.orderNotes.trim()) {
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8.5);
-      doc.setTextColor(...BLACK);
-      const lines = doc.splitTextToSize('Order instructions: ' + o.orderNotes.trim(), contentW);
-      for (const line of lines) {
-        if (y > doc.internal.pageSize.getHeight() - 30) { doc.addPage(); y = M; }
-        doc.text(line, M, y);
-        y += 4.5;
-      }
     }
 
     // ── Footer ──

@@ -281,7 +281,6 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     lines.push(`Location: ${location}`);
     lines.push(`Payment: ${snap.form.payMethod === 'cash' ? 'Cash on Delivery' : 'Paid online (Card / MoMo)'}`);
     if (snap.familyMode && snap.form.giftMessage) lines.push(`Gift Message: ${snap.form.giftMessage}`);
-    if (snap.form.orderNotes.trim()) lines.push(`Order instructions: ${snap.form.orderNotes.trim()}`);
     return lines.join('\n');
   };
 
@@ -306,7 +305,6 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
       location: s.form.mapsPin || s.form.address || '',
       payMethod: s.form.payMethod,
       giftMessage: s.familyMode ? s.form.giftMessage : '',
-      orderNotes: s.form.orderNotes,
     };
   };
 
