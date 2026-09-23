@@ -40,6 +40,7 @@ const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
 // It only reports: a missing OPTIONAL column is a warning, so the app still
 // boots and serves, but nobody has to discover the gap from a customer.
 const REQUIRED_SCHEMA = [
+  ['orders',   'order_notes',         'supabase-schema-order-notes.sql',     true],
   ['orders',   'paystack_ref',        'supabase-schema-paystack.sql',        true],
   ['orders',   'delivered_at',        'supabase-schema-delivered-at.sql',    true],
   ['orders',   'delivery_slot',       'supabase-schema-tweaks.sql',          true],
@@ -1047,7 +1048,7 @@ const orders = {
     // user_id, momo_number, and the subtotal/discount/loyalty breakdown —
     // none of which a rider needs to complete a delivery.
     const RIDER_FIELDS = 'id, customer_name, customer_phone, recipient_name, recipient_phone, '
-      + 'address, neighborhood, location, items, total, paid, payment_method, status, '
+      + 'address, neighborhood, location, order_notes, items, total, paid, payment_method, status, '
       + 'delivery_date, delivery_slot, priority, surprise_extra, created_at';
     const { data, error } = await sb.from('orders').select(RIDER_FIELDS).eq('rider_id', riderId).in('status', ['assigned','in_transit']).order('created_at');
     if (error) throw error;
@@ -1297,7 +1298,7 @@ const productRequests = {
       call_number: callNumber ? String(callNumber).slice(0, 30) : null,
       contact_whatsapp: !!contactWhatsapp,
       contact_call: !!contactCall,
-      product_name: String(productName || '').slice(0, 200),
+      product_name: String(productName || '').trim().slice(0, 2000),
       notes: String(notes || '').slice(0, 600),
     }).select().single();
     if (error) throw error;
@@ -2084,7 +2085,7 @@ const dataRequests = {
     await sb.from('orders').update({
       customer_name: tombstone, customer_phone: null,
       recipient_name: null, recipient_phone: null,
-      address: tombstone, momo_number: null, location: null,
+      address: tombstone, momo_number: null, location: null, order_notes: null,
     }).eq('user_id', userId);
 
     // 2. Anything else carrying contact details independently of the account.

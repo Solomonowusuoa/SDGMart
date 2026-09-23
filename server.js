@@ -1008,6 +1008,9 @@ const PHONE_RE = /^\+?[\d\s-]{9,20}$/;
 const cap = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
 
 function validateDelivery(body, extra = {}) {
+  if (body.orderNotes != null && (typeof body.orderNotes !== 'string' || body.orderNotes.length > 1000)) {
+    throw new HttpError(400, 'Order instructions must be text of no more than 1,000 characters.');
+  }
   const familyMode = !!body.familyMode;
   const out = {
     customer: cap(body.customer, 80),
@@ -1018,6 +1021,7 @@ function validateDelivery(body, extra = {}) {
     recipientPhone: cap(body.recipientPhone, 20),
     recipientAddress: cap(body.recipientAddress, 300),
     giftMessage: cap(body.giftMessage, 300),
+    orderNotes: cap(body.orderNotes, 1000),
     momoNumber: cap(body.momoNumber, 20),
   };
   const bad = [];
@@ -1401,6 +1405,7 @@ async function createOrderFromBody(reqUser, body, extra = {}) {
       recipientPhone: clean ? clean.recipientPhone : (recipientPhone || ''),
       address: clean ? (clean.address || clean.recipientAddress) : (address || recipientAddress || ''),
       neighborhood: clean ? clean.neighborhood : (neighborhood || ''),
+      orderNotes: clean ? clean.orderNotes : cap(body.orderNotes, 1000),
       items: itemsList, subtotal: pricing.subtotal, deliveryFee: pricing.delivery,
       discount: pricing.discount, loyaltyUsed: pricing.loyaltyUsed, total: pricing.total,
       paymentMethod: payMethod || (extra.paid ? 'paystack' : 'cash'),
@@ -1782,6 +1787,7 @@ async function runRecurringOrders() {
         customer: user.name || '', phone: user.phone || '',
         neighborhood: info.neighborhood || '', address: info.address || '',
         items: validItems, payMethod: 'cash', location: info.location || null,
+        orderNotes: info.orderNotes || '',
       };
       const result = await createOrderFromBody(user, draft, {});
       const skippedNote = skippedNames.length ? ` (skipped ${skippedNames.length} unavailable item${skippedNames.length === 1 ? '' : 's'})` : '';
@@ -3073,12 +3079,13 @@ app.post('/api/admin/promotions/:id/publish', requireAdmin, async (req, res) => 
 // ── Product requests ─────────────────────────────────────────────────────
 app.post('/api/product-requests', rateLimitIp('prodreq', LIMIT_REQUESTS), async (req, res) => {
   const { name, whatsappNumber, callNumber, contactWhatsapp, contactCall, productName, notes } = req.body || {};
-  if (!productName || !name) return res.status(400).json({ error: 'Your name and the item are required' });
-  if (!whatsappNumber && !callNumber) return res.status(400).json({ error: 'Please give us at least one number to reach you' });
+  if (typeof productName !== 'string' || !productName.trim() || typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'Your name and at least one item are required' });
+  if (productName.length > 2000) return res.status(400).json({ error: 'Please keep your items list to 2,000 characters or fewer' });
+  if (![whatsappNumber, callNumber].some(n => typeof n === 'string' && n.trim())) return res.status(400).json({ error: 'Please give us at least one number to reach you' });
   try {
     const r = await db.productRequests.create({
       userId: req.user ? req.user.id : null,
-      name, whatsappNumber, callNumber, contactWhatsapp, contactCall, productName, notes,
+      name, whatsappNumber, callNumber, contactWhatsapp, contactCall, productName: productName.trim(), notes,
     });
     notifyAdmins({ title: '🔍 Product request', body: (name || 'Someone') + ' wants: ' + String(productName).slice(0, 70), url: '/admin', tag: 'admin-request' }).catch(() => {});
     res.json({ ok: true, id: r.id });

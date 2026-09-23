@@ -163,7 +163,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     phone: (currentUser && currentUser.phone) || '',
     neighborhood: '', customNeighborhood: '', address: '',
     recipientName: '', recipientPhone: '', recipientAddress: '', mapsPin: '',
-    giftMessage: '', payMethod: 'cash',
+    giftMessage: '', orderNotes: '', payMethod: 'cash',
   });
   const [errors, setErrors] = React.useState({});
   const [orderPlaced, setOrderPlaced] = React.useState(false);
@@ -281,6 +281,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     lines.push(`Location: ${location}`);
     lines.push(`Payment: ${snap.form.payMethod === 'cash' ? 'Cash on Delivery' : 'Paid online (Card / MoMo)'}`);
     if (snap.familyMode && snap.form.giftMessage) lines.push(`Gift Message: ${snap.form.giftMessage}`);
+    if (snap.form.orderNotes.trim()) lines.push(`Order instructions: ${snap.form.orderNotes.trim()}`);
     return lines.join('\n');
   };
 
@@ -305,6 +306,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
       location: s.form.mapsPin || s.form.address || '',
       payMethod: s.form.payMethod,
       giftMessage: s.familyMode ? s.form.giftMessage : '',
+      orderNotes: s.form.orderNotes,
     };
   };
 
@@ -353,6 +355,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
     recipientPhone: snap.form.recipientPhone,
     recipientAddress: snap.form.recipientAddress,
     giftMessage: snap.form.giftMessage,
+    orderNotes: snap.form.orderNotes,
     payMethod: snap.form.payMethod,
     mapsPin: snap.form.mapsPin,
     location: snap.form.location || null,
@@ -407,7 +410,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
           body: JSON.stringify({
             items: snap.items, cadenceDays: Number(reorderCadence) || 14,
             nextRunAt: next.toISOString().slice(0, 10),
-            deliveryInfo: { neighborhood: snap.neighborhood, address: snap.form.address, location: snap.form.location || null, payMethod: snap.form.payMethod },
+            deliveryInfo: { neighborhood: snap.neighborhood, address: snap.form.address, location: snap.form.location || null, payMethod: snap.form.payMethod, orderNotes: snap.form.orderNotes },
           }),
         });
       } catch (_) {}
@@ -860,6 +863,14 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                 </div>
               )}
 
+              <div style={{ marginTop: 24, borderTop: '1px solid var(--rule)', paddingTop: 24 }}>
+                <label htmlFor="order-instructions" style={ckLbl}>Order instructions (optional)</label>
+                <textarea id="order-instructions" value={form.orderNotes} onChange={e => set('orderNotes', e.target.value)}
+                  placeholder="E.g. Please choose ripe pineapples. Call when you reach the gate."
+                  rows={4} maxLength={1000} aria-describedby="order-instructions-help"
+                  style={{ ...inputStyle('orderNotes'), fontSize: 16, resize: 'vertical', lineHeight: 1.6 }} />
+                <div id="order-instructions-help" style={{ fontSize: 12, color: 'var(--rd-muted)', marginTop: 6, lineHeight: 1.5 }}>Add any product preferences or delivery instructions for our team.</div>
+              </div>
               <button onClick={() => { if (validate1()) setStep(2); }} style={{ ...ckPrimary, marginTop: 28 }}>Continue to Review →</button>
             </>
           )}
@@ -890,6 +901,11 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                   {scheduleLater && scheduledDate && <div style={{ marginTop: 6, fontFamily: 'var(--f-mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--ink)' }}>Scheduled: {scheduledDate}{scheduledSlot ? ` · ${scheduledSlot}` : ''}</div>}
                 </div>
               </div>
+
+              {form.orderNotes.trim() && <div style={{ marginTop: 16, padding: '16px 18px', border: '1px solid var(--rule-2)' }}>
+                <div style={{ ...ckLbl, marginBottom: 8 }}>Order instructions</div>
+                <div style={{ fontSize: 13.5, lineHeight: 1.6, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{form.orderNotes.trim()}</div>
+              </div>}
 
               {/* Auto-reorder — signed-in users only */}
               {currentUser && currentUser.id && currentUser.role !== 'guest' && (

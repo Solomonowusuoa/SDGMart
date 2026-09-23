@@ -29,6 +29,7 @@ const rls = (t) => ask("exists(select 1 from pg_class where relname='" + t + "' 
 const nullable = (t, c) => ask("exists(select 1 from information_schema.columns where table_name='" + t + "' and column_name='" + c + "' and is_nullable='YES')");
 
 const CHECKS = {
+  'supabase-schema-order-notes.sql': [['orders.order_notes', () => col('orders', 'order_notes')]],
   'supabase-schema.sql': [['table products', () => col('products', 'id')], ['table users', () => col('users', 'id')], ['table orders', () => col('orders', 'id')], ['table riders', () => col('riders', 'id')]],
   'supabase-schema-additions.sql': [['table addresses', () => col('addresses', 'id')], ['table reviews', () => col('reviews', 'id')], ['table issue_reports', () => col('issue_reports', 'id')]],
   'supabase-schema-requests.sql': [['table product_requests', () => col('product_requests', 'id')]],

@@ -659,8 +659,7 @@ The admin device was subscribed, and the watchdog fired on the next daily run:
   configured in production (`/api/push/vapid-public-key` answers with a real key)
 - ☑ **The 30-minute cooldown holds** — re-running the daily job immediately produced **no** second
   alert. A phone that buzzes every few minutes gets muted, which is worse than no alert at all
-- ◐ **Arrival on the handset is the owner's to confirm.** Everything up to the push send is
-  verified; whether the notification appeared on the phone cannot be observed from here
+- ☑ **Arrival on the handset confirmed by the owner, 2026-09-19.** The overdue-order alert appeared on their phone.
 
 The alert history is itself a record of the daily-jobs fix working: entries begin
 2026-08-31 19:13, minutes after that deploy, and the count falls from **6 stuck orders to 1** as
@@ -1227,16 +1226,14 @@ curl -sI https://sdg-mart.com | grep -iE 'x-frame|content-security|strict-transp
 ### ☐ Map pin quality (I-02)
 - ☑ Indoors → the accuracy guidance appears — **confirmed by the shop owner on their handset, 2026-09-02**
 - ☐ Outdoors (GPS) → shows a small accuracy figure, no warning
-- ☐ `select location from orders order by id desc limit 1` → includes `accuracy` and `source`
+- ☑ Latest order location includes `accuracy` and `source` — verified read-only on order #121, 2026-09-19. Coordinates were not displayed.
 
 ## STEP 9 — Things that only show up in production
 
-### ◐ Alerts actually arrive (G-08)
+### ☑ Alerts actually arrive (G-08)
 - ☑ **Tap "Enable admin alerts" on the phone you carry, once.** — done 2026-09-02; two devices
       are registered in `push_subscriptions` and VAPID is configured in production.
-- ◐ Mark an order queued and leave it past `ORDER_SLA_HOURS` → an alert arrives — the alert is
-      **generated and pushed**: *"1 order(s) past 4h. Oldest: #42, 314h old."* Arrival on the
-      handset is the owner's to confirm; it cannot be observed from here.
+- ☑ Mark an order queued and leave it past `ORDER_SLA_HOURS` → an alert arrives — generation and sending were already verified; the owner confirmed receipt on their phone on 2026-09-19.
 - ☑ Alerts do not repeat more than once per 30 minutes per kind — **verified 2026-09-02**:
       re-running the daily job immediately produced no second alert.
 

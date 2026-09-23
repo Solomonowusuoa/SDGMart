@@ -89,6 +89,7 @@ const ORDER = [
   'supabase-schema-rider-tokens.sql',
   'supabase-schema-advisors.sql',
   'supabase-schema-advisors-2.sql',
+  'supabase-schema-order-notes.sql',
 ];
 
 const sha = (t) => crypto.createHash('sha256').update(t).digest('hex').slice(0, 16);

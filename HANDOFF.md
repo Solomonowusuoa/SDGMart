@@ -9,7 +9,15 @@ A same-day grocery web app for Tamale, Ghana. This doc lets a new chat (or you) 
 
 ---
 
-## ⭐ LATEST STATE — resume here (updated 2026-09-06)
+## ⭐ LATEST STATE — resume here (updated 2026-09-23)
+
+- **Customer requests and checkout instructions, 2026-09-23:** the request modal now matches the existing design refresh and accepts a multiline list (2,000 characters); Admin preserves line breaks. Checkout step 1 has optional order instructions (1,000 characters), carried through review, cash/Paystack, recurring orders, receipts, Admin and assigned riders. `supabase-schema-order-notes.sql` adds `orders.order_notes` and must be applied before deploying this code; applied to production on 2026-09-23. Automated coverage includes API validation, paid webhook restoration, database mapping and rider projection. Local browser checks cover Enter/newlines, request submission, Escape/focus return, mobile layout and checkout review without production test orders.
+
+- **Owner confirmations, 2026-09-19:** overdue-order alert received on the owner's phone; real iPhone smoke test completed. Both are closed. Render and Supabase remain on their **Free** plans; upgrades remain a timing/budget decision.
+- **Checklist review, 2026-09-19:** five unchecked test steps remain: outdoor GPS behaviour (1), real password-reset email receipt (1), and staging migration rollback (3). A recent production order (#121) was verified to store both `accuracy` and `source`, closing the second GPS check. Catalogue work is complete at 140 products, all with photos, across 12 categories. Paystack is live. No `sdgtest%` user accounts were found. Older counts below are historical.
+- **Birthday Gifts needs its selection repaired:** enabled, but configured product IDs 29, 33 and 36 no longer exist. Owner needs to choose current gift products, then verify the claim flow. The older "enable Birthday Gifts" instruction is superseded by this finding.
+
+### Previous state — 2026-09-06
 
 - **(2026-09-06) Three long-running items closed on Render, recorded here because none of them is visible in the code.** All three were done by the owner in the dashboard; the repo already supported every one of them, which is exactly why they could sit undone for weeks without a test failing.
 
@@ -295,7 +303,7 @@ User chose a **full wipe** of placeholder products → load the real catalog →
 Done: ✅ Paystack LIVE + **first real payment succeeded end-to-end** (order #37) · ✅ referrals SQL · ✅ recurring-orders cron · ✅ **Cloudflare orange-cloud flip LIVE** · ✅ **Cloudflare cache set to "Respect Existing Headers"** (verified on prod: bundle `max-age=300`, sw.js `no-cache`) — no more per-deploy purge needed · ✅ Retention tab eyeballed · ✅ GA4 key-event setup done · ✅ all migrations through §4.10.
 **Remaining, in order:**
 1. **Enable Birthday Gifts** (Admin → 🎂 → ON + pick products; test customer's June birthday passed — set a July birthday on a test account to e2e-test).
-2. **Real iPhone smoke test** (Paystack popup, Google sign-in, home-screen install, tracking) — the last untested surface.
+2. **DONE — real iPhone smoke test** (Paystack popup, Google sign-in, home-screen install, tracking), confirmed by the owner 2026-09-19.
 3. **Catalog population** — the big one: user fills Keep? column in `SDGMart-catalog-triage.xlsx` → then import (script ready), source images, update `categories` + `ESSENTIALS` in server.js.
 4. **Render Starter + Supabase Pro upgrades** right before launch (no code changes needed; set Supabase spend cap to allow overages).
 5. **Clean test data** in Supabase: users `sdgtest-…@example.com` (id 6) + `sdgtest-firstorder@example.com` (id 9, incl. its saved address + any leftover reviews), test orders ~ids 20–23.

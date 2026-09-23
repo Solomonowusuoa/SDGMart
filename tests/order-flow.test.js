@@ -53,6 +53,7 @@ const SAMPLE = [
   { id: 2, name: 'Cooking Oil 1L', category: 'Cooking Oil', price: 10, unit: '1L', stock: 5, bestseller: false, img: null },
 ];
 let created = [];
+const requested = [];
 const CONFIG = { deduct_stock: true, loyalty_redemption_enabled: true };
 
 const noop = new Proxy(function () {}, { get: (t, k) => (k === 'then' ? undefined : noop), apply: () => Promise.resolve(null) });
@@ -103,7 +104,7 @@ const stubDb = {
     releaseBirthdayGift: async () => {},
   },
   addresses: noop, carts: noop, stats: noop, searchLog: noop, pushSubs: noop,
-  dataRequests: noop, issueReports: noop, productRequests: noop, recurring: noop, metrics: noop,
+  dataRequests: noop, issueReports: noop, productRequests: { create: async p => { requested.push(p); return { id: requested.length }; } }, recurring: noop, metrics: noop,
   leaderboard: noop, reviews: noop, riders: noop, retention: { sweep: async () => ({}) },
   // Section F drives the webhook, which looks a draft up by reference.
   pendingPayments: Object.assign(Object.create(noop), {
@@ -260,7 +261,8 @@ setTimeout(async () => {
     reference: ref, userId: null,
     draft: { items: [{ id: 1, qty: 1 }], customer: 'Ama', phone: '0241234567',
       neighborhood: 'Tamale Central', address: 'Near the market',
-      location: { lat: 9.4, lng: -0.85 } },
+      location: { lat: 9.4, lng: -0.85 }, orderNotes: 'Choose ripe fruit.\nCall at the gate.',
+      _locked: { pricing: { items: [{ ...SAMPLE[0], qty: 1 }], subtotal: 20, delivery: 10, discount: 0, loyaltyUsed: 0, total: 30 } } },
   };
   const payload = JSON.stringify({ event: 'charge.success', data: { reference: ref, amount: 3000 } });
   const sig = crypto.createHmac('sha512', process.env.PAYSTACK_SECRET_KEY).update(payload).digest('hex');
@@ -273,6 +275,7 @@ setTimeout(async () => {
   check('the paid order IS created even though ordering is off', created.length, 1);
   check('and it is recorded as paid', !!(created[0] && created[0].paid), true);
   check('the draft is cleared once the order exists', PENDING[ref], undefined);
+  check('paid webhook preserves multiline order instructions', created[0].orderNotes, 'Choose ripe fruit.\nCall at the gate.');
   const rescue = LOGGED.filter((l) => /WEBHOOK RESCUE/.test(l.message || ''));
   check('the rescue is recorded, so the safety net is observable', rescue.length, 1);
   check('and recorded as status 200, not an error -- this is the system working',
@@ -340,6 +343,33 @@ setTimeout(async () => {
   check('the forged headers share the server-derived bucket', searchBuckets[0], searchBuckets[1]);
   check('neither forged address is used as the identity',
     searchBuckets.some((key) => /198\.51\.100\.(11|12)/.test(key)), false);
+
+  console.log('\n=== J. Optional order instructions and multiline product requests ===');
+  CONFIG.ordering_enabled = true; CONFIG.deduct_stock = false; created = [];
+  const notes = 'Choose ripe fruit.\nCall at the gate.';
+  const withNotes = await post('/api/orders', { ...order([{ id: 1, qty: 1 }]), orderNotes: notes });
+  check('cash order with instructions accepted', withNotes.status, 201);
+  check('cash order preserves instructions and line breaks', created[0].orderNotes, notes);
+  const withoutNotes = await post('/api/orders', order([{ id: 1, qty: 1 }]));
+  check('instructions remain optional', withoutNotes.status, 201);
+  check('old clients save empty instructions', created[1].orderNotes, '');
+  for (const invalid of ['x'.repeat(1001), { text: 'invalid' }]) {
+    const invalidCash = await post('/api/orders', { ...order([{ id: 1, qty: 1 }]), orderNotes: invalid });
+    check('invalid instructions refused before creating an order', invalidCash.status, 400);
+    const invalidPaid = await post('/api/paystack/init', { email: 'test@example.com', draft: { ...order([{ id: 1, qty: 1 }]), orderNotes: invalid } });
+    check('invalid instructions refused before starting payment', invalidPaid.status, 400);
+  }
+  check('invalid notes created no extra orders', created.length, 2);
+  const list = Array.from({ length: 15 }, (_, i) => `Item ${i + 1}: a particular brand, 500g, two packs`).join('\n');
+  const contact = { name: 'Ama', whatsappNumber: '0241234567', contactWhatsapp: true };
+  const request = await post('/api/product-requests', { ...contact, productName: list });
+  check('a list longer than the old 200-character limit is accepted', request.status, 200);
+  check('all requested items and line breaks reach the database', requested[0].productName, list);
+  for (const invalid of [' \n ', 'x'.repeat(2001), { item: 'Rice' }]) {
+    const rejected = await post('/api/product-requests', { ...contact, productName: invalid });
+    check('blank, oversized or non-text requests are rejected', rejected.status, 400);
+  }
+  check('invalid product requests are not saved', requested.length, 1);
 
   console.log('');
   // Shut the listener down rather than exiting under it.

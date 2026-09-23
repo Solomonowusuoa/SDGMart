@@ -977,6 +977,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                             <div>
                               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>Address</div>
                               <div style={{ fontSize: 13 }}>{(o.location && o.location.address) || o.address || o.recipientAddress || '—'}</div>
+                              {o.orderNotes && <div style={{ marginTop: 12 }}><strong style={{ fontSize: 12 }}>Order instructions</strong><div style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', marginTop: 4 }}>{o.orderNotes}</div></div>}
                               {o.location && o.location.lat && (
                                 <a href={`https://www.google.com/maps?q=${o.location.lat},${o.location.lng}`} target="_blank" rel="noreferrer"
                                   style={{ fontSize: 11, color: 'var(--sage)', fontWeight: 700, marginTop: 4, display: 'inline-block' }}>📍 Open in Maps</a>
@@ -1684,7 +1685,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                   return (
                     <div key={r.id} style={{ background: 'var(--white)', borderRadius: 10, padding: '14px 16px', boxShadow: 'var(--shadow)', opacity: r.status === 'dismissed' ? .6 : 1 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                        <strong style={{ fontSize: 14 }}>{r.productName}</strong>
+                        <strong style={{ fontSize: 14, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{r.productName}</strong>
                         <span style={{ background: `${statusColor}22`, color: statusColor, borderRadius: 999, padding: '2px 10px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em' }}>
                           {r.status}
                         </span>
@@ -1699,7 +1700,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                         {r.callNumber && <span>📞 {r.callNumber}{r.contactCall ? ' ✓' : ''}</span>}
                         <span style={{ opacity: .7 }}>prefers: {[r.contactWhatsapp && 'WhatsApp', r.contactCall && 'call'].filter(Boolean).join(' & ') || 'either'}</span>
                       </div>
-                      {r.notes && <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--cream)', borderRadius: 6, fontSize: 13, lineHeight: 1.5, fontStyle: 'italic' }}>{r.notes}</div>}
+                      {r.notes && <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--cream)', borderRadius: 6, fontSize: 13, lineHeight: 1.5, fontStyle: 'italic', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{r.notes}</div>}
                       <div style={{ marginTop: 12, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         {r.whatsappNumber && <a href={wa} target="_blank" rel="noreferrer"
                           style={{ background: '#25D366', color: '#fff', fontSize: 12, fontWeight: 700, padding: '7px 14px', borderRadius: 6, textDecoration: 'none' }}>
