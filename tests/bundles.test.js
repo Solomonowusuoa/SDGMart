@@ -3,7 +3,7 @@ const B = require('../bundles');
 const prices = {134:20.5,81:11.5,126:26,131:20,191:45,129:80,123:15,127:40,132:70,125:35,189:23,194:70,208:20,183:13,180:20,186:25,187:40,211:105,42:70,38:10.5,46:32,227:11,75:12,72:12,43:75,228:39.5,222:12,223:90,204:130,76:45};
 const products = Object.entries(prices).map(([id,price])=>({id:Number(id),name:'Product '+id,price,stock:99,unit:'pack',img:'photo.jpg'}));
 const bundles = B.DEFAULTS.map(d=>B.resolve(d,products));
-assert.deepEqual(bundles.map(b=>b.price),[84.5,216,372.5,126,317,164,236,367.5]);
+assert.deepEqual(bundles.map(b=>b.price),[84.5,216,372.5,126,317,181.5,236,367.5]);
 for(const b of bundles) {
   assert.ok(b.valid && b.active);
   for(const quantity of [1,2,3,9]) {

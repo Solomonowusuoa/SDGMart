@@ -11,11 +11,13 @@ The homepage replaces the old seven-product Essentials section with three bundle
 | Family Breakfast | 387.50 | 15 | 372.50 |
 | Everyday Home | 131.00 | 5 | 126.00 |
 | Family Home | 327.00 | 10 | 317.00 |
-| Cooking Basics | 169.00 | 5 | 164.00 |
+| Cooking Basics | 186.50 | 5 | 181.50 |
 | Everyday Cooking | 246.00 | 10 | 236.00 |
 | Family Cooking | 382.50 | 15 | 367.50 |
 
 These totals reflect the catalogue at implementation. Product price changes in Inventory automatically change bundle prices while preserving the fixed saving. Remie is one inventory pack containing 12 sachets, currently GHS 12; its price still needs owner confirmation. Family Breakfast uses Nutella and six Ideal 160g tins. Family Home includes Savlon 500ml.
+
+All three cooking bundles use one Tasty Tom Tomato Mix 1.05kg pack (#228). Cooking Basics replaces its former two 200g packs with this one larger pack; savings remain GHS 5, 10 and 15 respectively.
 
 ## Administration and data
 
@@ -24,7 +26,7 @@ These totals reflect the catalogue at implementation. Product price changes in I
 - Order pricing is verified on the server. Product promotions and squad discounts do not stack on bundle lines. Loyalty credit can still be redeemed.
 - Orders store component quantities and allocated prices in integer pesewas, with bundle metadata. Stock deduction, reservation, cancellation and packing therefore use real product IDs. Reordering reconstructs complete bundles at current prices.
 - Changes to bundle versions or prices require the customer to refresh the cart before checkout.
-- The current catalogue marks Tasty Tom 200g (#227) and Jollof Mix 210g (#222) out of stock. This makes all three cooking variations unavailable until those stock settings are updated. No production stock was changed.
+- The catalogue snapshot marks Jollof Mix 210g (#222) out of stock, making Everyday Cooking and Family Cooking unavailable until its stock setting is updated. Cooking Basics no longer depends on the out-of-stock Tasty Tom 200g (#227). No production stock was changed.
 
 ## Images and request footer
 

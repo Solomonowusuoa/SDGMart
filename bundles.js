@@ -7,7 +7,7 @@
     { id: 'family-breakfast', group: 'Breakfast', name: 'Family Breakfast', saving: 15, members: [member(132),member(134,1,'25 tea bags'),member(81,6),member(125),member(131),member(189),member(194),member(129)] },
     { id: 'everyday-home', group: 'Home Essentials', name: 'Everyday Home', saving: 5, members: [member(208),member(183,2),member(180),member(186),member(187)] },
     { id: 'family-home', group: 'Home Essentials', name: 'Family Home', saving: 10, members: [member(208,2),member(183,4),member(180,2),member(186,2),member(187),member(211)] },
-    { id: 'cooking-basics', group: 'Cooking Essentials', name: 'Cooking Basics', saving: 5, members: [member(42),member(38,2),member(46),member(227,2),member(75,1,'12 sachets × 10g'),member(72)] },
+    { id: 'cooking-basics', group: 'Cooking Essentials', name: 'Cooking Basics', saving: 5, members: [member(42),member(38,2),member(46),member(228),member(75,1,'12 sachets × 10g'),member(72)] },
     { id: 'everyday-cooking', group: 'Cooking Essentials', name: 'Everyday Cooking', saving: 10, members: [member(43),member(38,3),member(46,2),member(228),member(222),member(75,1,'12 sachets × 10g'),member(72)] },
     { id: 'family-cooking', group: 'Cooking Essentials', name: 'Family Cooking', saving: 15, members: [member(223),member(38,4),member(204),member(228),member(222,2),member(76),member(72)] },
   ].map(d => ({ ...d, active: true, version: 1, img: '', description: 'A fixed selection, with a saving when bought together.' }));
