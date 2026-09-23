@@ -158,16 +158,7 @@ const SignedInOrdersView = ({ setPage, openTracking, setCart }) => {
   };
 
   const reorder = (o) => {
-    const items = Array.isArray(o.items) ? o.items : [];
-    // Match each old item against current PRODUCTS to skip out-of-stock and update prices
-    const products = window.PRODUCTS || [];
-    const skipped = [];
-    const newCart = [];
-    items.forEach(it => {
-      const fresh = products.find(p => p.id === it.id);
-      if (!fresh || (fresh.stock || 0) <= 0) { skipped.push(it.name); return; }
-      newCart.push({ ...fresh, qty: it.qty || 1 });
-    });
+    const { items: newCart, skipped } = window.BundleRules.cartFromOrder(o.items, window.BUNDLES || [], window.PRODUCTS || []);
     if (newCart.length === 0) {
       alert('None of these items are currently in stock — sorry!');
       return;

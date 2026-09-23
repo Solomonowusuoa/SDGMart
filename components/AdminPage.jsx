@@ -448,7 +448,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   );
 
   const tabs = [
-    ['overview','📊 Overview'],['dashboard','📈 Dashboard'],['revenue','💰 Revenue'],['orders','📦 Orders'],['inventory','🏪 Inventory'],
+    ['overview','📊 Overview'],['dashboard','📈 Dashboard'],['revenue','💰 Revenue'],['orders','📦 Orders'],['inventory','🏪 Inventory'],['bundles','Bundles'],
     ['expiry','⏰ Expiry'],['reconcile','💳 Reconcile'],['routes','🗺 Routes'],['riders','🛵 Riders'],
     ['promotions','⚡ Promotions'],['requests','🛒 Requests'],['issues','🚨 Issues'],
     ['analytics','🔎 Analytics'],['retention','🔁 Retention'],['leaderboard','🏆 Leaderboard'],['comms','📣 Comms'],
@@ -1022,7 +1022,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                               <div style={{ background: 'var(--white)', borderRadius: 8, overflow: 'hidden' }}>
                                 {itemsArr.map((it, idx) => (
                                   <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', borderTop: idx === 0 ? 'none' : '1px solid var(--cream-dark)', fontSize: 13 }}>
-                                    <span>{it.qty || 1}× {it.name}</span>
+                                    <span>{it.qty || 1}× {it.name}{it.bundleName && <small style={{ display: 'block', color: 'var(--accent)' }}>{it.bundleName} · {it.unit}</small>}</span>
                                     <span style={{ fontWeight: 700 }}>GHS {(Number(it.price || 0) * Number(it.qty || 1)).toFixed(2)}</span>
                                   </div>
                                 ))}
@@ -1040,6 +1040,8 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
         )}
 
         {/* INVENTORY */}
+        {adminTab === 'bundles' && <AdminBundles products={products} />}
+
         {adminTab === 'inventory' && (
           <div>
             <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginBottom: 24 }}>Inventory Management</h1>

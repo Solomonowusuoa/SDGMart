@@ -158,7 +158,7 @@ const RiderPage = ({ currentUser, onLogout }) => {
                       <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 4 }}>{o.items.length} item{o.items.length === 1 ? '' : 's'}</div>
                       {o.items.map((it, idx) => (
                         <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '1px 0' }}>
-                          <span>{it.qty || 1}× {it.name}</span>
+                          <span>{it.qty || 1}× {it.name}{it.bundleName && <small style={{ display: 'block', color: 'var(--accent)' }}>{it.bundleName} · {it.unit}</small>}</span>
                         </div>
                       ))}
                     </div>

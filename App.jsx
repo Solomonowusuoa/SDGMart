@@ -120,14 +120,23 @@ const App = () => {
   // Bring every cart line up to the current catalogue price, and remember what
   // it was so the cart can say so rather than silently changing a number.
   const repriceCart = React.useCallback(() => {
-    const byId = new Map((window.PRODUCTS || []).map(p => [p.id, p]));
+    const byId = new Map([...(window.PRODUCTS || []), ...(window.BUNDLES || [])].map(p => [p.id, p]));
     setCart(prev => {
       let changed = false;
       const next = prev.map(line => {
         const p = byId.get(line.id);
-        if (!p) return line;
+        if (!p) {
+          if (line.isBundle && window.BUNDLES && !line.unavailable) { changed = true; return { ...line, unavailable: true }; }
+          return line;
+        }
         const pct = Number(p.promoPercent || 0);
         const current = +(Number(p.price) * (1 - pct / 100)).toFixed(2);
+        if (line.isBundle) {
+          const differs = JSON.stringify(line.contents) !== JSON.stringify(p.contents) || line.bundleVersion !== p.bundleVersion || current !== Number(line.price) || !!line.unavailable !== (p.stock <= 0);
+          if (!differs) return line;
+          changed = true;
+          return { ...line, ...p, qty: line.qty, unavailable: p.stock <= 0, previousPrice: Number(line.price), priceChanged: current !== Number(line.price) };
+        }
         if (!Number.isFinite(current) || current === Number(line.price)) return line;
         changed = true;
         return { ...line, price: current, previousPrice: Number(line.price), priceChanged: true };
@@ -143,6 +152,10 @@ const App = () => {
       const d = await r.json();
       if (!d || !Array.isArray(d.products) || !d.products.length) return;
       window.PRODUCTS = d.products;
+      try {
+        const bundlesResponse = await fetch('/api/bundles', { cache: 'no-store' });
+        if (bundlesResponse.ok) window.BUNDLES = await bundlesResponse.json();
+      } catch (_) { /* existing cart will be revalidated at checkout */ }
       window.SHOW_FRESHNESS = !!d.showFreshness;
       window.SHOW_STOCK = !!d.showStock;
       // /api/catalog is the second way in, and on a device whose
@@ -169,6 +182,10 @@ const App = () => {
     // Re-price once on mount: the cart may have been sitting in localStorage
     // since a previous session, against a catalogue that has since moved.
     repriceCart();
+    fetch('/api/bundles', { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('Bundles unavailable'); return r.json(); }).then(list => {
+      window.BUNDLES = Array.isArray(list) ? list : [];
+      setCatalogVersion(v => v + 1); repriceCart();
+    }).catch(e => reportClientError('bundles: load failed', e));
     // If /data/products.js never loaded, /api/catalog is the only way this
     // device gets a catalogue at all — and waiting for the staleness window
     // and a focus event means it sits empty until the customer happens to tab
@@ -254,16 +271,18 @@ const App = () => {
 
   // Effective unit price after any active promo
   const promoPrice = (product) => {
+    if (product.isBundle) return { price: product.price };
     const pct = promoMap[product.id];
     if (!pct) return { price: product.price };
     return { price: +(product.price * (1 - pct / 100)).toFixed(2), originalPrice: product.price, promoPercent: pct };
   };
 
   const addToCart = (product) => {
+    if (product.isBundle && (!product.valid || product.stock <= 0)) return;
     const pp = promoPrice(product);
     setCart(prev => {
       const existing = prev.find(i => i.id === product.id);
-      if (existing) return prev.map(i => i.id === product.id ? { ...i, qty: i.qty + 1 } : i);
+      if (existing) return prev.map(i => i.id === product.id ? { ...i, qty: Math.min(99,i.qty + 1) } : i);
       return [...prev, { ...product, ...pp, qty: 1 }];
     });
   };
@@ -471,6 +490,7 @@ const App = () => {
           onAdd={addToCart}
           onView={viewProduct}
           searchQuery={searchQuery}
+          currentUser={currentUser}
         />
       )}
       {page === 'product' && (

@@ -188,9 +188,6 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
   }, []);
 
   // Essentials
-  const essentials = (window.ESSENTIALS || []).map(id => window.PRODUCTS.find(p => p.id === id)).filter(Boolean);
-  const essentialsTotal = essentials.reduce((s, p) => s + (p.price || 0), 0);
-  const addAllEssentials = () => essentials.forEach(p => (p.stock || 0) > 0 && onAdd(p));
 
   // Live delivered count + active promotions
   const [deliveredCount, setDeliveredCount] = React.useState(null);
@@ -235,7 +232,7 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
 
   const CAT_IMAGES = {
     'Rice & Noodles': '/icons/categories/rice.jpg',
-    'Breakfast, Tea & Coffee': '/icons/categories/cereals.jpg',
+    'Breakfast, Tea & Coffee': '/icons/categories/breakfast-tea-coffee.png',
     'Canned Foods & Sauces': '/icons/categories/canned.jpg',
     'Meat & Poultry': '/icons/categories/meat.jpg',
     'Rice & Grains': '/icons/categories/rice.jpg', 'Cooking Oil': '/icons/categories/cooking-oil.jpg',
@@ -305,28 +302,6 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
         </section>
       )}
 
-      {/* ── Household Essentials ── */}
-      {essentials.length > 0 && (
-        <section className="rd-gutter" style={{ paddingTop: 44 }}>
-          <RSectionHead title="Household Essentials" tag="Editor's pick" right={<RSeeAll onClick={goShop} />} />
-          <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 1, background: 'var(--rule-2)', border: '1px solid var(--rule-2)' }}>
-            <div style={{ flex: 'none', width: isMobile ? 'auto' : 340, background: 'var(--ink)', color: '#fff', padding: '26px 24px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ fontFamily: 'var(--f-label)', fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--accent-light)' }}>This week's basket</div>
-              <div style={{ fontFamily: 'var(--f-serif)', fontStyle: 'italic', fontSize: 34, lineHeight: 1.05, letterSpacing: '-.015em' }}>The things you always run out of.</div>
-              <div style={{ fontSize: 13.5, lineHeight: 1.6, color: 'var(--dark-body)', marginTop: isMobile ? 4 : 'auto' }}>Soap, bleach, tissue and dish liquid — restocked weekly and delivered with the rest of your order.</div>
-              <div style={{ marginTop: 4 }}>
-                <button onClick={addAllEssentials} style={{ background: 'var(--accent-light)', color: 'var(--ink)', border: 'none', cursor: 'pointer', padding: '12px 18px', fontFamily: 'var(--f-label)', fontSize: 12.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase' }}>Add all {essentials.length} — GHS {essentialsTotal.toFixed(2)}</button>
-              </div>
-            </div>
-            <div className="rd-rail" style={{ flex: 1, minWidth: 0, display: 'flex', gap: 1, overflowX: 'auto', background: 'var(--rule-2)' }}>
-              {essentials.map(p => (
-                <div key={p.id} className="rd-ess-item"><RCard product={p} onAdd={onAdd} onView={onView} /></div>
-              ))}
-            </div>
-          </div>
-        </section>
-      )}
-
       {/* ── Bestsellers ── */}
       <section className="rd-gutter" style={{ paddingTop: 44 }}>
         <RSectionHead title="Bestsellers" right={<RSeeAll onClick={goShop} />} />
@@ -341,6 +316,8 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
           <div className="rd-grid rd-grid-4">{suggested.map(p => <RCard key={p.id} product={p} onAdd={onAdd} onView={onView} />)}</div>
         </section>
       )}
+
+      <BundlesSection onView={onView} />
 
       {/* ── Shop by Category ── */}
       <section className="rd-gutter" style={{ paddingTop: 44 }}>
@@ -374,18 +351,7 @@ const HomePage = ({ onAdd, onView, setPage, setSelectedCategory }) => {
         );
       })()}
 
-      {/* ── Request an item ── */}
-      <section style={{ marginTop: 56, borderTop: '1px solid var(--rule)', borderBottom: '1px solid var(--rule)', background: 'var(--surface-warm)' }}>
-        <div className="rd-gutter" style={{ paddingTop: 64, paddingBottom: 64, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, textAlign: 'center' }}>
-          <div style={{ fontFamily: 'var(--f-label)', fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--accent)' }}>Special requests</div>
-          <h2 style={{ margin: 0, fontFamily: 'var(--f-display)', fontSize: isMobile ? 26 : 32, fontWeight: 700, letterSpacing: '-.028em' }}>Looking for something we don't have?</h2>
-          <p style={{ margin: 0, fontSize: 15, lineHeight: 1.55, color: 'var(--rd-body)', maxWidth: 520 }}>Tell us what you need. If we can source it locally, we'll WhatsApp you with a price and timeline.</p>
-          <div style={{ marginTop: 8 }}>
-            <RequestProductButton label="Request an item"
-              style={{ background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', padding: '14px 24px', fontFamily: 'var(--f-ui)', fontSize: 14, fontWeight: 600, letterSpacing: '-.01em' }} />
-          </div>
-        </div>
-      </section>
+      <RequestItemsSection />
 
       {/* ── Footer ── */}
       <footer style={{ background: 'var(--ink)', color: '#fff' }}>

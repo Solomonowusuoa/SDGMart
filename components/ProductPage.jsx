@@ -21,6 +21,7 @@ const ProductPage = ({ product, onAdd, setPage, setSelectedCategory, onView }) =
   const [added, setAdded] = React.useState(false);
   const isMobile = useMobile();
   if (!product) return null;
+  if (product.isBundle) return <BundleProductPage key={product.id} product={product} onAdd={onAdd} onView={onView} setPage={setPage} />;
 
   const showFreshness = typeof window !== 'undefined' && window.SHOW_FRESHNESS === true;
   const related = window.PRODUCTS.filter(p => p.category === product.category && p.id !== product.id).slice(0, 4);

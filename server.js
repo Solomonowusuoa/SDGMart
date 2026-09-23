@@ -10,6 +10,11 @@ const path = require('path');
 const zlib = require('zlib');
 const fs = require('fs');
 const db = require('./database');
+const BundleRules = require('./bundles');
+async function bundleDefinitions() {
+  const saved = await db.appConfig.get('store_bundles');
+  return Array.isArray(saved) ? saved : BundleRules.DEFAULTS;
+}
 
 // ── Sentry (optional error monitoring) — only active when SENTRY_DSN is set.
 // No-op otherwise, so local/dev runs need nothing. On Render, create a Sentry
@@ -418,7 +423,9 @@ ensureIcons();
 // panel left over from the refresh (G-07). Those now live in a second bundle
 // fetched only when an admin or rider actually signs in (D-05).
 const BUNDLE_FILES = [
+  'bundles.js',
   'hooks.js',
+  'components/BundleComponents.jsx',
   'components/receipt.js',
   'components/Header.jsx',
   'components/HomePage.jsx',
@@ -446,6 +453,7 @@ const BUNDLE_FILES = [
 
 // Staff-only. Loaded on demand by App.jsx; never sent to a shopper.
 const STAFF_BUNDLE_FILES = [
+  'components/AdminBundles.jsx',
   'components/AdminPage.jsx',
   'components/RiderPage.jsx',
 ];
@@ -765,6 +773,49 @@ app.get('/api/catalog', async (req, res) => {
 });
 
 // ── Products API ─────────────────────────────────────────────────────────
+app.get('/api/bundles', async (req, res) => {
+  try {
+    const [defs, products] = await Promise.all([bundleDefinitions(), db.products.listForCatalog()]);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(defs.filter(d => d.active).map(d => BundleRules.resolve(d, products)));
+  } catch (e) { fail(res, e, req); }
+});
+app.get('/api/admin/bundles', requireAdmin, async (req, res) => {
+  try { res.json(await bundleDefinitions()); } catch (e) { fail(res, e, req); }
+});
+// Serialize configuration updates so saving two variants cannot lose an edit.
+let bundleSaveQueue = Promise.resolve();
+app.put('/api/admin/bundles/:id', requireAdmin, async (req, res) => {
+  const save = async () => {
+    const defs = await bundleDefinitions();
+    const index = defs.findIndex(d => d.id === req.params.id);
+    if (index < 0) throw new HttpError(404, 'Bundle not found');
+    const body = req.body || {}, old = defs[index];
+    if (body.version !== old.version) throw new HttpError(409, 'This bundle changed. Reload before saving.');
+    if (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 100) throw new HttpError(400, 'Enter a bundle name (up to 100 characters).');
+    if (!Number.isFinite(body.saving) || body.saving < 0 || body.saving > 10000) throw new HttpError(400, 'Enter a valid saving.');
+    if (typeof body.active !== 'boolean') throw new HttpError(400, 'Choose whether this bundle is active.');
+    if (!Array.isArray(body.members) || !body.members.length || body.members.length > 20) throw new HttpError(400, 'Choose 1–20 products.');
+    const seen = new Set();
+    const members = body.members.map(m => {
+      if (!m || !Number.isInteger(m.productId) || !Number.isInteger(m.quantity) || m.quantity < 1 || m.quantity > 99 || seen.has(m.productId)) throw new HttpError(400, 'Each product must appear once, with a quantity from 1 to 99.');
+      seen.add(m.productId);
+      return { productId: m.productId, quantity: m.quantity, label: typeof m.label === 'string' ? m.label.trim().slice(0,80) : '' };
+    });
+    const img = typeof body.img === 'string' ? body.img.trim() : '';
+    if (img && !/^https:\/\/[^\s]+$/.test(img) && !/^\/(?:uploads|icons)\/[^\s]+$/.test(img)) throw new HttpError(400, 'Use an HTTPS image URL or leave it blank for the product collage.');
+    const next = { ...old, name: body.name.trim(), saving: BundleRules.cents(body.saving)/100, active: body.active, members, img,
+      description: typeof body.description === 'string' ? body.description.trim().slice(0,500) : '', version: old.version + 1 };
+    const products = await db.products.listByIds([...seen]);
+    if (!BundleRules.resolve(next, products).valid) throw new HttpError(400, 'All products must exist and the saving must be less than their combined price.');
+    const updated = defs.map((d,i) => i === index ? next : d);
+    await db.appConfig.set('store_bundles', updated);
+    return next;
+  };
+  const task = bundleSaveQueue.then(save);
+  bundleSaveQueue = task.catch(() => {});
+  try { res.json(await task); } catch (e) { fail(res, e, req); }
+});
 app.get('/api/products', async (req, res) => {
   try { res.json((await db.products.list()).map(p => ({ ...p, bestseller: !!p.bestseller, img: p.img || null }))); }
   catch (e) { fail(res, e, req); }
@@ -1087,8 +1138,18 @@ async function computeOrderPricing(reqUser, body) {
   // line cost its own sequential products.get, letting one 3 MB request tie the
   // single Node process up in tens of thousands of round-trips.
   const wanted = new Map();
+  const wantedBundles = new Map();
   for (const ci of clientItems) {
     if (!ci || ci.birthdayGift) continue; // gift is appended separately, always free
+    if (BundleRules.isBundle(ci)) {
+      const qty = ci.qty == null ? 1 : Number(ci.qty);
+      if (!Number.isInteger(qty) || qty < 0 || qty > 99) throw new HttpError(400, 'Choose 1–99 complete bundles.');
+      if (!qty) continue;
+      if (wantedBundles.has(ci.id)) throw new HttpError(400, 'Combine repeated bundles using the quantity control.');
+      wantedBundles.set(ci.id, { ...ci, qty });
+      if (wantedBundles.size > 20) throw new HttpError(400, 'Too many bundles.');
+      continue;
+    }
     const id = parseInt(ci.id, 10);
     if (!Number.isFinite(id)) continue;
     // `parseInt(x) || 1` would turn an explicit qty of 0 — "remove this line" —
@@ -1100,14 +1161,22 @@ async function computeOrderPricing(reqUser, body) {
     if (wanted.size > MAX_ORDER_LINES) throw new HttpError(400, 'That order has too many different items.');
   }
   // One query instead of one per line.
-  const found = await db.products.listByIds([...wanted.keys()]);
+  const defs = wantedBundles.size ? await bundleDefinitions() : [];
+  const requiredIds = new Set(wanted.keys());
+  for (const [id] of wantedBundles) {
+    const def = defs.find(d => 'bundle:' + d.id === id && d.active);
+    if (!def) throw new HttpError(409, 'A bundle in your cart is no longer available. Please remove it or choose another.');
+    def.members.forEach(m => requiredIds.add(m.productId));
+  }
+  if (requiredIds.size > MAX_ORDER_LINES) throw new HttpError(400, 'That order has too many different items.');
+  const found = await db.products.listByIds([...requiredIds]);
   const byId = new Map(found.map((p) => [String(p.id), p]));
   // What can actually be sold right now: on the shelf, minus live holds from
   // other checkouts (audit C-10). Falls back to the raw shelf count if the
   // reservation functions are unreachable — no worse than before they existed.
   let availableById = null;
   if (deductStock) {
-    try { availableById = await db.stock.available([...wanted.keys()]); }
+    try { availableById = await db.stock.available([...requiredIds]); }
     catch (e) { console.error('stock availability lookup failed, using shelf count:', e.message); }
   }
   const items = [];
@@ -1131,6 +1200,24 @@ async function computeOrderPricing(reqUser, body) {
     const price = Math.max(0, +(Number(p.price) * (1 - pct / 100)).toFixed(2));
     items.push({ id: p.id, name: p.name, category: p.category, unit: p.unit, price, qty, ...(pct ? { originalPrice: Number(p.price), promoPercent: pct } : {}) });
   }
+  for (const [id, ci] of wantedBundles) {
+    const def = defs.find(d => 'bundle:' + d.id === id);
+    const bundle = BundleRules.resolve(def, found);
+    if (!bundle.valid || bundle.stock <= 0) throw new HttpError(409, bundle.name + ' is not currently available as a complete bundle.');
+    if (ci.bundleVersion !== bundle.bundleVersion || BundleRules.cents(ci.price) !== BundleRules.cents(bundle.price)) throw new HttpError(409, bundle.name + ' has changed. Refresh your cart to review the latest contents and price.');
+    items.push(...BundleRules.orderLines(bundle, ci.qty));
+  }
+  if (wantedBundles.size) {
+    const combined = new Map();
+    items.forEach(i => combined.set(i.id, (combined.get(i.id) || 0) + i.qty));
+    for (const [id, qty] of combined) {
+      if (qty > 99) throw new HttpError(400, 'The total quantity of each product, including bundles, cannot exceed 99.');
+      const p = byId.get(String(id));
+      const available = availableById?.[id]?.available ?? Number(p.stock || 0);
+      if (deductStock && qty > available) unavailable.push({ id, name: p.name, have: available, reason: 'partial' });
+    }
+    if (unavailable.length) throw new HttpError(409, 'Some items in this cart are unavailable. Please review the complete bundles and individual items.', { unavailable });
+  }
   if (!items.length) {
     // An empty or all-invalid basket used to produce a real queued order for the
     // delivery fee alone, and a rider dispatched to deliver nothing (C-03).
@@ -1140,8 +1227,9 @@ async function computeOrderPricing(reqUser, body) {
   }
   const subtotal = +items.reduce((s, i) => s + i.price * i.qty, 0).toFixed(2);
   const loyaltyAllowed = await switchOn('loyalty_redemption_enabled');
-  const discountApplied = !!(reqUser && reqUser.discountPending);
-  const discount = discountApplied ? +(subtotal * 0.05).toFixed(2) : 0;
+  const discountableSubtotal = items.filter(i => !i.bundleId).reduce((s,i) => s + i.price * i.qty, 0);
+  const discountApplied = !!(reqUser && reqUser.discountPending && discountableSubtotal > 0);
+  const discount = discountApplied ? +(discountableSubtotal * 0.05).toFixed(2) : 0;
   const afterDiscount = +(subtotal - discount).toFixed(2);
   let loyaltyUsed = 0;
   if (loyaltyAllowed && reqUser && Number(body.loyaltyUsed || 0) > 0) {
@@ -1736,6 +1824,12 @@ async function runRecurringOrders() {
   let products = [];
   try { products = await db.products.list(); } catch (e) { console.warn('runRecurringOrders: products.list failed:', e.message); return; }
   const byId = new Map(products.map((p) => [p.id, p]));
+  try {
+    for (const def of await bundleDefinitions()) {
+      const bundle = BundleRules.resolve(def, products);
+      byId.set(bundle.id, bundle);
+    }
+  } catch (e) { console.warn('runRecurringOrders: bundles unavailable:', e.message); return; }
 
   // One query for every customer in the batch instead of one per due row
   // (audit D-09). This job already loads the whole catalogue once for the
@@ -1762,7 +1856,7 @@ async function runRecurringOrders() {
       for (const it of (r.items || [])) {
         const p = byId.get(it.id);
         if (!p || (p.stock || 0) <= 0) { skippedNames.push((p && p.name) || it.name || `#${it.id}`); continue; }
-        validItems.push({ id: it.id, qty: it.qty || 1 });
+        validItems.push({ id: it.id, qty: it.qty || 1, ...(p.isBundle ? { bundleVersion: p.bundleVersion, price: p.price } : {}) });
       }
 
       // Advance the schedule regardless of outcome — a bad run must not

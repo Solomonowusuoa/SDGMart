@@ -196,7 +196,7 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
   const [useLoyalty, setUseLoyalty] = React.useState(false);
 
   const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
-  const discount = canUseDiscount ? subtotal * 0.05 : 0;
+  const discount = canUseDiscount ? +(cart.filter(i => !i.isBundle).reduce((s,i) => s + i.price * i.qty, 0) * 0.05).toFixed(2) : 0;
   const subtotalAfterDiscount = subtotal - discount;
   // Loyalty applies after squad discount, capped at remaining subtotal
   const loyaltyUsed = useLoyalty ? Math.min(loyaltyAvailable, subtotalAfterDiscount) : 0;
@@ -880,11 +880,12 @@ const CheckoutPage = ({ cart, setCart, setPage, currentUser, setCurrentUser, ope
                 {cart.map(item => (
                   <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 0', borderBottom: '1px solid var(--rule)' }}>
                     <div style={{ width: 56, height: 56, flex: 'none', background: '#fff', border: '1px solid var(--rule-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                      {item.img ? <img src={item.img} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} onError={e => { e.target.style.visibility = 'hidden'; }} /> : <span style={{ width: '100%', height: '100%', background: 'repeating-linear-gradient(135deg,#f4f4f1 0 6px,#eceae5 6px 12px)' }} />}
+                      {item.isBundle ? <BundlePhoto bundle={item} compact /> : item.img ? <img src={item.img} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} onError={e => { e.target.style.visibility = 'hidden'; }} /> : <span style={{ width: '100%', height: '100%', background: 'repeating-linear-gradient(135deg,#f4f4f1 0 6px,#eceae5 6px 12px)' }} />}
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 600, fontSize: 14 }}>{item.name}</div>
                       <div style={{ fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--rd-faint)', marginTop: 2 }}>{item.unit} × {item.qty}</div>
+                      {item.isBundle && <BundleContents item={item} />}
                     </div>
                     <div style={{ fontFamily: 'var(--f-display)', fontWeight: 800, fontSize: 15, letterSpacing: '-.02em' }}>GHS {(item.price * item.qty).toFixed(2)}</div>
                   </div>

@@ -53,13 +53,15 @@ const CartDrawer = ({ cart, setCart, setPage, onClose, currentUser }) => {
           ) : cart.map(item => (
             <div key={item.id} style={{ display: 'flex', gap: 14, padding: '20px 24px', borderBottom: '1px solid var(--rule)' }}>
               <div style={{ width: 64, height: 64, flex: 'none', background: '#fff', border: '1px solid var(--rule-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                {item.img
+                {item.isBundle ? <BundlePhoto bundle={item} compact /> : item.img
                   ? <img src={item.img} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} onError={e => { e.target.style.visibility = 'hidden'; }} />
                   : <span style={{ width: '100%', height: '100%', background: 'repeating-linear-gradient(135deg,#f4f4f1 0 6px,#eceae5 6px 12px)' }} />}
               </div>
               <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
                 <div style={{ fontSize: 13.5, fontWeight: 600, letterSpacing: '-.012em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
                 <div style={{ fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--rd-faint)' }}>{item.unit || 'each'}</div>
+                {item.isBundle && <><div style={{ fontSize: 12, color: 'var(--accent)' }}>Save GHS {Number(item.saving).toFixed(2)} per bundle</div><BundleContents item={item} /></>}
+                {item.unavailable && <div role="alert" style={{ color: 'var(--accent-red)', fontSize: 12 }}>This bundle is unavailable. Please remove it before checkout.</div>}
                 <div style={{ paddingTop: 2 }}><RPrice amount={item.price * item.qty} size="sm" /></div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10, flexShrink: 0 }}>

@@ -54,6 +54,7 @@ const SAMPLE = [
 ];
 let created = [];
 const requested = [];
+let activePromos = [];
 const CONFIG = { deduct_stock: true, loyalty_redemption_enabled: true };
 
 const noop = new Proxy(function () {}, { get: (t, k) => (k === 'then' ? undefined : noop), apply: () => Promise.resolve(null) });
@@ -80,7 +81,7 @@ const stubDb = {
   rowOut: (r) => r, rowsOut: (r) => r,
   appConfig: { get: async (k) => CONFIG[k], set: async (k, v) => { CONFIG[k] = v; }, claim: async () => false },
   products: { list: async () => SAMPLE, listForCatalog: async () => SAMPLE, listByIds: async (ids) => SAMPLE.filter(p => ids.map(Number).includes(p.id)), get: async (id) => SAMPLE.find(p => p.id == id) },
-  promotions: { listActive: async () => [], activeMap: async () => ({}) },
+  promotions: { listActive: async () => activePromos, activeMap: async () => ({}) },
   orders: { create: async (o) => { const row = { id: created.length + 1, ...o }; created.push(row); return row; }, findByPaystackRef: async () => null, list: async () => [], get: async () => null },
   sessions: { get: async () => ({ userId: 1, userType: 'user' }), create: async () => 'tok', destroy: async () => {} },
   users: { get: async () => ({ ...ACCOUNT }) },
@@ -370,6 +371,56 @@ setTimeout(async () => {
     check('blank, oversized or non-text requests are rejected', rejected.status, 400);
   }
   check('invalid product requests are not saved', requested.length, 1);
+
+  console.log('\n=== K. Fixed bundles: pricing, stock, Admin and paid snapshots ===');
+  const B = require('../bundles');
+  const trial = { id: 'test', group: 'Cooking Essentials', name: 'Test bundle', saving: 5, active: true, version: 1, img: '', description: '', members: [{productId:1,quantity:2,label:''},{productId:2,quantity:1,label:''}] };
+  CONFIG.store_bundles = [trial]; CONFIG.deduct_stock = false;
+  ACCOUNT.discountPending = true; ACCOUNT.loyaltyBalance = 0;
+  activePromos = [{productIds:[1,2],discountPercent:20}];
+  created = [];
+  const cartBundle = { ...B.resolve(trial,SAMPLE), qty: 1 };
+  const mixedOrder = await post('/api/orders', order([{...cartBundle,contents:[],saving:49}, {id:2,qty:1}]));
+  check('bundle plus individual extra accepted', mixedOrder.status, 201);
+  const savedBundle = created[0];
+  check('bundle uses full component prices minus only its fixed saving', savedBundle.subtotal, 53);
+  check('legacy percentage discount applies only to the individual extra', savedBundle.discount, 0.4);
+  check('extra stays a separate normally promoted item', savedBundle.items.filter(i=>!i.bundleId).map(i=>[i.id,i.qty,i.price]), [[2,1,8]]);
+  check('bundle quantities are reconstructed server-side despite tampered contents', savedBundle.items.filter(i=>i.bundleId).reduce((s,i)=>s+i.qty,0), 3);
+  const bundleSnapshot = savedBundle.items.filter(i=>i.bundleId);
+  for(const patch of [{price:1},{bundleVersion:999},{id:'bundle:missing'},{qty:-1}]) {
+    const bad = await post('/api/orders',order([{...cartBundle,...patch}]));
+    check('tampered price, stale version, unknown bundle or invalid quantity rejected', bad.status >= 400, true);
+  }
+  CONFIG.deduct_stock = true; shelf = {1:5,2:5};
+  const stockConflict = await post('/api/orders',order([cartBundle,{id:1,qty:4}]));
+  check('bundle and loose items share stock availability', stockConflict.status,409);
+  check('failed mixed cart consumes nothing',shelf,{1:5,2:5});
+  const validStock = await post('/api/orders',order([{...cartBundle,qty:2}]));
+  check('two complete bundles can be purchased',validStock.status,201);
+  check('stock deducted for all component units',shelf,{1:1,2:3});
+  CONFIG.deduct_stock = false; activePromos = []; ACCOUNT.discountPending = false;
+  const badEdit = await put('/api/admin/bundles/test',{...trial,saving:100});
+  check('Admin cannot save a negative-price bundle',badEdit.status,400);
+  const paused = await put('/api/admin/bundles/test',{...trial,active:false});
+  check('Admin pause saved',paused.status,200);
+  check('Admin save increments version',paused.body.version,2);
+  const staleEdit = await put('/api/admin/bundles/test',trial);
+  check('stale Admin edit cannot overwrite newer configuration',staleEdit.status,409);
+  const pausedOrder = await post('/api/orders',order([cartBundle]));
+  check('paused bundle cannot be bought from an old cart',pausedOrder.status,409);
+  ACCOUNT.role = 'customer';
+  check('non-admin cannot edit bundles',(await put('/api/admin/bundles/test',paused.body)).status,403);
+  ACCOUNT.role = 'admin';
+  const paidRef = 'SDG_bundle_paid_' + Date.now();
+  const lockedItems = JSON.parse(JSON.stringify(bundleSnapshot));
+  PENDING[paidRef] = { reference:paidRef,userId:null,draft:{...order([cartBundle]),_locked:{pricing:{items:lockedItems,subtotal:45,discount:0,loyaltyUsed:0,delivery:10,total:55}}} };
+  const paidPayload=JSON.stringify({event:'charge.success',data:{reference:paidRef,amount:5500}});
+  const paidSig=crypto.createHmac('sha512',process.env.PAYSTACK_SECRET_KEY).update(paidPayload).digest('hex');
+  const paidBundle=await fetch(BASE+'/api/paystack/webhook',{method:'POST',headers:{'Content-Type':'application/json','x-paystack-signature':paidSig},body:paidPayload});
+  check('paid bundle completes after Admin pauses or changes it',paidBundle.status,200);
+  check('paid order keeps its purchased bundle contents and prices',created[created.length-1].items,lockedItems);
+  delete CONFIG.store_bundles;
 
   console.log('');
   // Shut the listener down rather than exiting under it.

@@ -1,5 +1,5 @@
 // CategoryPage — design refresh: hairline grid + sidebar + Sort dropdown
-const CategoryPage = ({ selectedCategory, setSelectedCategory, onAdd, onView, searchQuery }) => {
+const CategoryPage = ({ selectedCategory, setSelectedCategory, onAdd, onView, searchQuery, currentUser }) => {
   const [sortBy, setSortBy] = React.useState('popular');
   const [sortOpen, setSortOpen] = React.useState(false);
   const [activeCategory, setActiveCategory] = React.useState(selectedCategory);
@@ -100,10 +100,6 @@ const CategoryPage = ({ selectedCategory, setSelectedCategory, onAdd, onView, se
           <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--rd-muted)' }}>
             <div style={{ fontFamily: 'var(--f-serif)', fontStyle: 'italic', fontSize: 26, color: 'var(--ink)' }}>Nothing matches{searchQuery ? ` “${searchQuery}”` : ''}.</div>
             <div style={{ fontSize: 13.5, marginTop: 10, marginBottom: 20 }}>{searchQuery ? "We don't stock this yet — but we love a challenge." : 'Try a different category.'}</div>
-            {searchQuery && (
-              <RequestProductButton prefillProduct={searchQuery} label="Ask us to find it"
-                style={{ background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', padding: '13px 22px', fontFamily: 'var(--f-ui)', fontSize: 14, fontWeight: 600 }} />
-            )}
           </div>
         ) : (
           <div className="rd-grid rd-grid-4">
@@ -111,6 +107,7 @@ const CategoryPage = ({ selectedCategory, setSelectedCategory, onAdd, onView, se
           </div>
         )}
       </div>
+      <RequestItemsSection searchQuery={searchQuery} currentUser={currentUser} />
     </div>
   );
 };
