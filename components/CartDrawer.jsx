@@ -23,12 +23,19 @@ const CartDrawer = ({ cart, setCart, setPage, onClose, currentUser }) => {
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(17,17,17,.42)', zIndex: 200 }} />
-      <div style={{ position: 'fixed', top: 0, right: 0, height: '100vh', width: 400, maxWidth: '95vw', background: 'var(--panel)', zIndex: 201,
+      <div className="rd-cart-drawer" style={{ position: 'fixed', top: 0, right: 0, height: '100vh', width: 400, maxWidth: '95vw', background: 'var(--panel)', zIndex: 201,
         borderLeft: '1px solid var(--border-input)', display: 'flex', flexDirection: 'column', fontFamily: 'var(--f-ui)', color: 'var(--ink)', animation: 'slideIn .25s ease-out' }}>
-        <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
+        <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}
+          .rd-cart-drawer{height:100dvh !important; max-height:100dvh; overflow-y:auto; overscroll-behavior:contain;}
+          @media (max-width:640px){
+            .rd-cart-drawer{display:block !important;}
+            .rd-cart-drawer .rd-cart-header{position:sticky;top:0;z-index:1;background:var(--panel);}
+            .rd-cart-drawer .rd-cart-items{height:auto !important;min-height:0;overflow:visible !important;}
+            .rd-cart-drawer .rd-cart-footer{flex:none !important;}
+          }`}</style>
 
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '22px 24px', borderBottom: '1px solid var(--rule)' }}>
+        <div className="rd-cart-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '22px 24px', borderBottom: '1px solid var(--rule)' }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
             <span style={{ fontFamily: 'var(--f-display)', fontSize: 22, fontWeight: 700, letterSpacing: '-.028em' }}>Your Cart</span>
             <span style={{ fontFamily: 'var(--f-display)', fontSize: 16, fontWeight: 800, color: 'var(--accent)' }}>{count}</span>
@@ -43,7 +50,7 @@ const CartDrawer = ({ cart, setCart, setPage, onClose, currentUser }) => {
         </div>
 
         {/* Items */}
-        <div style={{ flex: 1, overflowY: 'auto' }}>
+        <div className="rd-cart-items" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           {cart.length === 0 ? (
             <div style={{ padding: '64px 28px', textAlign: 'center' }}>
               <div style={{ fontFamily: 'var(--f-serif)', fontStyle: 'italic', fontSize: 26, color: 'var(--ink)', lineHeight: 1.2 }}>Your cart is empty.</div>
@@ -78,7 +85,7 @@ const CartDrawer = ({ cart, setCart, setPage, onClose, currentUser }) => {
 
         {/* Footer */}
         {cart.length > 0 && (
-          <div style={{ padding: '22px 24px', borderTop: '1px solid var(--rule)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="rd-cart-footer" style={{ padding: '22px 24px calc(22px + env(safe-area-inset-bottom))', borderTop: '1px solid var(--rule)', display: 'flex', flexDirection: 'column', gap: 12, flexShrink: 0 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
               <span style={{ color: 'var(--rd-muted)' }}>Subtotal</span>
               <span style={{ fontFamily: 'var(--f-display)', fontWeight: 700 }}>GHS {subtotal.toFixed(2)}</span>

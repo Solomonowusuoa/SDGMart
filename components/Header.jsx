@@ -40,7 +40,7 @@ const SearchField = ({ style, searchQuery, onSearch, setSearchQuery, setPage }) 
 
 // Header Component — design refresh (2026): flat, typographic chrome
 // (announcement bar + header + category pill rail). Fully responsive.
-const Header = ({ cart, page, setPage, selectedCategory, setSelectedCategory, searchQuery, setSearchQuery, currentUser, onLogout }) => {
+const Header = ({ cart, page, setPage, onOpenCart, selectedCategory, setSelectedCategory, searchQuery, setSearchQuery, currentUser, onLogout }) => {
   const [menuOpen, setMenuOpen] = React.useState(false);
   const [cartBounce, setCartBounce] = React.useState(false);
   const isMobile = useMobile();
@@ -69,7 +69,7 @@ const Header = ({ cart, page, setPage, selectedCategory, setSelectedCategory, se
 
   // Bag glyph + accent count badge (badge only when count > 0)
   const CartGlyph = () => (
-    <button onClick={() => setPage('cart')} aria-label={`Cart, ${totalItems} item${totalItems === 1 ? '' : 's'}`}
+    <button onClick={onOpenCart} aria-label={`Cart, ${totalItems} item${totalItems === 1 ? '' : 's'}`}
       style={{ position: 'relative', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px',
         transform: cartBounce ? 'scale(1.16)' : 'scale(1)', transition: 'transform .2s' }}>
       <span style={{ display: 'block', width: 15, height: 17, border: '1.5px solid var(--ink)', borderRadius: '0 0 3px 3px' }} />

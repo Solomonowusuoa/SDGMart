@@ -448,7 +448,6 @@ const App = () => {
       <div style={{ minHeight: '100vh', background: 'var(--cream)' }}>
         <OfflineBanner />
         <AdminPage setPage={navigateTo} onLogout={logout} currentUser={currentUser} setCurrentUser={setCurrentUser} />
-        <WhatsAppFloat />
       <IOSInstallHint />
       </div>
     );
@@ -467,6 +466,7 @@ const App = () => {
         cart={cart}
         page={page}
         setPage={navigateTo}
+        onOpenCart={() => setCartOpen(true)}
         selectedCategory={selectedCategory}
         setSelectedCategory={setSelectedCategory}
         searchQuery={searchQuery}
@@ -500,15 +500,6 @@ const App = () => {
           setPage={navigateTo}
           setSelectedCategory={setSelectedCategory}
           onView={viewProduct}
-        />
-      )}
-      {page === 'cart' && (
-        <CartDrawer
-          cart={cart}
-          setCart={setCart}
-          setPage={navigateTo}
-          currentUser={currentUser}
-          onClose={() => navigateTo('home')}
         />
       )}
       {page === 'checkout' && (
@@ -545,7 +536,7 @@ const App = () => {
         />
       )}
 
-      {cartOpen && page !== 'cart' && (
+      {cartOpen && (
         <CartDrawer
           cart={cart}
           setCart={setCart}
@@ -555,8 +546,8 @@ const App = () => {
         />
       )}
 
-      {/* Hide WhatsApp float on checkout — it covers the totals + Confirm button on mobile */}
-      {page !== 'checkout' && <WhatsAppFloat />}
+      {/* Keep the floating WhatsApp control on the home screen only. */}
+      {page === 'home' && !cartOpen && <WhatsAppFloat />}
       <IOSInstallHint />
       <ProfileNudge currentUser={currentUser} setPage={navigateTo} />
 
