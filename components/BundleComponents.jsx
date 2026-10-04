@@ -34,13 +34,16 @@ const BundlesSection = ({ onView }) => {
   </section>;
 };
 const BundleProductPage = ({ product, onAdd, onView, setPage }) => {
-  const [qty, setQty] = React.useState(1);
+  const [qty, setQty] = React.useState('1');
   const [added, setAdded] = React.useState(false);
   const mobile = useMobile();
   const bundle = (window.BUNDLES || []).find(b => b.id === product.id);
   const variants = (window.BUNDLES || []).filter(b => b.category === product.category && b.valid);
   if (!bundle) return <div className="rd-gutter" style={{ paddingTop: 36, paddingBottom: 48 }}><h1>This bundle is currently unavailable</h1><button style={bundleButtonStyle} onClick={() => setPage('home')}>Back to shop</button></div>;
   const available = bundle.valid && bundle.active && bundle.stock > 0;
+  const maxQty = window.SHOW_STOCK ? Math.min(99, bundle.stock) : 99;
+  const parsedQty = Number(qty);
+  const selectedQty = Number.isFinite(parsedQty) ? Math.max(1, Math.min(maxQty, Math.floor(parsedQty))) : 1;
   return <div className="rd-gutter" style={{ paddingTop: 28, paddingBottom: 56, color: 'var(--ink)' }}>
     <button onClick={() => setPage('home')} style={{ background: 'none', border: 0, padding: 0, fontSize: 13 }}>← Back to shop</button>
     <h1 style={{ fontFamily: 'var(--f-display)', fontSize: mobile ? 30 : 40, margin: '24px 0 16px' }}>{bundle.category} bundles</h1>
@@ -57,8 +60,8 @@ const BundleProductPage = ({ product, onAdd, onView, setPage }) => {
         <div style={{ color: 'var(--accent)', marginTop: 8, fontWeight: 600 }}>Save GHS {bundle.saving.toFixed(2)} per bundle</div>
         <p style={{ fontSize: 13, lineHeight: 1.6, margin: '20px 0' }}>Contents are fixed. You can add other products separately; they keep their individual prices.</p>
         {available ? <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <label style={{ fontSize: 12 }}>Bundles<input aria-label="Number of bundles" type="number" min={1} max={window.SHOW_STOCK ? Math.min(99,bundle.stock) : 99} value={qty} onChange={e => setQty(Math.max(1, Math.min(99,Math.floor(Number(e.target.value)) || 1)))} style={{ display: 'block', width: 72, fontSize: 16, padding: 10, border: '1px solid var(--border-input)' }} /></label>
-          <button style={{ ...bundleButtonStyle, flex: 1 }} onClick={() => { for(let i=0;i<qty;i++) onAdd(bundle); setAdded(true); }}>{added ? 'Add another' : 'Add bundle'} — GHS {(bundle.price * qty).toFixed(2)}</button>
+          <label style={{ fontSize: 12 }}>Bundles<input aria-label="Number of bundles" type="number" min={1} max={maxQty} step={1} inputMode="numeric" value={qty} onChange={e => setQty(e.target.value)} onBlur={() => setQty(String(selectedQty))} style={{ display: 'block', width: 72, fontSize: 16, padding: 10, border: '1px solid var(--border-input)' }} /></label>
+          <button style={{ ...bundleButtonStyle, flex: 1 }} onClick={() => { setQty(String(selectedQty)); for(let i=0;i<selectedQty;i++) onAdd(bundle); setAdded(true); }}>{added ? 'Add another' : 'Add bundle'} — GHS {(bundle.price * selectedQty).toFixed(2)}</button>
         </div> : <p role="status">This complete bundle is currently unavailable.</p>}
         {added && <p role="status" style={{ fontSize: 13 }}>Added to your cart.</p>}
       </div>

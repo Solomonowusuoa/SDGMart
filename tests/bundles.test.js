@@ -1,9 +1,9 @@
 const assert = require('node:assert/strict');
 const B = require('../bundles');
-const prices = {134:20.5,81:11.5,126:26,131:20,191:45,129:80,123:15,127:40,132:70,125:35,189:23,194:70,208:20,183:13,180:20,186:25,187:40,211:105,42:70,38:10.5,46:32,227:11,75:12,72:12,43:75,228:39.5,222:12,223:90,204:130,76:45};
+const prices = {134:20.5,81:11.5,126:26,131:20,191:45,129:80,123:15,127:40,132:70,125:35,189:23,194:70,208:20,183:13,180:20,186:25,187:40,211:105,42:70,38:10.5,46:32,227:11,237:6,72:12,43:75,228:39.5,222:12,223:90,204:130,76:45};
 const products = Object.entries(prices).map(([id,price])=>({id:Number(id),name:'Product '+id,price,stock:99,unit:'pack',img:'photo.jpg'}));
 const bundles = B.DEFAULTS.map(d=>B.resolve(d,products));
-assert.deepEqual(bundles.map(b=>b.price),[84.5,216,372.5,126,317,181.5,236,367.5]);
+assert.deepEqual(bundles.map(b=>b.price),[84.5,216,372.5,126,317,175.5,236,367.5]);
 for(const b of bundles) {
   assert.ok(b.valid && b.active);
   for(const quantity of [1,2,3,9]) {
@@ -28,7 +28,9 @@ assert.equal(B.resolve(B.DEFAULTS[0],missingStock).stock,1);
 assert.equal(bundles[2].contents.find(p=>p.productId===194).quantity,1);
 assert.ok(!bundles[2].contents.some(p=>p.productId===127));
 for(const b of bundles.filter(b=>['cooking-basics','everyday-cooking'].includes(b.bundleId))) {
-  const remie=b.contents.find(p=>p.productId===75);
-  assert.equal(remie.quantity,1); assert.equal(remie.unit,'12 sachets × 10g');
+  const kivo=b.contents.find(p=>p.productId===237);
+  assert.equal(kivo.quantity,b.bundleId==='cooking-basics'?1:2);
+  assert.ok(!b.contents.some(p=>p.productId===75));
+  assert.equal(b.bundleVersion,2);
 }
 console.log('PASS: all eight agreed bundle prices, cent-exact allocation, fixed quantities, stock, separate extras and safe reorders');

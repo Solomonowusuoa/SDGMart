@@ -1,6 +1,6 @@
 # Store bundles
 
-Implemented 2026-09-23. Deployment is a separate step after the local commit.
+Implemented and deployed 2026-09-23. Updated 2026-10-04: editable quantity field and Kivo Curry Plus substitution.
 
 The homepage replaces the old seven-product Essentials section with three bundle groups below individual products and immediately above Shop by Category. Each variation has fixed contents and its own product page. Extra products stay separate in the cart.
 
@@ -11,11 +11,11 @@ The homepage replaces the old seven-product Essentials section with three bundle
 | Family Breakfast | 387.50 | 15 | 372.50 |
 | Everyday Home | 131.00 | 5 | 126.00 |
 | Family Home | 327.00 | 10 | 317.00 |
-| Cooking Basics | 186.50 | 5 | 181.50 |
+| Cooking Basics | 180.50 | 5 | 175.50 |
 | Everyday Cooking | 246.00 | 10 | 236.00 |
 | Family Cooking | 382.50 | 15 | 367.50 |
 
-These totals reflect the catalogue at implementation. Product price changes in Inventory automatically change bundle prices while preserving the fixed saving. Remie is one inventory pack containing 12 sachets, currently GHS 12; its price still needs owner confirmation. Family Breakfast uses Nutella and six Ideal 160g tins. Family Home includes Savlon 500ml.
+These totals reflect the catalogue at implementation, with the cooking totals rechecked on 2026-10-04. Product price changes in Inventory automatically change bundle prices while preserving the fixed saving. Cooking Basics contains one Kivo Curry Plus sachet; Everyday Cooking contains two. Kivo is GHS 6 per sachet and replaces Remie in both bundles. Family Breakfast uses Nutella and six Ideal 160g tins. Family Home includes Savlon 500ml.
 
 All three cooking bundles use one Tasty Tom Tomato Mix 1.05kg pack (#228). Cooking Basics replaces its former two 200g packs with this one larger pack; savings remain GHS 5, 10 and 15 respectively.
 
@@ -26,6 +26,8 @@ All three cooking bundles use one Tasty Tom Tomato Mix 1.05kg pack (#228). Cooki
 - Order pricing is verified on the server. Product promotions and squad discounts do not stack on bundle lines. Loyalty credit can still be redeemed.
 - Orders store component quantities and allocated prices in integer pesewas, with bundle metadata. Stock deduction, reservation, cancellation and packing therefore use real product IDs. Reordering reconstructs complete bundles at current prices.
 - Changes to bundle versions or prices require the customer to refresh the cart before checkout.
+- Cooking Basics and Everyday Cooking defaults are version 2 after the Kivo substitution, so old carts cannot silently buy changed contents at an unchanged price.
+- The quantity field preserves an empty value while editing. Blur or Add normalizes it to a whole number from 1 to 99 (or the available stock limit when stock display is enabled).
 - The catalogue snapshot marks Jollof Mix 210g (#222) out of stock, making Everyday Cooking and Family Cooking unavailable until its stock setting is updated. Cooking Basics no longer depends on the out-of-stock Tasty Tom 200g (#227). No production stock was changed.
 
 ## Images and request footer
