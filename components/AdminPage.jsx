@@ -3,7 +3,7 @@
 const MiniBars = ({ data, height = 120, color = '#1A1A1A', valueFmt }) => {
   if (!data || !data.length) return <div style={{ fontSize: 13, color: 'var(--warm-gray)', padding: 20 }}>No data yet.</div>;
   const max = Math.max(1, ...data.map(d => d.value));
-  const W = 100, barGap = 1.5;
+  const W = 100, barGap = Math.min(1.5, 25 / data.length);
   const bw = (W - barGap * (data.length - 1)) / data.length;
   return (
     <svg viewBox={`0 0 ${W} ${height / 3}`} preserveAspectRatio="none" style={{ width: '100%', height, display: 'block' }}>
@@ -41,10 +41,10 @@ const RankBars = ({ data, color = '#1A1A1A', valueFmt }) => {
   );
 };
 
-const StatCard = ({ label, value, sub, accent }) => (
+const StatCard = ({ label, value, sub, accent, onClick }) => (
   <div style={{ background: 'var(--white)', borderRadius: 12, padding: '16px 18px', boxShadow: 'var(--shadow)', borderTop: `3px solid ${accent || '#1A1A1A'}` }}>
     <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warm-gray)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{label}</div>
-    <div style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>{value}</div>
+    <div style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>{onClick ? <button onClick={onClick} style={{ font: 'inherit', color: 'inherit', textDecoration: 'underline', textUnderlineOffset: 4 }} aria-label={`View ${label.toLowerCase()}`}>{value}</button> : value}</div>
     {sub && <div style={{ fontSize: 12, color: 'var(--warm-gray)', marginTop: 2 }}>{sub}</div>}
   </div>
 );
@@ -448,7 +448,7 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   );
 
   const tabs = [
-    ['overview','📊 Overview'],['dashboard','📈 Dashboard'],['revenue','💰 Revenue'],['orders','📦 Orders'],['inventory','🏪 Inventory'],['bundles','Bundles'],
+    ['overview','📊 Overview'],['dashboard','📈 Dashboard'],['customers','👥 Customers'],['revenue','💰 Revenue'],['orders','📦 Orders'],['inventory','🏪 Inventory'],['bundles','Bundles'],
     ['expiry','⏰ Expiry'],['reconcile','💳 Reconcile'],['routes','🗺 Routes'],['riders','🛵 Riders'],
     ['promotions','⚡ Promotions'],['requests','🛒 Requests'],['issues','🚨 Issues'],
     ['analytics','🔎 Analytics'],['retention','🔁 Retention'],['leaderboard','🏆 Leaderboard'],['comms','📣 Comms'],
@@ -458,10 +458,21 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
   // ── Dashboard / metrics state ──
   const [metrics, setMetrics] = React.useState(null);
   const [metricsDays, setMetricsDays] = React.useState(30);
+  const [metricsError, setMetricsError] = React.useState('');
+  const metricsRequest = React.useRef(0);
   const loadMetrics = React.useCallback(() => {
-    apiFetch(`/api/admin/metrics?days=${metricsDays}`).then(r => r.ok ? r.json() : null).then(setMetrics).catch(() => {});
+    const request = ++metricsRequest.current;
+    setMetrics(null); setMetricsError('');
+    apiFetch(`/api/admin/metrics?days=${metricsDays}`).then(r => {
+      if (!r.ok) throw new Error('Could not load dashboard metrics. Please try again.');
+      return r.json();
+    }).then(data => { if (request === metricsRequest.current) setMetrics(data); })
+      .catch(e => { if (request === metricsRequest.current) setMetricsError(e.message); });
   }, [metricsDays]);
-  React.useEffect(() => { if (adminTab === 'dashboard') loadMetrics(); }, [adminTab, loadMetrics]);
+  React.useEffect(() => {
+    if (adminTab === 'dashboard') loadMetrics();
+    return () => { metricsRequest.current++; };
+  }, [adminTab, loadMetrics]);
 
   // ── Leaderboard state ──
   const [leaders, setLeaders] = React.useState([]);
@@ -1780,6 +1791,8 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
           </div>
         )}
 
+        {adminTab === 'customers' && <AdminCustomers isMobile={isMobile} />}
+
         {/* DASHBOARD — operational metrics + charts */}
         {adminTab === 'dashboard' && (
           <div>
@@ -1796,17 +1809,56 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
               </div>
             </div>
 
-            {!metrics ? (
-              <div style={{ color: 'var(--warm-gray)', fontSize: 14 }}>Loading metrics…</div>
+            {metricsError ? (
+              <div role="alert" style={{ padding: 20, background: '#FFF2EF', borderRadius: 10 }}>{metricsError} <button onClick={loadMetrics} style={{ fontWeight: 700, textDecoration: 'underline' }}>Retry</button></div>
+            ) : !metrics ? (
+              <div role="status" style={{ color: 'var(--warm-gray)', fontSize: 14 }}>Loading metrics…</div>
             ) : (
               <>
+                <p style={{ color: 'var(--warm-gray)', fontSize: 12, lineHeight: 1.7, marginBottom: 18 }}>
+                  {metrics.period.start} – {metrics.period.end} · {metrics.timezone} · Today is partial. Updated {new Date(metrics.generatedAt).toLocaleTimeString('en-GB', { timeZone: metrics.timezone, hour: '2-digit', minute: '2-digit' })}.
+                </p>
                 {/* KPI cards */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14, marginBottom: 24 }}>
-                  <StatCard label="Revenue (delivered)" value={`GHS ${metrics.totals.revenue.toFixed(0)}`} sub={`${metrics.totals.delivered} delivered`} accent="#1A1A1A" />
+                  <StatCard label="Revenue (delivered)" value={`GHS ${metrics.totals.revenue.toFixed(2)}`} sub={`${metrics.totals.delivered} delivered`} accent="#1A1A1A" />
                   <StatCard label="Orders" value={metrics.totals.orders} sub={`last ${metrics.days} days`} accent="#3879BF" />
-                  <StatCard label="Avg order value" value={`GHS ${metrics.totals.aov.toFixed(2)}`} accent="#C8923A" />
-                  <StatCard label="Customers" value={metrics.totals.customers} sub="registered" accent="#27AE60" />
-                  <StatCard label="Active auto-reorders" value={metrics.totals.activeRecurring} accent="#9B2D60" />
+                  <StatCard label="Avg order value" value={`GHS ${metrics.totals.aov.toFixed(2)}`} sub="delivered orders only" accent="#C8923A" />
+                  <StatCard label="Customers" value={metrics.totals.customers} sub="all current registrations · view list" accent="#27AE60" onClick={() => setAdminTab('customers')} />
+                  <StatCard label="Active auto-reorders" value={metrics.totals.activeRecurring} sub="current active schedules" accent="#9B2D60" />
+                </div>
+
+                <h2 style={{ fontFamily: 'var(--font-head)', fontSize: 20, marginBottom: 12 }}>Customer growth &amp; purchasing</h2>
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(auto-fit, minmax(190px, 1fr))', gap: 14, marginBottom: 24 }}>
+                  <StatCard label="New registrations" value={metrics.totals.newCustomers} sub={`vs ${metrics.previous.newCustomers} in previous ${metrics.days} days`} accent="#27AE60" />
+                  <StatCard label="First-purchase conversion" value={metrics.totals.activationRate === null ? '—' : `${metrics.totals.activationRate}%`} sub={`${metrics.totals.convertedCustomers} of ${metrics.totals.customers} current customers · lifetime`} accent="#27AE60" />
+                  <StatCard label="Yet to purchase" value={metrics.totals.neverPurchased} sub="no delivered order · lifetime" accent="#C8923A" />
+                  <StatCard label="Active buyers" value={metrics.totals.activeBuyers} sub="unique customers with delivered orders" accent="#3879BF" />
+                  <StatCard label="First-time buyers" value={metrics.totals.firstTimeBuyers} sub="first delivered purchase placed in this period" accent="#3879BF" />
+                  <StatCard label="Returning buyer share" value={metrics.totals.returningBuyerRate === null ? '—' : `${metrics.totals.returningBuyerRate}%`} sub={`${metrics.totals.returningBuyers} buyers also purchased before this period`} accent="#9B2D60" />
+                  <StatCard label="Cancellation rate" value={metrics.totals.cancellationRate === null ? '—' : `${metrics.totals.cancellationRate}%`} sub={`${metrics.totals.cancelled} cancelled / ${metrics.totals.placedOrders} placed orders`} accent="#C0392B" />
+                </div>
+
+                <div style={{ background: 'var(--white)', borderRadius: 12, padding: 18, boxShadow: 'var(--shadow)', marginBottom: 24 }}>
+                  <h2 style={{ fontSize: 14, marginBottom: 12 }}>Registrations per day</h2>
+                  <MiniBars data={metrics.series.map(s => ({ date: s.date, value: s.registrations }))} color="#27AE60" />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--warm-gray)', marginTop: 6 }}><span>{metrics.period.start}</span><span>{metrics.period.end}</span></div>
+                </div>
+
+                <div style={{ background: 'var(--white)', borderRadius: 12, padding: 18, boxShadow: 'var(--shadow)', marginBottom: 24, overflowX: 'auto' }}>
+                  <h2 style={{ fontSize: 14, marginBottom: 6 }}>Period comparison</h2>
+                  <p style={{ fontSize: 12, color: 'var(--warm-gray)', marginBottom: 12 }}>Previous: {metrics.period.previousStart} – {metrics.period.previousEnd}. Both periods use current order status; today is still in progress.</p>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, textAlign: 'left' }}>
+                    <thead><tr>{['Metric', 'Current', 'Previous', 'Change'].map(h => <th scope="col" key={h} style={{ padding: 8 }}>{h}</th>)}</tr></thead>
+                    <tbody>{[
+                      ['Delivered revenue', 'revenue', true], ['Delivered orders', 'delivered'], ['New registrations', 'newCustomers'], ['Active buyers', 'activeBuyers'],
+                    ].map(([label, key, currency]) => {
+                      const current = metrics.totals[key], previous = metrics.previous[key];
+                      return <tr key={key} style={{ borderTop: '1px solid var(--cream-dark)' }}>
+                        <td style={{ padding: 8 }}>{label}</td><td style={{ padding: 8 }}>{currency ? `GHS ${current.toFixed(2)}` : current}</td><td style={{ padding: 8 }}>{currency ? `GHS ${previous.toFixed(2)}` : previous}</td>
+                        <td style={{ padding: 8 }}>{previous ? `${current >= previous ? '+' : ''}${((current - previous) / previous * 100).toFixed(1)}%` : current ? 'No baseline' : '—'}</td>
+                      </tr>;
+                    })}</tbody>
+                  </table>
                 </div>
 
                 {/* Orders + revenue per day */}
@@ -1817,18 +1869,18 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                   </div>
                   <div style={{ background: 'var(--white)', borderRadius: 12, padding: 18, boxShadow: 'var(--shadow)' }}>
                     <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Revenue per day (GHS)</div>
-                    <MiniBars data={metrics.series.map(s => ({ date: s.date, value: Math.round(s.revenue) }))} color="#1A1A1A" valueFmt={v => 'GHS ' + v} />
+                    <MiniBars data={metrics.series.map(s => ({ date: s.date, value: s.revenue }))} color="#1A1A1A" valueFmt={v => 'GHS ' + v.toFixed(2)} />
                   </div>
                 </div>
 
                 {/* Top products + categories + status */}
                 <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18 }}>
                   <div style={{ background: 'var(--white)', borderRadius: 12, padding: 18, boxShadow: 'var(--shadow)' }}>
-                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Top products (by qty sold)</div>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Top products (delivered quantity)</div>
                     <RankBars data={metrics.topProducts} color="#3879BF" />
                   </div>
                   <div style={{ background: 'var(--white)', borderRadius: 12, padding: 18, boxShadow: 'var(--shadow)' }}>
-                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Top categories</div>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Top categories (delivered quantity)</div>
                     <RankBars data={metrics.topCategories} color="#C8923A" />
                   </div>
                 </div>
@@ -1844,6 +1896,11 @@ const AdminPage = ({ setPage, onLogout, currentUser, setCurrentUser }) => {
                     ))}
                   </div>
                 </div>
+                <details style={{ marginTop: 20, fontSize: 12, lineHeight: 1.8, color: 'var(--warm-gray)' }}>
+                  <summary style={{ cursor: 'pointer', fontWeight: 700 }}>How these metrics are calculated</summary>
+                  <p>Periods include today and use order placement dates in {metrics.timezone}. Revenue is the order total for orders now marked delivered, including delivery fees and after discounts and loyalty credit. It is not profit or a payment settlement report. Average order value and product rankings use those same delivered orders. Orders exclude cancellations; cancellation rate divides cancelled orders by all placed orders.</p>
+                  <p>Customer metrics cover currently registered customer accounts, excluding staff and deleted accounts. Active buyers have a delivered order placed in the selected period. Returning buyers also have a delivered purchase placed before that period; this share is not a cohort retention rate. Lifetime conversion divides customers with any delivered order by all currently registered customers. Registrations per day therefore exclude deleted accounts. A dash means there is no denominator; no baseline means the previous value was zero.</p>
+                </details>
               </>
             )}
           </div>

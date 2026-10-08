@@ -9,7 +9,9 @@ A same-day grocery web app for Tamale, Ghana. This doc lets a new chat (or you) 
 
 ---
 
-## ⭐ LATEST STATE — resume here (updated 2026-09-23)
+## ⭐ LATEST STATE — resume here (updated 2026-10-08)
+
+- **Admin customers and analytics, 2026-10-08:** Customers now has a searchable, paginated directory with registration/contact details, non-cancelled order counts, delivered spend, and last order date; the Dashboard customer count links to it. Added registration trends, lifetime first-purchase conversion, customers yet to purchase, active/first-time/returning buyers, cancellation rate, and preceding-period comparisons. Average order value and rankings now consistently use delivered orders. History reads paginate beyond Supabase's row cap and report query failures instead of zeroes; 90-day chart spacing is fixed. Admin guards, minimal data projections, no-store responses, and PII read logging apply. See [ADMIN-ANALYTICS.md](ADMIN-ANALYTICS.md) for definitions and limitations. No migration is required. Automated tests, desktop/mobile browser checks using synthetic data, and read-only checks of the configured live database passed.
 
 - **Fixed bundles:** initial implementation deployed 2026-09-23 (`7985dc2`); see [BUNDLES.md](BUNDLES.md). The 2026-10-04 update fixes clearing/replacing the quantity field and replaces Remie with Kivo Curry Plus (#237): one sachet in Cooking Basics (GHS 175.50, saving 5), two in Everyday Cooking (GHS 236, saving 10). Both definitions increment to version 2. Live `store_bundles` was unset before this update, so the site uses code defaults. No Supabase migration is needed.
 

@@ -454,6 +454,7 @@ const BUNDLE_FILES = [
 // Staff-only. Loaded on demand by App.jsx; never sent to a shopper.
 const STAFF_BUNDLE_FILES = [
   'components/AdminBundles.jsx',
+  'components/AdminCustomers.jsx',
   'components/AdminPage.jsx',
   'components/RiderPage.jsx',
 ];
@@ -2989,7 +2990,26 @@ app.get('/readyz', async (req, res) => {
 app.get('/healthz', (req, res) => { runDailyJobs(); res.json({ ok: true, ts: Date.now() }); });
 
 // ── Admin: operational metrics dashboard ─────────────────────────────────
+app.get('/api/admin/customers', requireAdmin, async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const page = Number(req.query.page || 1);
+  const pageSize = Number(req.query.pageSize || 25);
+  const search = req.query.search === undefined ? '' : req.query.search;
+  const sort = req.query.sort || 'newest';
+  if (!Number.isSafeInteger(page) || page < 1 || page > 1000000 ||
+      !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100 ||
+      typeof search !== 'string' || search.length > 100 || !['newest', 'oldest', 'name'].includes(sort)) {
+    return res.status(400).json({ error: 'Invalid customer search or pagination.' });
+  }
+  try {
+    const result = await db.users.listCustomers({ page, pageSize, search: search.trim(), sort });
+    logPiiAccess(req, 'GET /api/admin/customers', result.customers.length);
+    res.json(result);
+  } catch (e) { fail(res, e, req); }
+});
+
 app.get('/api/admin/metrics', requireAdmin, async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
   try {
     const days = Math.max(7, Math.min(90, parseInt(req.query.days) || 30));
     res.json(await db.metrics.overview({ days }));

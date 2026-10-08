@@ -9,6 +9,7 @@
 //   VAPID_PRIVATE_KEY         = (optional)
 //
 const crypto = require('crypto');
+const { summarizeCustomerOrders, buildMetrics } = require('./admin-analytics');
 const { createClient } = require('@supabase/supabase-js');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -188,6 +189,24 @@ function rowIn(obj) {
 }
 function rowsOut(rows) { return Array.isArray(rows) ? rows.map(rowOut) : rows; }
 
+// Keyset pagination avoids Supabase's response row cap. Do not infer completion
+// from a short page: deployments can configure a cap smaller than our limit.
+async function readAllById(makeQuery) {
+  const rows = [];
+  let lastId = null;
+  for (;;) {
+    let query = makeQuery().order('id', { ascending: true }).limit(500);
+    if (lastId !== null) query = query.gt('id', lastId);
+    const { data, error } = await query;
+    if (error) throw error;
+    if (!data || !data.length) return rowsOut(rows);
+    rows.push(...data);
+    const nextId = data[data.length - 1].id;
+    if (String(nextId) === String(lastId)) throw new Error('Admin data pagination did not advance');
+    lastId = nextId;
+  }
+}
+
 // ── In-memory rate limiter (transient, intentionally not persisted) ──────
 // Single-process only: buckets clear on every deploy and a second instance
 // would keep its own. Acceptable while Render runs one dyno — see D-11.
@@ -306,6 +325,31 @@ const products = {
 
 // ── Users ────────────────────────────────────────────────────────────────
 const users = {
+  async listCustomers({ page = 1, pageSize = 25, search = '', sort = 'newest' } = {}) {
+    // Explicit projection: password hashes, auth identifiers and consent data
+    // must never leave the server in a customer directory response.
+    let query = sb.from('users').select('id,name,email,phone,created_at', { count: 'exact' }).eq('role', 'customer');
+    if (search) {
+      // Quoted PostgREST values keep commas/parentheses in names literal.
+      // Escape a regex for literal substring matching (ILIKE aliases * to %).
+      // https://postgrest.org/en/v12/references/api/tables_views.html
+      const pattern = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const value = '"' + pattern.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+      query = query.or(['name', 'email', 'phone'].map(column => `${column}.imatch.${value}`).join(','));
+    }
+    query = query.order(sort === 'name' ? 'name' : 'created_at', { ascending: sort !== 'newest' }).order('id', { ascending: true });
+    const { data, count, error } = await query.range((page - 1) * pageSize, page * pageSize - 1);
+    if (error) throw error;
+    const customers = rowsOut(data || []);
+    const ids = customers.map(c => c.id);
+    const orders = ids.length ? await readAllById(() => sb.from('orders')
+      .select('id,user_id,status,total,created_at').in('user_id', ids)) : [];
+    const summaries = summarizeCustomerOrders(orders);
+    return {
+      customers: customers.map(c => ({ ...c, ...(summaries.get(String(c.id)) || { orders: 0, deliveredOrders: 0, totalSpent: 0, lastOrderAt: null }) })),
+      total: count || 0, page, pageSize,
+    };
+  },
   async get(id) {
     const { data, error } = await sb.from('users').select('*').eq('id', id).maybeSingle();
     if (error) throw error;
@@ -1643,76 +1687,19 @@ const stats = {
 // ── Operational metrics (admin dashboard) ───────────────────────────────
 const metrics = {
   async overview({ days = 30 } = {}) {
-    const since = new Date(Date.now() - days * 86400000);
-    // Only the four columns this function actually reads — it was pulling every
-    // column of every order in the window, addresses and phone numbers included
-    // (audit D-08/D-10). `items` is the heavy one and is genuinely needed for
-    // the top-products breakdown.
-    const { data: allOrders } = await sb.from('orders')
-      .select('status, created_at, total, items').gte('created_at', since.toISOString());
-    const orders = rowsOut(allOrders || []);
-    const nonCancelled = orders.filter(o => o.status !== 'cancelled');
-    const delivered = orders.filter(o => o.status === 'delivered');
-
-    // Per-day buckets (oldest → newest), bucketed by the business day so the
-    // dashboard's "today" matches the shop's, not the server's (audit B-11).
-    const dayKey = (d) => businessDate(new Date(d));
-    const buckets = {};
-    for (let i = days - 1; i >= 0; i--) {
-      const k = dayKey(Date.now() - i * 86400000);
-      buckets[k] = { date: k, orders: 0, revenue: 0 };
-    }
-    nonCancelled.forEach(o => {
-      const k = dayKey(o.createdAt);
-      if (buckets[k]) buckets[k].orders += 1;
-    });
-    delivered.forEach(o => {
-      const k = dayKey(o.createdAt);
-      if (buckets[k]) buckets[k].revenue += Number(o.total || 0);
-    });
-    const series = Object.values(buckets);
-
-    // Status breakdown
-    const statusBreakdown = {};
-    orders.forEach(o => { const s = o.status || 'queued'; statusBreakdown[s] = (statusBreakdown[s] || 0) + 1; });
-
-    // Top products + categories by quantity
-    const prodQty = {}, catQty = {};
-    nonCancelled.forEach(o => {
-      const items = Array.isArray(o.items) ? o.items : [];
-      items.forEach(it => {
-        const q = Number(it.qty || 1);
-        prodQty[it.name] = (prodQty[it.name] || 0) + q;
-        if (it.category) catQty[it.category] = (catQty[it.category] || 0) + q;
-      });
-    });
-    const topProducts = Object.entries(prodQty).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([name, qty]) => ({ name, qty }));
-    const topCategories = Object.entries(catQty).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([name, qty]) => ({ name, qty }));
-
-    const totalRevenue = delivered.reduce((s, o) => s + Number(o.total || 0), 0);
-    const aov = nonCancelled.length ? (nonCancelled.reduce((s, o) => s + Number(o.total || 0), 0) / nonCancelled.length) : 0;
-
-    // Lifetime customer + recurring counts
-    const [{ count: customerCount }, { count: recurringCount }] = await Promise.all([
-      sb.from('users').select('*', { count: 'exact', head: true }).eq('role', 'customer'),
-      sb.from('recurring_orders').select('*', { count: 'exact', head: true }).eq('active', true),
+    const now = new Date();
+    // History establishes first purchase, including purchases before the window.
+    // Only the current period needs item payloads; no contact data is read here.
+    const [customers, orders, productOrders, recurringResult] = await Promise.all([
+      readAllById(() => sb.from('users').select('id,created_at').eq('role', 'customer').lte('created_at', now.toISOString())),
+      readAllById(() => sb.from('orders').select('id,user_id,status,total,created_at').lte('created_at', now.toISOString())),
+      readAllById(() => sb.from('orders').select('id,status,created_at,items').eq('status', 'delivered')
+        .gte('created_at', new Date(now.getTime() - (days + 1) * 86400000).toISOString()).lte('created_at', now.toISOString())),
+      sb.from('recurring_orders').select('id', { count: 'exact', head: true }).eq('active', true),
     ]);
-
-    return {
-      days,
-      series,
-      statusBreakdown,
-      topProducts,
-      topCategories,
-      totals: {
-        orders: nonCancelled.length,
-        delivered: delivered.length,
-        revenue: totalRevenue,
-        aov,
-        customers: customerCount || 0,
-        activeRecurring: recurringCount || 0,
-      },
-    };
+    if (recurringResult.error) throw recurringResult.error;
+    return buildMetrics({ customers, orders, productOrders, activeRecurring: recurringResult.count || 0,
+      days, now, dayKey: businessDate, timezone: BUSINESS_TZ });
   },
 };
 
